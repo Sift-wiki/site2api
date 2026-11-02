@@ -1,39 +1,46 @@
-No account is needed.
+No account is needed for these public reads.
 
-- `views` is page text (`"148,107 views"`). A live stream has no `views`.
-- Only the first page of results (about 20) is included.
+- Pass a channel handle without `@`, for example `NASA`. Channel IDs are not accepted as handles.
+- Video duration and view count from `getVideo` are strings; duration is in seconds. Counts and
+  dates on the channel and search pages are displayed text and may be missing.
+- In `search`, `views` is page text (`"148,107 views"`); a live stream has no `views`.
+- Search (about 20 videos) and channel uploads return the first page only. Video likes are not
+  included.
 
 ## Maintainer notes
 
-Verified 2026-09-27, logged out, with `api-anything verify youtube` passing from a clean
-`API_ANYTHING_HOME` (no cookies). Then, with YouTube's cookies (`VISITOR_INFO1_LIVE`) in the jar,
-eight queries in a row (`kittens`, `rust programming`, `café crème`, `iphone 17 review`, `best vpn`,
-`running shoes`, `car insurance`, `lofi hip hop`) each returned 20 videos with no `{}` items.
+Verified 2026-11-01, logged out, using an isolated data home. `verify youtube` passed all seven
+example and check cases. The video details were learned with Me at the zoo and Gangnam Style;
+the held-out Rick Astley video matched the captured watch page's title and publication date.
+The channel operations were learned with NASA and TED; the held-out Veritasium channel and
+first upload matched its captured page.
 
 | op | args | returns | tier |
 |---|---|---|---|
-| `search` | `q` (example `kittens`) | the first results page, videos only: `id` (video id), `title`, `channel`, `views` | 1 (HTML GET of /results, about 1 to 1.5 s) |
-
-```sh
-api-anything call youtube search q=otters
-api-anything call youtube search "q=café crème"
-```
+| `search` | `q` | video search results | 1 |
+| `getVideo` | `videoId` | title, channel, channel ID, views, duration, description, keywords, publication date | 1 |
+| `getChannel` | `handle` | channel name, ID, description, subscriber text | 1 |
+| `listChannelVideos` | `handle` | recent upload IDs, titles, views, publication text | 1 |
 
 ### How it works
 
-The op reads the results page itself (`GET /results?search_query=...&sp=EgIQAQ%253D%253D`), not the
-innertube API. `sp=EgIQAQ==` is the page's own "Type: Video" filter; without it the first section
-mixes in shelves, channels and "lockup" cards, which `pick` turned into `{}` items. The page
-embeds its data as `var ytInitialData = {...}`, which `--embedded` parses. The page has no
-rotating ids, so it needs no healing in the common case.
+Search reads `GET /results?search_query=...&sp=EgIQAQ%253D%253D` and extracts `ytInitialData`
+with `--embedded`, not the innertube API. `sp=EgIQAQ==` is the page's own "Type: Video" filter;
+without it the first section mixes in shelves, channels and "lockup" cards, which `pick` turned
+into `{}` items. Once the jar holds `VISITOR_INFO1_LIVE`, YouTube serves in-feed ads and splits
+the results into several sections; the extract path `contents[*]` joins the videos of every
+section and `pick` drops the ad and shelf items. The innertube search POST
+(`/youtubei/v1/search`) sends a gzip-compressed body; the op keeps to the document, which needs
+no client context.
+Video details come from `ytInitialPlayerResponse` on `GET /watch?v=...`. The channel operations
+read `ytInitialData` on `GET /@handle/videos`; uploads are the first page of lockup cards.
+The first plain HTTP request sometimes reported oversized headers; the CLI retried without
+browser identity headers and returned successfully at tier 1.
 
 ### Known limits
 
-- **Ads after the first call.** Tier 1 keeps the cookies YouTube sets. Once the jar holds
-  `VISITOR_INFO1_LIVE`, YouTube serves in-feed ads and splits the results: a leading section (a
-  `searchPyvRenderer` ad, a shelf, one or two videos), an `adSlotRenderer` section, then the main
-  list. The extract path uses `contents[*]`, which joins the videos of every section, and `pick`
-  drops the ad and shelf items, so the call returns only videos either way.
-- A live stream's count is "N watching", in another field.
-- The innertube search POST (`/youtubei/v1/search`) sends a gzip-compressed body; api-anything now
-  decodes such bodies, but this op keeps to the document, which needs no client context.
+The captured timedtext requests returned empty bodies, so no transcript operation was added.
+The watch page exposed one comment in JSON-LD, not a top-comment list with reply counts, so no
+comments operation was added. Playlists, configurable search filters, and suggestions were not
+investigated. A live stream's search view count is in another field. Some channel upload cards
+omit view and publication text.
