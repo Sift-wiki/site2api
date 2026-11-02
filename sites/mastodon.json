@@ -1,0 +1,135 @@
+{
+  "name": "mastodon",
+  "displayName": "Mastodon",
+  "baseUrl": "https://mastodon.social",
+  "description": "Read public accounts and recent posts on mastodon.social without signing in.",
+  "operations": [
+    {
+      "name": "getAccount",
+      "description": "Read a public account's profile and counts.",
+      "request": {
+        "method": "GET",
+        "url": "https://mastodon.social/api/v1/accounts/lookup?acct=%7Bacct%7D",
+        "headers": {
+          "accept": "application/json"
+        }
+      },
+      "slots": [
+        {
+          "param": "acct",
+          "at": [
+            "query:acct"
+          ]
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://mastodon.social/api/v1/accounts/lookup?acct={acct}"
+      },
+      "match": {
+        "path": "/api/v1/accounts/lookup"
+      },
+      "response": {
+        "format": "json",
+        "contentType": "application/json; charset=utf-8",
+        "pick": [
+          "id",
+          "username",
+          "display_name",
+          "note",
+          "followers_count",
+          "following_count",
+          "statuses_count",
+          "created_at"
+        ]
+      },
+      "params": [
+        {
+          "name": "acct",
+          "type": "string",
+          "required": true,
+          "description": "Account name without a leading @, optionally followed by @domain.",
+          "example": "Mastodon"
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "checks": [
+        {
+          "args": { "acct": "Gargron" },
+          "expect": "result",
+          "purpose": "Another public account is available."
+        },
+        {
+          "args": {},
+          "expect": "input",
+          "purpose": "An account is required."
+        }
+      ]
+    },
+    {
+      "name": "getStatuses",
+      "description": "Read the first page of public posts and boosts on an account profile.",
+      "request": {
+        "method": "GET",
+        "url": "https://mastodon.social/api/v1/accounts/0/statuses?exclude_replies=true&exclude_direct=true",
+        "headers": { "accept": "application/json" }
+      },
+      "slots": [
+        {
+          "from": {
+            "request": {
+              "method": "GET",
+              "url": "https://mastodon.social/api/v1/accounts/lookup?acct=%7Bacct%7D",
+              "headers": { "accept": "application/json" }
+            },
+            "slots": [{ "param": "acct", "at": ["query:acct"] }]
+          },
+          "path": "id",
+          "at": ["path:3"]
+        }
+      ],
+      "volatile": [],
+      "trigger": { "url": "https://mastodon.social/@{acct}" },
+      "match": {
+        "method": "GET",
+        "host": "mastodon.social",
+        "path": "/api/v1/accounts/*/statuses"
+      },
+      "response": {
+        "format": "json",
+        "pick": [
+          "id", "url", "created_at", "content", "replies_count",
+          "reblogs_count", "favourites_count", "media_types=media_attachments[*].type",
+          "boosted_id=reblog.id", "boosted_url=reblog.url",
+          "boosted_account=reblog.account.acct", "boosted_content=reblog.content"
+        ]
+      },
+      "params": [
+        {
+          "name": "acct",
+          "type": "string",
+          "required": true,
+          "description": "Account name without a leading @, optionally followed by @domain.",
+          "example": "Mastodon"
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "checks": [
+        {
+          "args": { "acct": "Gargron" },
+          "expect": "result",
+          "purpose": "Another public account has posts."
+        },
+        {
+          "args": {},
+          "expect": "input",
+          "purpose": "An account is required."
+        }
+      ]
+    }
+  ]
+}
