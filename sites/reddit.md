@@ -47,3 +47,13 @@ the held-out `r/linux` rising/month call matched the captured page's first three
 time range only filters top feeds. A post capture of the old Obama AMA encountered a CAPTCHA;
 a recent post page loaded, but the tested HTML recipe did not extract its comments as structured
 records, so no post operation was added.
+
+### 2026-11-01, logged out: post, community and profile retry
+
+Captures of two public r/programming posts (`1tlh5aj` and `1qoxwdt`), the community page
+and `u/spez` ended at `chrome-error://chromewebdata/` after Reddit's JavaScript challenge,
+without a usable document. A retry of `1tlh5aj` after verifying the existing operations
+listed an initial document response, but inspecting it with a `shreddit-post` recipe found
+no matching items. No post, comment, community or user operation was added without the
+two examples and held-out validation. Existing operations passed all six verification cases
+at tier 2 in this session.
