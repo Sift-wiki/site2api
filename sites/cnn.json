@@ -1,0 +1,201 @@
+{
+  "name": "cnn",
+  "displayName": "CNN",
+  "baseUrl": "https://lite.cnn.com",
+  "description": "CNN's public lightweight headlines and articles.",
+  "operations": [
+    {
+      "name": "getArticle",
+      "description": "Read a dated CNN Lite article, including its headline, byline, timestamp and paragraphs.",
+      "request": {
+        "method": "GET",
+        "url": "https://lite.cnn.com/%7Byear%7D/%7Bmonth%7D/%7Bday%7D/%7Bsection%7D/%7Bslug%7D",
+        "headers": {
+          "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/jxl,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+          "accept-language": "en-US,en;q=0.9",
+          "priority": "u=0, i",
+          "sec-ch-ua": "\"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Google Chrome\";v=\"156\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\"",
+          "sec-fetch-dest": "document",
+          "sec-fetch-mode": "navigate",
+          "sec-fetch-site": "none",
+          "sec-fetch-user": "?1",
+          "upgrade-insecure-requests": "1",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36"
+        }
+      },
+      "slots": [
+        {
+          "param": "year",
+          "at": [
+            "path:0"
+          ]
+        },
+        {
+          "param": "month",
+          "at": [
+            "path:1"
+          ]
+        },
+        {
+          "param": "day",
+          "at": [
+            "path:2"
+          ]
+        },
+        {
+          "param": "section",
+          "at": [
+            "path:3"
+          ]
+        },
+        {
+          "param": "slug",
+          "at": [
+            "path:4"
+          ]
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://lite.cnn.com/{year}/{month}/{day}/{section}/{slug}"
+      },
+      "match": {
+        "method": "GET",
+        "host": "lite.cnn.com",
+        "path": "/*/*/*/*/*"
+      },
+      "response": {
+        "format": "html",
+        "contentType": "text/html; charset=utf-8",
+        "html": {
+          "items": "div[class$=__lite]:has(article.article--lite)",
+          "fields": {
+            "headline": ".headline--lite .headline",
+            "byline": ".byline--lite",
+            "date": ".timestamp--lite",
+            "source": ".source--lite",
+            "paragraphs": "all:article.article--lite p.paragraph--lite"
+          }
+        }
+      },
+      "params": [
+        {
+          "name": "year",
+          "type": "string",
+          "required": true,
+          "description": "Four-digit year from the article path.",
+          "example": "2026"
+        },
+        {
+          "name": "month",
+          "type": "string",
+          "required": true,
+          "description": "Two-digit month from the article path.",
+          "example": "11"
+        },
+        {
+          "name": "day",
+          "type": "string",
+          "required": true,
+          "description": "Two-digit day from the article path.",
+          "example": "01"
+        },
+        {
+          "name": "section",
+          "type": "string",
+          "required": true,
+          "description": "Section segment from the article path.",
+          "example": "politics"
+        },
+        {
+          "name": "slug",
+          "type": "string",
+          "required": true,
+          "description": "Final slug segment from the article path, without index.html.",
+          "example": "chris-murphy-stroke"
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "checks": [
+        {
+          "args": {
+            "year": "2019",
+            "month": "06",
+            "day": "22",
+            "section": "us",
+            "slug": "hawaii-twin-engine-plane-crash"
+          },
+          "expect": "result",
+          "purpose": "Older article"
+        },
+        {
+          "args": {
+            "year": "2026",
+            "month": "11",
+            "day": "01",
+            "section": "us",
+            "slug": "south-florida-plane-crash"
+          },
+          "expect": "result",
+          "purpose": "Held-out article"
+        }
+      ]
+    },
+    {
+      "name": "topStories",
+      "description": "List current headlines on CNN Lite.",
+      "request": {
+        "method": "GET",
+        "url": "https://lite.cnn.com/",
+        "headers": {
+          "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/jxl,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+          "accept-language": "en-US,en;q=0.9",
+          "priority": "u=0, i",
+          "sec-ch-ua": "\"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Google Chrome\";v=\"156\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\"",
+          "sec-fetch-dest": "document",
+          "sec-fetch-mode": "navigate",
+          "sec-fetch-site": "none",
+          "sec-fetch-user": "?1",
+          "upgrade-insecure-requests": "1",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36"
+        }
+      },
+      "slots": [],
+      "volatile": [],
+      "trigger": {
+        "url": "https://lite.cnn.com/"
+      },
+      "match": {
+        "method": "GET",
+        "host": "lite.cnn.com",
+        "path": "/"
+      },
+      "response": {
+        "format": "html",
+        "contentType": "text/html; charset=utf-8",
+        "pick": [
+          "title",
+          "url",
+          "path=url~^https://lite\\.cnn\\.com/(.+)$"
+        ],
+        "html": {
+          "items": "li.card--lite",
+          "fields": {
+            "title": "a",
+            "url": "a@href"
+          }
+        }
+      },
+      "params": [],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false
+    }
+  ]
+}
