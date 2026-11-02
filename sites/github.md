@@ -21,41 +21,43 @@ No account is needed for public repositories.
   GitHub's blob page; binary or large files may not provide lines. Check for a truncated result.
 - For `listDirectory` and `getFile`, `ref` defaults to `HEAD`, GitHub's default-branch ref.
   A branch, tag or commit can be supplied instead. A missing path answers `class: "input"`.
+- `listReleases` returns the first page, up to 10 releases. `status` is GitHub's visible label,
+  such as `Pre-release` or `Latest`, and is absent for an unlabeled release, not a boolean.
+  `summary` is the first paragraph in the rendered release notes and may be missing.
+- `getUser` returns a one-item list for a public user, not an organization. An organization login
+  or a missing user answers `class: "input"`. Counts are displayed strings, sometimes abbreviated
+  (such as `330k`); pinned repositories are names, not owner/name pairs. Profile fields the user
+  has not set may be missing.
+- `getIssue` returns the issue's main post in Markdown, not the comment thread. `comments` is the
+  total comment count; `labels` can be empty. A missing issue answers `class: "input"`.
 - GitHub limits how fast logged-out visitors can search. Keep `searchRepos` calls spaced out.
 
 ## Maintainer notes
 
-Verified 2026-10-31, logged out, from a clean `API_ANYTHING_HOME` holding only this file:
-`api-anything verify github` passed 6 of 6 cases (each op's example, an `empty` check for
-`searchRepos`, an `input` check for a missing repository, and a `listIssues` check with
-`state:closed label:bug`). Every call answered at tier 1 (plain HTTP GET of github.com pages).
+Verified 2026-10-31, logged out, in a clean `API_ANYTHING_HOME`: `verify github` passed 6 of 6
+cases at tier 1, including empty search, missing repository and closed bug issue checks.
 
 | op | request | checked with (not an example) | tier |
 |---|---|---|---|
-| `searchRepos` | the `/search?q=...&type=repositories` page; its results are in the `react-app.embeddedData` JSON script, read with `--embedded` at `payload.blackbirdSearchRoute.results` | `q="rust web framework"` (Rocket, actix-web, ...); `q="web framework language:go stars:>1000"` (all Go) | 1, about 0.7-2.7 s |
-| `getRepo` | the repository page; the same JSON script, at `payload.sidebarAbout` (the About box) and `payload.codeViewRepoRoute.refInfo` (default branch) | `torvalds/linux` (no website, license "Other"), `facebook/react` (redirect to `react/react`) | 1, about 0.8-1.2 s |
-| `listIssues` | the `/<owner>/<repo>/issues?q=...` page; the same JSON script, at `payload.issuesIndexContentRoute.results` | `denoland/deno` with `is:issue state:open label:bug` (every row labeled `bug`); `vitejs/vite` with no `query` (default) | 1, about 0.8-2.2 s |
+| `searchRepos` | `/search?q=...&type=repositories`, embedded `payload.blackbirdSearchRoute.results` | `q="rust web framework"`; `q="web framework language:go stars:>1000"` (all Go) | 1, 0.7-2.7 s |
+| `getRepo` | repository page, embedded `payload.sidebarAbout` and `payload.codeViewRepoRoute.refInfo` | `torvalds/linux` (no website, license "Other"), `facebook/react` (redirect to `react/react`) | 1, 0.8-1.2 s |
+| `listIssues` | `/<owner>/<repo>/issues?q=...`, embedded `payload.issuesIndexContentRoute.results` | `denoland/deno` with `is:issue state:open label:bug`; `vitejs/vite` with default query | 1, 0.8-2.2 s |
 
-- The spec pins `loginCookies: ["user_session"]`, GitHub's signed-in session cookie. Without it the
-  learner read the `_gh_sess` cookie, which GitHub gives every logged-out visitor too, as a
-  sign-in and recorded the ops as `learnedLoggedIn: true`, so `verify` skipped them as needing a
-  login. The ops were learned logged out (`logged_in=no`), and `learnedLoggedIn` is set to `false`.
+- The spec pins `loginCookies: ["user_session"]`, the signed-in cookie. Without it the learner
+  mistook the logged-out `_gh_sess` cookie for a sign-in and verify skipped the ops. They were
+  learned logged out (`logged_in=no`) and have `learnedLoggedIn: false`.
 - No rotating ids: these are document GETs, so heal re-learns them from the page itself.
-- Contributor PR #82 (by mxlogy-00) proposed a `github` spec against `api.github.com` (`repo`,
-  `readme`, `issues`, `pulls`). It passes `vetShared`, but on 2026-10-31 its `issues` example
-  (`torvalds/linux`, which has issues turned off) answered empty and `pulls` answered 404, so
-  `verify` failed 4 of 8 cases. Its triggers open github.com pages, which never send requests to
-  api.github.com, so heal could not re-learn them either; and the unauthenticated REST API allows
-  60 requests an hour per IP. These ops were learned from github.com's own pages instead; its
-  `repo` and `issues` ops set which data `getRepo` and `listIssues` cover.
-- Not covered: individual pull requests, automatic README discovery, releases, user profiles,
-  issue details, code search (code search needs a login). A README at a known path can be read
-  with `getFile`.
+- Contributor PR #82 (mxlogy-00) proposed `api.github.com` ops (`repo`, `readme`, `issues`,
+  `pulls`). It passes `vetShared`, but 2026-10-31 verification failed 4 of 8: `torvalds/linux`
+  has issues disabled and answered empty, and `pulls` answered 404. Its github.com triggers never
+  send requests to api.github.com, so heal could not relearn them; unauthenticated REST also
+  allows 60 requests per hour per IP. Its `repo` and `issues` informed this page-based coverage.
+- Not covered: individual pull requests, automatic README discovery, full issue comment threads,
+  code search (code search needs a login). A README at a known path can be read with `getFile`.
 
 ### 2026-11-01, logged out
 
-`verify github` passed 8 of 8 cases at tier 1, including the original operations and the new
-operation's example and closed-filter check.
+`verify github` passed 8 of 8 cases at tier 1, including the new example and closed-filter check.
 
 | op | request | checked with (not an example) | tier |
 |---|---|---|---|
@@ -69,11 +71,10 @@ operation's example and closed-filter check.
 
 ### 2026-11-01, logged out: repository contents
 
-`verify github` passed 14 of 14 cases, all tier 1, including missing-path checks and historical
-tag checks. The operations were learned from two captures of `nodejs/node` at `HEAD` and
-`v18.0.0`; the listings and README lines differed. The `nodejs/node` `HEAD` directory listing
-matched its `main` directory page, and the Linux `HEAD` file matched the default `master` file
-and its raw contents. GitHub resolves `HEAD` to a tree object in the page.
+`verify github` passed 14 of 14 cases at tier 1, including missing-path and historical-tag checks.
+Two `nodejs/node` captures at `HEAD` and `v18.0.0` gave different listings and README lines.
+Node's `HEAD` listing matched `main`; Linux's `HEAD` file matched `master` and its raw contents.
+GitHub resolves `HEAD` to a tree object in the page.
 
 | op | request | checked with (not an example) | tier |
 |---|---|---|---|
@@ -85,3 +86,21 @@ and its raw contents. GitHub resolves `HEAD` to a tree object in the page.
 - The blob's lines live under a key containing a literal dot, not under `payload.blob`. The CLI
   extraction uses a quoted bracket key. README discovery, releases, profiles and issue fields
   were not investigated in this pass.
+
+### 2026-11-01, logged out: releases, profiles and issue posts
+
+`verify github` passed 22 of 22 cases at tier 1, including missing-input checks. Each operation
+used two examples and a held-out comparison with the public page.
+
+| op | request | checked with (not an example) | tier |
+|---|---|---|---|
+| `listReleases` | `/<owner>/<repo>/releases`, server-rendered release sections | `sveltejs/svelte`, first release tag, name, date, label and summary | 1 |
+| `getUser` | `/<username>`, server-rendered profile | `sindresorhus`, including website, counts and pinned names; `nodejs` organization returns input | 1 |
+| `getIssue` | `/<owner>/<repo>/issues/<number>`, embedded `payload.issueViewerRoute.data.repository.issue` | `nodejs/node#66`, title, state, author, date, body and label | 1 |
+
+- `golang/go` did not supply a matching release list for the second capture; `rust-lang/rust`
+  did. Release status is a displayed label, not a boolean prerelease field.
+- README `richText` is HTML in an overview-files array; no reliable text-only extraction that
+  selects the README over other files was established, so no `getReadme` was added.
+- An issue URL can redirect to a pull request, as `nodejs/node#10000` did. The issue operation
+  targets the issue page payload, not pull requests or the paginated timeline.

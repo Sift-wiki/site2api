@@ -2,7 +2,7 @@
   "name": "github",
   "displayName": "GitHub",
   "baseUrl": "https://github.com",
-  "description": "Public GitHub repository search, repository details, files, directories, issues and pull request lists, from github.com's own pages.",
+  "description": "Public GitHub repository search, repository details, files, directories, releases, user profiles, issues and pull request lists, from github.com's own pages.",
   "loginCookies": [
     "user_session"
   ],
@@ -668,6 +668,294 @@
           },
           "expect": "input",
           "purpose": "a missing file is an input error"
+        }
+      ]
+    },
+    {
+      "name": "listReleases",
+      "description": "List page 1 of public repository releases with tag, name, publication date, status and a short body summary.",
+      "request": {
+        "method": "GET",
+        "url": "https://github.com/%7Bowner%7D/%7Brepo%7D/releases",
+        "headers": {
+          "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/jxl,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+          "accept-language": "en-US,en;q=0.9",
+          "priority": "u=0, i",
+          "sec-ch-ua": "\"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Google Chrome\";v=\"156\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\"",
+          "sec-fetch-dest": "document",
+          "sec-fetch-mode": "navigate",
+          "sec-fetch-site": "none",
+          "sec-fetch-user": "?1",
+          "upgrade-insecure-requests": "1",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36"
+        }
+      },
+      "slots": [
+        {
+          "param": "owner",
+          "at": [
+            "path:0"
+          ]
+        },
+        {
+          "param": "repo",
+          "at": [
+            "path:1"
+          ]
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://github.com/{owner}/{repo}/releases"
+      },
+      "match": {
+        "method": "GET",
+        "host": "github.com",
+        "path": "/*/*/releases"
+      },
+      "response": {
+        "format": "html",
+        "contentType": "text/html; charset=utf-8",
+        "html": {
+          "items": "section",
+          "fields": {
+            "tag": "a.Link--muted",
+            "name": "a.Link--primary",
+            "publishedAt": "relative-time@datetime",
+            "status": "span.Label",
+            "summary": ".markdown-body p"
+          }
+        }
+      },
+      "params": [
+        {
+          "name": "owner",
+          "type": "string",
+          "required": true,
+          "description": "the repository owner's user or organization name",
+          "example": "nodejs"
+        },
+        {
+          "name": "repo",
+          "type": "string",
+          "required": true,
+          "description": "the repository name",
+          "example": "node"
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "checks": [
+        {
+          "args": {
+            "owner": "rust-lang",
+            "repo": "rust"
+          },
+          "expect": "result",
+          "purpose": "another repository has different releases"
+        }
+      ]
+    },
+    {
+      "name": "getUser",
+      "description": "Read a public GitHub profile as shown on its overview page.",
+      "request": {
+        "method": "GET",
+        "url": "https://github.com/%7Busername%7D",
+        "headers": {
+          "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/jxl,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+          "accept-language": "en-US,en;q=0.9",
+          "priority": "u=0, i",
+          "sec-ch-ua": "\"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Google Chrome\";v=\"156\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\"",
+          "sec-fetch-dest": "document",
+          "sec-fetch-mode": "navigate",
+          "sec-fetch-site": "none",
+          "sec-fetch-user": "?1",
+          "upgrade-insecure-requests": "1",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36"
+        }
+      },
+      "slots": [
+        {
+          "param": "username",
+          "at": [
+            "path:0"
+          ]
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://github.com/{username}"
+      },
+      "match": {
+        "method": "GET",
+        "host": "github.com",
+        "path": "/*"
+      },
+      "response": {
+        "format": "html",
+        "contentType": "text/html; charset=utf-8",
+        "html": {
+          "items": ".application-main:has(.vcard-names)",
+          "fields": {
+            "name": "[itemprop=name]",
+            "bio": ".p-note",
+            "company": "[itemprop=worksFor]",
+            "location": "[itemprop=homeLocation]",
+            "website": "li[itemprop=url] a@href",
+            "followers": "a[href$=\"?tab=followers\"]",
+            "following": "a[href$=\"?tab=following\"]",
+            "publicRepos": "a[href$=\"?tab=repositories\"] span.Counter",
+            "pinnedRepos": "all:.pinned-item-list-item .repo"
+          }
+        }
+      },
+      "params": [
+        {
+          "name": "username",
+          "type": "string",
+          "required": true,
+          "description": "a public GitHub user login, not an organization",
+          "example": "torvalds"
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "checks": [
+        {
+          "args": {
+            "username": "gaearon"
+          },
+          "expect": "result",
+          "purpose": "another public user has a different profile"
+        },
+        {
+          "args": {
+            "username": "zzqqxx-no-such-user-xyz"
+          },
+          "expect": "input",
+          "purpose": "a missing user is an input error"
+        }
+      ]
+    },
+    {
+      "name": "getIssue",
+      "description": "Read the main post of a public issue, without its comment thread.",
+      "request": {
+        "method": "GET",
+        "url": "https://github.com/%7Bowner%7D/%7Brepo%7D/issues/%7Bnumber%7D",
+        "headers": {
+          "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/jxl,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+          "accept-language": "en-US,en;q=0.9",
+          "priority": "u=0, i",
+          "sec-ch-ua": "\"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Google Chrome\";v=\"156\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\"",
+          "sec-fetch-dest": "document",
+          "sec-fetch-mode": "navigate",
+          "sec-fetch-site": "none",
+          "sec-fetch-user": "?1",
+          "upgrade-insecure-requests": "1",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36"
+        }
+      },
+      "slots": [
+        {
+          "param": "owner",
+          "at": [
+            "path:0"
+          ]
+        },
+        {
+          "param": "repo",
+          "at": [
+            "path:1"
+          ]
+        },
+        {
+          "param": "number",
+          "at": [
+            "path:3"
+          ]
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://github.com/{owner}/{repo}/issues/{number}"
+      },
+      "match": {
+        "method": "GET",
+        "host": "github.com",
+        "path": "/*/*/issues/*"
+      },
+      "response": {
+        "format": "embedded",
+        "contentType": "text/html; charset=utf-8",
+        "extract": "payload.issueViewerRoute.data.repository.issue",
+        "pick": [
+          "number",
+          "title",
+          "state",
+          "author=author.login",
+          "createdAt",
+          "body",
+          "labels=labels.edges[*].node.name",
+          "comments=totalCommentsCount"
+        ],
+        "embedded": {
+          "regex": "data-target=\"react-app\\.embeddedData\">(\\{)"
+        }
+      },
+      "params": [
+        {
+          "name": "owner",
+          "type": "string",
+          "required": true,
+          "description": "the repository owner's user or organization name",
+          "example": "nodejs"
+        },
+        {
+          "name": "repo",
+          "type": "string",
+          "required": true,
+          "description": "the repository name",
+          "example": "node"
+        },
+        {
+          "name": "number",
+          "type": "string",
+          "required": true,
+          "description": "the issue number",
+          "example": "418"
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "checks": [
+        {
+          "args": {
+            "owner": "nodejs",
+            "repo": "node",
+            "number": "1086"
+          },
+          "expect": "result",
+          "purpose": "another issue has a different main post"
+        },
+        {
+          "args": {
+            "owner": "nodejs",
+            "repo": "node",
+            "number": "999999999"
+          },
+          "expect": "input",
+          "purpose": "a missing issue is an input error"
         }
       ]
     }
