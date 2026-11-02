@@ -6,7 +6,18 @@ include Steam's own tracking query parameters.
 Prices and release dates retain the store's displayed text. Currency, availability, language,
 ranking and content filters depend on Steam's signed-out regional defaults. A price may be
 absent for a product not currently sold. No region override, pagination, account library,
-reviews, product-detail or purchase operations are included.
+or purchase operations are included.
+
+`getApp` accepts a numeric app ID. The price fields describe the first purchase offer, which
+may be missing or represent an edition or bundle rather than the base game. Discount fields
+are present only when the offer is discounted. Platform values are Steam CSS class names.
+Some apps have an age gate, which can prevent detail and review retrieval.
+
+`getReviews` returns the storefront's first ten summary-ranked reviews in the page's English
+language setting; it does not paginate or offer filter or language overrides. Playtime is in
+minutes at review and dates are Unix seconds. `getReviewSummary` reports the review-section
+counts, which can differ from the storefront's headline counts because their filters differ.
+Reviews and scores change over time.
 
 ## Maintainer notes
 
@@ -38,3 +49,22 @@ or imported cookies. It returned Hades, `App_1145360`, at tier 1 in 1875 ms. Fin
 vetting of the spec and these notes returned zero errors and zero warnings.
 
 Raw browser exchanges and response documents remain local and are not part of the shared spec.
+
+### 2026-11-01, logged out
+
+Added product details and separate review-list and review-summary reads. The detail operation
+uses the server-rendered app document; the review operations use the `ajaxappreviews` GET
+made when the page's review section is opened. Both learned with Celeste 504230 and Stardew
+Valley 413150. Hollow Knight 367520 was held out: its name, price, developer, genre and score
+matched its captured product page, and its review response and summary matched the captured
+review-section request. The review request retains the page's observed summary-count query
+values; despite differing between captures, the held-out response matched the page exactly.
+The score summary and review list are separate to select only public display names, not
+reviewer IDs or profile URLs.
+
+The page attempted a usability-tracking POST on the review interaction. Capture stopped it,
+and the operations do not send it. The learner marked the guest session logged in; the metadata
+was corrected without importing cookies. In separate empty homes, Portal 2 620 returned
+product details, reviews and a summary at tier 1. A nonexistent app was classified as input.
+Verification passed ten cases at tier 1. No top-seller, specials or player-count operation,
+review filter options, pagination, or age-gate bypass was added.
