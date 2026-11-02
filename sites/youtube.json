@@ -352,6 +352,182 @@
           "purpose": "Public held-out channel uploads"
         }
       ]
+    },
+    {
+      "name": "getPlaylist",
+      "description": "Get a public playlist title, owner, and video count",
+      "request": {
+        "method": "GET",
+        "url": "https://www.youtube.com/playlist?list=%7BplaylistId%7D",
+        "headers": {
+          "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/jxl,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+          "accept-language": "en-US,en;q=0.9",
+          "device-memory": "16",
+          "priority": "u=0, i",
+          "sec-ch-dpr": "1",
+          "sec-ch-ua": "\"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Google Chrome\";v=\"156\"",
+          "sec-ch-ua-arch": "\"x86\"",
+          "sec-ch-ua-bitness": "\"64\"",
+          "sec-ch-ua-form-factors": "\"Desktop\"",
+          "sec-ch-ua-full-version": "\"156.0.8078.74\"",
+          "sec-ch-ua-full-version-list": "\"Not:A-Brand\";v=\"8.0.0.0\", \"Chromium\";v=\"156.0.8078.74\", \"Google Chrome\";v=\"156.0.8078.74\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-model": "\"\"",
+          "sec-ch-ua-platform": "\"macOS\"",
+          "sec-ch-ua-platform-version": "\"10_15_7\"",
+          "sec-ch-ua-wow64": "?0",
+          "sec-ch-viewport-width": "1280",
+          "sec-fetch-dest": "document",
+          "sec-fetch-mode": "navigate",
+          "sec-fetch-site": "none",
+          "sec-fetch-user": "?1",
+          "upgrade-insecure-requests": "1",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36",
+          "x-browser-channel": "stable",
+          "x-browser-copyright": "Copyright 2026 Google LLC. All Rights Reserved.",
+          "x-browser-validation": "TVNLFxLY901jfmUEotWXufg3+Mg=",
+          "x-browser-year": "2026"
+        }
+      },
+      "slots": [
+        {
+          "param": "playlistId",
+          "at": [
+            "query:list"
+          ]
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://www.youtube.com/playlist?list={playlistId}"
+      },
+      "match": {
+        "method": "GET",
+        "host": "www.youtube.com",
+        "path": "/playlist"
+      },
+      "response": {
+        "format": "embedded",
+        "contentType": "text/html; charset=utf-8",
+        "pick": [
+          "title=metadata.playlistMetadataRenderer.title",
+          "owner=header.pageHeaderRenderer.content.pageHeaderViewModel.metadata.contentMetadataViewModel.metadataRows[0].metadataParts[0].avatarStack.avatarStackViewModel.text.content",
+          "count=header.pageHeaderRenderer.content.pageHeaderViewModel.metadata.contentMetadataViewModel.metadataRows[1].metadataParts[1].text.content"
+        ],
+        "embedded": {
+          "regex": "var ytInitialData = (\\{)"
+        }
+      },
+      "params": [
+        {
+          "name": "playlistId",
+          "type": "string",
+          "required": true,
+          "description": "Public playlist ID from the playlist URL's list parameter",
+          "example": "PLBCF2DAC6FFB574DE"
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "checks": [
+        {
+          "args": {
+            "playlistId": "PL2aBZuCeDwlTmIkf6-R2QUhxhWkLzwCtM"
+          },
+          "expect": "result",
+          "purpose": "Public held-out NASA playlist"
+        }
+      ]
+    },
+    {
+      "name": "listPlaylistVideos",
+      "description": "List the first page of videos in a public playlist",
+      "request": {
+        "method": "GET",
+        "url": "https://www.youtube.com/playlist?list=%7BplaylistId%7D",
+        "headers": {
+          "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/jxl,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+          "accept-language": "en-US,en;q=0.9",
+          "device-memory": "16",
+          "priority": "u=0, i",
+          "sec-ch-dpr": "1",
+          "sec-ch-ua": "\"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Google Chrome\";v=\"156\"",
+          "sec-ch-ua-arch": "\"x86\"",
+          "sec-ch-ua-bitness": "\"64\"",
+          "sec-ch-ua-form-factors": "\"Desktop\"",
+          "sec-ch-ua-full-version": "\"156.0.8078.74\"",
+          "sec-ch-ua-full-version-list": "\"Not:A-Brand\";v=\"8.0.0.0\", \"Chromium\";v=\"156.0.8078.74\", \"Google Chrome\";v=\"156.0.8078.74\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-model": "\"\"",
+          "sec-ch-ua-platform": "\"macOS\"",
+          "sec-ch-ua-platform-version": "\"10_15_7\"",
+          "sec-ch-ua-wow64": "?0",
+          "sec-ch-viewport-width": "1280",
+          "sec-fetch-dest": "document",
+          "sec-fetch-mode": "navigate",
+          "sec-fetch-site": "none",
+          "sec-fetch-user": "?1",
+          "upgrade-insecure-requests": "1",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36",
+          "x-browser-channel": "stable",
+          "x-browser-copyright": "Copyright 2026 Google LLC. All Rights Reserved.",
+          "x-browser-validation": "TVNLFxLY901jfmUEotWXufg3+Mg=",
+          "x-browser-year": "2026"
+        }
+      },
+      "slots": [
+        {
+          "param": "playlistId",
+          "at": [
+            "query:list"
+          ]
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://www.youtube.com/playlist?list={playlistId}"
+      },
+      "match": {
+        "method": "GET",
+        "host": "www.youtube.com",
+        "path": "/playlist"
+      },
+      "response": {
+        "format": "embedded",
+        "contentType": "text/html; charset=utf-8",
+        "extract": "contents.twoColumnBrowseResultsRenderer.tabs[0].tabRenderer.content.sectionListRenderer.contents[0].itemSectionRenderer.contents",
+        "pick": [
+          "videoId=lockupViewModel.contentId",
+          "title=lockupViewModel.metadata.lockupMetadataViewModel.title.content",
+          "channel=lockupViewModel.metadata.lockupMetadataViewModel.metadata.contentMetadataViewModel.metadataRows[0].metadataParts[0].text.content",
+          "duration=lockupViewModel.contentImage.thumbnailViewModel.overlays[0].thumbnailBottomOverlayViewModel.badges[0].thumbnailBadgeViewModel.text"
+        ],
+        "embedded": {
+          "regex": "var ytInitialData = (\\{)"
+        }
+      },
+      "params": [
+        {
+          "name": "playlistId",
+          "type": "string",
+          "required": true,
+          "description": "Public playlist ID from the playlist URL's list parameter",
+          "example": "PLBCF2DAC6FFB574DE"
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "checks": [
+        {
+          "args": {
+            "playlistId": "PL2aBZuCeDwlTmIkf6-R2QUhxhWkLzwCtM"
+          },
+          "expect": "result",
+          "purpose": "Public held-out NASA playlist videos"
+        }
+      ]
     }
   ]
 }

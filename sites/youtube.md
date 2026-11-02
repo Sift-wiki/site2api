@@ -6,6 +6,10 @@ No account is needed for these public reads.
 - In `search`, `views` is page text (`"148,107 views"`); a live stream has no `views`.
 - Search (about 20 videos) and channel uploads return the first page only. Video likes are not
   included.
+- Pass the playlist URL's `list` value as `playlistId`. Use `getPlaylist` for the playlist header
+  and `listPlaylistVideos` for its first page of items. The owner and count are displayed text;
+  item durations are displayed strings and can be missing. Longer playlists can have more items
+  than this first page returns.
 
 ## Maintainer notes
 
@@ -41,6 +45,23 @@ browser identity headers and returned successfully at tier 1.
 
 The captured timedtext requests returned empty bodies, so no transcript operation was added.
 The watch page exposed one comment in JSON-LD, not a top-comment list with reply counts, so no
-comments operation was added. Playlists, configurable search filters, and suggestions were not
-investigated. A live stream's search view count is in another field. Some channel upload cards
-omit view and publication text.
+comments operation was added. Configurable search filters and suggestions were not investigated.
+A live stream's search view count is in another field. Some channel upload cards omit view and
+publication text.
+
+### Playlist and watch investigation, 2026-11-01 (logged out)
+
+The playlist reads were learned from Google Search Stories and NASA's James Webb Space Telescope
+playlist, and checked against the captured NASA Explorers: Season 5 playlist. Its title, owner,
+count and five video IDs, titles, channels and durations matched. Both reads worked at tier 1
+from a fresh data home. The playlist page initially returned ten items for a thirteen-video
+playlist, so the video list is not a complete playlist. The header and item list are separate
+operations because the current extraction recipe cannot project an item list and retain its
+parent header in one compact result.
+
+Scrolling the watch page triggered a `POST /youtubei/v1/next`, but capture stopped it under the
+step safety guard, so its response was not verified. The learner's derived slots require a
+same-host GET returning JSON, and cannot derive a continuation or transcript parameter from
+the watch page's embedded HTML JSON. No comments or transcript operation was added. A watch-page
+capture also automatically fetched video data; no media was intentionally downloaded or saved
+as a deliverable.
