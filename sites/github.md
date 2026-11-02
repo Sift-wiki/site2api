@@ -15,6 +15,12 @@ No account is needed for public repositories.
   `is:pr is:open`; pass the whole filter when changing it, keeping `is:pr`. The state is
   `REPO_ISSUE_PULL_REQUEST_STATE_OPEN`, `REPO_ISSUE_PULL_REQUEST_STATE_CLOSED` or
   `REPO_ISSUE_PULL_REQUEST_STATE_MERGED`. `labels` is missing when there are none.
+- `listDirectory` takes a nonempty repository-relative directory path, including nested paths.
+  Its `type` uses GitHub's values, such as `directory` and `file`. It does not list the root.
+- `getFile` returns text as an array of lines, not a single string. It reads text available in
+  GitHub's blob page; binary or large files may not provide lines. Check for a truncated result.
+- For `listDirectory` and `getFile`, `ref` defaults to `HEAD`, GitHub's default-branch ref.
+  A branch, tag or commit can be supplied instead. A missing path answers `class: "input"`.
 - GitHub limits how fast logged-out visitors can search. Keep `searchRepos` calls spaced out.
 
 ## Maintainer notes
@@ -42,7 +48,9 @@ Verified 2026-10-31, logged out, from a clean `API_ANYTHING_HOME` holding only t
   api.github.com, so heal could not re-learn them either; and the unauthenticated REST API allows
   60 requests an hour per IP. These ops were learned from github.com's own pages instead; its
   `repo` and `issues` ops set which data `getRepo` and `listIssues` cover.
-- Not covered: individual pull requests, README text, file contents, code search (code search needs a login).
+- Not covered: individual pull requests, automatic README discovery, releases, user profiles,
+  issue details, code search (code search needs a login). A README at a known path can be read
+  with `getFile`.
 
 ### 2026-11-01, logged out
 
@@ -58,3 +66,22 @@ operation's example and closed-filter check.
 - The issue detail page embeds an issue and a timeline containing comments and other event types.
   The timeline is paginated, so a simple extraction would not return a complete comment thread.
   No issue detail operation was added.
+
+### 2026-11-01, logged out: repository contents
+
+`verify github` passed 14 of 14 cases, all tier 1, including missing-path checks and historical
+tag checks. The operations were learned from two captures of `nodejs/node` at `HEAD` and
+`v18.0.0`; the listings and README lines differed. The `nodejs/node` `HEAD` directory listing
+matched its `main` directory page, and the Linux `HEAD` file matched the default `master` file
+and its raw contents. GitHub resolves `HEAD` to a tree object in the page.
+
+| op | request | checked with (not an example) | tier |
+|---|---|---|---|
+| `listDirectory` | `/<owner>/<repo>/tree/<ref>/<path>`, embedded `payload.codeViewTreeRoute.tree.items` | `torvalds/linux`, `HEAD`, `kernel/sched`; compared names, paths and types with the page | 1 |
+| `getFile` | `/<owner>/<repo>/blob/<ref>/<path>`, embedded `payload["codeViewBlobLayoutRoute.StyledBlob"].rawLines` | `torvalds/linux`, `HEAD`, `COPYING`; compared lines with its raw file | 1 |
+
+- An initial directory learn compared `HEAD` with `master` on Node, which returned the same
+  listing and left `ref` unproven. Relearning with the historical tag produced different data.
+- The blob's lines live under a key containing a literal dot, not under `payload.blob`. The CLI
+  extraction uses a quoted bracket key. README discovery, releases, profiles and issue fields
+  were not investigated in this pass.

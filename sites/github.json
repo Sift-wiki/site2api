@@ -2,7 +2,7 @@
   "name": "github",
   "displayName": "GitHub",
   "baseUrl": "https://github.com",
-  "description": "Public GitHub repository search, About boxes, issues and pull request lists, from github.com's own pages.",
+  "description": "Public GitHub repository search, repository details, files, directories, issues and pull request lists, from github.com's own pages.",
   "loginCookies": [
     "user_session"
   ],
@@ -423,6 +423,251 @@
           },
           "expect": "result",
           "purpose": "closed pull requests differ from the default open filter"
+        }
+      ]
+    },
+    {
+      "name": "listDirectory",
+      "description": "List entries in a public repository directory at a Git ref: name, path and type.",
+      "request": {
+        "method": "GET",
+        "url": "https://github.com/%7Bowner%7D/%7Brepo%7D/tree/%7Bref%7D/%7Bpath%7D",
+        "headers": {
+          "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/jxl,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+          "accept-language": "en-US,en;q=0.9",
+          "priority": "u=0, i",
+          "sec-ch-ua": "\"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Google Chrome\";v=\"156\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\"",
+          "sec-fetch-dest": "document",
+          "sec-fetch-mode": "navigate",
+          "sec-fetch-site": "none",
+          "sec-fetch-user": "?1",
+          "upgrade-insecure-requests": "1",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36"
+        }
+      },
+      "slots": [
+        {
+          "param": "owner",
+          "at": [
+            "path:0"
+          ]
+        },
+        {
+          "param": "repo",
+          "at": [
+            "path:1"
+          ]
+        },
+        {
+          "param": "ref",
+          "at": [
+            "path:3"
+          ]
+        },
+        {
+          "param": "path",
+          "at": [
+            "path:4"
+          ]
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://github.com/{owner}/{repo}/tree/{ref}/{path}"
+      },
+      "match": {
+        "method": "GET",
+        "host": "github.com",
+        "path": "/*/*/tree/*/*"
+      },
+      "response": {
+        "format": "embedded",
+        "contentType": "text/html; charset=utf-8",
+        "extract": "payload.codeViewTreeRoute.tree.items",
+        "pick": [
+          "name",
+          "path",
+          "type=contentType"
+        ],
+        "embedded": {
+          "regex": "data-target=\"react-app\\.embeddedData\">(\\{)"
+        }
+      },
+      "params": [
+        {
+          "name": "owner",
+          "type": "string",
+          "required": true,
+          "description": "the repository owner's user or organization name",
+          "example": "nodejs"
+        },
+        {
+          "name": "repo",
+          "type": "string",
+          "required": true,
+          "description": "the repository name",
+          "example": "node"
+        },
+        {
+          "name": "ref",
+          "type": "string",
+          "required": false,
+          "description": "branch, tag or commit; HEAD selects the default branch",
+          "example": "HEAD",
+          "default": "HEAD"
+        },
+        {
+          "name": "path",
+          "type": "string",
+          "required": true,
+          "description": "directory path relative to the repository root",
+          "example": "lib"
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "checks": [
+        {
+          "args": {
+            "owner": "nodejs",
+            "repo": "node",
+            "ref": "v18.0.0",
+            "path": "lib"
+          },
+          "expect": "result",
+          "purpose": "a historical tag selects a different directory listing"
+        },
+        {
+          "args": {
+            "owner": "nodejs",
+            "repo": "node",
+            "path": "zzqqxx-no-such-directory"
+          },
+          "expect": "input",
+          "purpose": "a missing directory is an input error"
+        }
+      ]
+    },
+    {
+      "name": "getFile",
+      "description": "Read a public text file at a Git ref, returned as an array of lines.",
+      "request": {
+        "method": "GET",
+        "url": "https://github.com/%7Bowner%7D/%7Brepo%7D/blob/%7Bref%7D/%7Bpath%7D",
+        "headers": {
+          "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/jxl,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+          "accept-language": "en-US,en;q=0.9",
+          "priority": "u=0, i",
+          "sec-ch-ua": "\"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Google Chrome\";v=\"156\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\"",
+          "sec-fetch-dest": "document",
+          "sec-fetch-mode": "navigate",
+          "sec-fetch-site": "none",
+          "sec-fetch-user": "?1",
+          "upgrade-insecure-requests": "1",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36"
+        }
+      },
+      "slots": [
+        {
+          "param": "owner",
+          "at": [
+            "path:0"
+          ]
+        },
+        {
+          "param": "repo",
+          "at": [
+            "path:1"
+          ]
+        },
+        {
+          "param": "ref",
+          "at": [
+            "path:3"
+          ]
+        },
+        {
+          "param": "path",
+          "at": [
+            "path:4"
+          ]
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://github.com/{owner}/{repo}/blob/{ref}/{path}"
+      },
+      "match": {
+        "method": "GET",
+        "host": "github.com",
+        "path": "/*/*/blob/*/*"
+      },
+      "response": {
+        "format": "embedded",
+        "contentType": "text/html; charset=utf-8",
+        "extract": "payload[\"codeViewBlobLayoutRoute.StyledBlob\"].rawLines",
+        "embedded": {
+          "regex": "data-target=\"react-app\\.embeddedData\">(\\{)"
+        }
+      },
+      "params": [
+        {
+          "name": "owner",
+          "type": "string",
+          "required": true,
+          "description": "the repository owner's user or organization name",
+          "example": "nodejs"
+        },
+        {
+          "name": "repo",
+          "type": "string",
+          "required": true,
+          "description": "the repository name",
+          "example": "node"
+        },
+        {
+          "name": "ref",
+          "type": "string",
+          "required": false,
+          "description": "branch, tag or commit; HEAD selects the default branch",
+          "example": "HEAD",
+          "default": "HEAD"
+        },
+        {
+          "name": "path",
+          "type": "string",
+          "required": true,
+          "description": "file path relative to the repository root",
+          "example": "README.md"
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "checks": [
+        {
+          "args": {
+            "owner": "nodejs",
+            "repo": "node",
+            "ref": "v18.0.0",
+            "path": "README.md"
+          },
+          "expect": "result",
+          "purpose": "a historical tag selects a different version of the file"
+        },
+        {
+          "args": {
+            "owner": "nodejs",
+            "repo": "node",
+            "path": "zzqqxx-no-such-file"
+          },
+          "expect": "input",
+          "purpose": "a missing file is an input error"
         }
       ]
     }
