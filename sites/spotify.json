@@ -2,7 +2,7 @@
   "name": "spotify",
   "displayName": "Spotify",
   "baseUrl": "https://open.spotify.com",
-  "description": "Public track, album, playlist and artist metadata from Spotify embed documents.",
+  "description": "Public track, album, playlist, artist and podcast episode metadata from Spotify embed documents.",
   "operations": [
     {
       "name": "getTrack",
@@ -288,6 +288,83 @@
           },
           "expect": "result",
           "purpose": "Public Ed Sheeran artist"
+        }
+      ]
+    },
+    {
+      "name": "getEpisode",
+      "description": "Read public podcast episode metadata from the Spotify embed document",
+      "request": {
+        "method": "GET",
+        "url": "https://open.spotify.com/embed/episode/%7BepisodeId%7D",
+        "headers": {
+          "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/jxl,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+          "accept-language": "en-US,en;q=0.9",
+          "priority": "u=0, i",
+          "sec-ch-ua": "\"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Google Chrome\";v=\"156\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\"",
+          "sec-fetch-dest": "document",
+          "sec-fetch-mode": "navigate",
+          "sec-fetch-site": "none",
+          "sec-fetch-user": "?1",
+          "upgrade-insecure-requests": "1",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36"
+        }
+      },
+      "slots": [
+        {
+          "param": "episodeId",
+          "at": [
+            "path:2"
+          ]
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://open.spotify.com/embed/episode/{episodeId}"
+      },
+      "match": {
+        "method": "GET",
+        "host": "open.spotify.com",
+        "path": "/embed/episode/*"
+      },
+      "response": {
+        "format": "embedded",
+        "contentType": "text/html; charset=utf-8",
+        "extract": "props.pageProps.state.data.entity",
+        "pick": [
+          "id",
+          "title",
+          "show=subtitle",
+          "durationMs=duration",
+          "releaseDate=releaseDate.isoString",
+          "explicit=isExplicit",
+          "previewUrl=audioPreview.url"
+        ],
+        "embedded": {
+          "regex": "id=\"__NEXT_DATA__\"[^>]*>\\s*([[{])"
+        }
+      },
+      "params": [
+        {
+          "name": "episodeId",
+          "type": "string",
+          "required": true,
+          "description": "Spotify episode ID from a public episode URL or URI.",
+          "example": "3Lz9d1PXPIJA7yisUsrF6p"
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "checks": [
+        {
+          "args": {
+            "episodeId": "3GFauMoprjqiBpq4TrQkuG"
+          },
+          "expect": "result",
+          "purpose": "Public Without Fail podcast episode"
         }
       ]
     }
