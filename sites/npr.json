@@ -1,0 +1,217 @@
+{
+  "name": "npr",
+  "displayName": "NPR",
+  "baseUrl": "https://text.npr.org",
+  "description": "NPR's public text-only front page, sections and articles.",
+  "operations": [
+    {
+      "name": "topStories",
+      "description": "List current stories on NPR's text-only front page.",
+      "request": {
+        "method": "GET",
+        "url": "https://text.npr.org/",
+        "headers": {
+          "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/jxl,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+          "accept-language": "en-US,en;q=0.9",
+          "priority": "u=0, i",
+          "sec-ch-ua": "\"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Google Chrome\";v=\"156\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\"",
+          "sec-fetch-dest": "document",
+          "sec-fetch-mode": "navigate",
+          "sec-fetch-site": "none",
+          "sec-fetch-user": "?1",
+          "upgrade-insecure-requests": "1",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36"
+        }
+      },
+      "slots": [],
+      "volatile": [],
+      "trigger": {
+        "url": "https://text.npr.org/"
+      },
+      "match": {
+        "method": "GET",
+        "host": "text.npr.org",
+        "path": "/"
+      },
+      "response": {
+        "format": "html",
+        "contentType": "text/html; charset=utf-8",
+        "pick": [
+          "title",
+          "url",
+          "storyId=url~/([^/]+)$"
+        ],
+        "html": {
+          "items": ".topic-container li",
+          "fields": {
+            "title": "a",
+            "url": "a@href"
+          }
+        }
+      },
+      "params": [],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false
+    },
+    {
+      "name": "getSection",
+      "description": "List current stories in an NPR text-only section.",
+      "request": {
+        "method": "GET",
+        "url": "https://text.npr.org/%7BsectionId%7D",
+        "headers": {
+          "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/jxl,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+          "accept-language": "en-US,en;q=0.9",
+          "priority": "u=0, i",
+          "sec-ch-ua": "\"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Google Chrome\";v=\"156\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\"",
+          "sec-fetch-dest": "document",
+          "sec-fetch-mode": "navigate",
+          "sec-fetch-site": "none",
+          "sec-fetch-user": "?1",
+          "upgrade-insecure-requests": "1",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36"
+        }
+      },
+      "slots": [
+        {
+          "param": "sectionId",
+          "at": [
+            "path:0"
+          ]
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://text.npr.org/{sectionId}"
+      },
+      "match": {
+        "method": "GET",
+        "host": "text.npr.org",
+        "path": "/*"
+      },
+      "response": {
+        "format": "html",
+        "contentType": "text/html; charset=utf-8",
+        "pick": [
+          "title",
+          "url",
+          "storyId=url~/([^/]+)$"
+        ],
+        "html": {
+          "items": ".topic-container li",
+          "fields": {
+            "title": "a",
+            "url": "a@href"
+          }
+        }
+      },
+      "params": [
+        {
+          "name": "sectionId",
+          "type": "string",
+          "required": false,
+          "description": "NPR section ID, such as 1001 for news or 1014 for politics.",
+          "example": "1001",
+          "default": "1001"
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "checks": [
+        {
+          "args": {
+            "sectionId": "1014"
+          },
+          "expect": "result",
+          "purpose": "Politics section"
+        }
+      ]
+    },
+    {
+      "name": "getStory",
+      "description": "Read an NPR text-only article, including its headline, byline, date and paragraphs.",
+      "request": {
+        "method": "GET",
+        "url": "https://text.npr.org/%7BstoryId%7D",
+        "headers": {
+          "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/jxl,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+          "accept-language": "en-US,en;q=0.9",
+          "priority": "u=0, i",
+          "sec-ch-ua": "\"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Google Chrome\";v=\"156\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\"",
+          "sec-fetch-dest": "document",
+          "sec-fetch-mode": "navigate",
+          "sec-fetch-site": "none",
+          "sec-fetch-user": "?1",
+          "upgrade-insecure-requests": "1",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36"
+        }
+      },
+      "slots": [
+        {
+          "param": "storyId",
+          "at": [
+            "path:0"
+          ]
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://text.npr.org/{storyId}"
+      },
+      "match": {
+        "method": "GET",
+        "host": "text.npr.org",
+        "path": "/*"
+      },
+      "response": {
+        "format": "html",
+        "contentType": "text/html; charset=utf-8",
+        "html": {
+          "items": "article .story-container",
+          "fields": {
+            "headline": ".story-title",
+            "byline": ".story-head > p:nth-of-type(1)",
+            "date": ".story-head > p:nth-of-type(2)",
+            "paragraphs": "all:.paragraphs-container > p"
+          }
+        }
+      },
+      "params": [
+        {
+          "name": "storyId",
+          "type": "string",
+          "required": true,
+          "description": "Story ID from the final path component of a text.npr.org story URL.",
+          "example": "nx-s1-6020993"
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "checks": [
+        {
+          "args": {
+            "storyId": "705224359"
+          },
+          "expect": "result",
+          "purpose": "Older article"
+        },
+        {
+          "args": {
+            "storyId": "nx-s1-6025502"
+          },
+          "expect": "result",
+          "purpose": "Held-out article"
+        }
+      ]
+    }
+  ]
+}
