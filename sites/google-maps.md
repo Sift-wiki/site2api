@@ -20,3 +20,18 @@ Final verification passed all three cases at tier1. The exported operation repla
 created empty home at tier1 without a Cookie or opaque browser header, no healing, one request,
 and all20 rows exactly equal to the earlier unseen replay. Direct shared vet and export scanning
 returned zero errors or warnings. No public release or publication occurred.
+
+### Investigation on 2026-11-01 (signed out)
+
+No additional operation was bundled. A place-ID URL resolved the public ID to a different
+internal feature ID before requesting `/maps/preview/place`; the captured detail request did
+not carry the original ID, and a bare name or place ID in the `/maps/place/` path produced no
+place details. The existing learner cannot prove a lookup from that HTML document.
+
+A directions prototype used the frontend's GET `/maps/preview/directions` request, learned
+from San Francisco and New York landmarks. A held-out Seattle replay matched the captured
+frontend response at tier 1, but that response mixed driving routes with a transit alternative.
+The request also contained a changing opaque value. It was not bundled: travel-mode selection,
+the value's provenance and a comparison with the rendered page remain unverified. The shared
+browser preview timed out twice when reading the page. Autocomplete and reviews were not
+established. No CAPTCHA or unusual-traffic page was observed in the captures.
