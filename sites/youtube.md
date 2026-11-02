@@ -4,6 +4,23 @@ No account is needed for these public reads.
 - Video duration and view count from `getVideo` are strings; duration is in seconds. Counts and
   dates on the channel and search pages are displayed text and may be missing.
 - In `search`, `views` is page text (`"148,107 views"`); a live stream has no `views`.
+- `search` accepts one combined `filter` code, not separate filter arguments. Omit it for videos
+  sorted by relevance. Use the values below as written, including `%3D` where shown:
+
+  | Filter | Value |
+  |---|---|
+  | Videos (default) | `EgIQAQ%3D%3D` |
+  | Videos, uploaded today | `EgQIAhAB` |
+  | Videos, uploaded this week | `EgQIAxAB` |
+  | Videos, uploaded this month | `EgQIBBAB` |
+  | Videos, uploaded this year | `EgQIBRAB` |
+  | Videos under 3 minutes | `EgQQARgE` |
+  | Videos, 3–20 minutes | `EgQQARgF` |
+  | Videos over 20 minutes | `EgQQARgC` |
+  | Videos, sorted by popularity | `CAMSAhAB` |
+
+  The code represents the whole selection; don't concatenate codes. The extraction returns video
+  cards only, so channel, playlist, Shorts and movie filter codes are not supported.
 - Search (about 20 videos) and channel uploads return the first page only. Video likes are not
   included.
 - Pass the playlist URL's `list` value as `playlistId`. Use `getPlaylist` for the playlist header
@@ -45,7 +62,7 @@ browser identity headers and returned successfully at tier 1.
 
 The captured timedtext requests returned empty bodies, so no transcript operation was added.
 The watch page exposed one comment in JSON-LD, not a top-comment list with reply counts, so no
-comments operation was added. Configurable search filters and suggestions were not investigated.
+comments operation was added.
 A live stream's search view count is in another field. Some channel upload cards omit view and
 publication text.
 
@@ -65,3 +82,17 @@ same-host GET returning JSON, and cannot derive a continuation or transcript par
 the watch page's embedded HTML JSON. No comments or transcript operation was added. A watch-page
 capture also automatically fetched video data; no media was intentionally downloaded or saved
 as a deliverable.
+
+### Search filters and suggestions, 2026-11-01 (logged out)
+
+The filter menu's links supplied the presets above; selecting This week changed the URL to
+`EgQIAxAB` and yielded different videos from the default. Its first live-page result, "Dad Cat
+Meets His Newborn Kittens Then Kisses Mom", also appeared in the filtered API result. Ordering
+varied. The menu currently says under 3 and 3–20 minutes, and offers Popularity rather than a
+separate upload-date sort. The previously suggested under-4 and 4–20 codes were not confirmed.
+
+The search box's `GET` to `suggestqueries-clients6.youtube.com` returns JSON wrapped in
+`window.google.ac.h(...)`; the embedded recipe reads its array of suggestion strings. Different
+`puppies` and `astronomy` examples returned different results. The held-out `space` call matched
+the live suggestion list. The page itself sent analytics and other background requests; the
+capture's step guard stopped several POSTs, and no write was intentionally sent.

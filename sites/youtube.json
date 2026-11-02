@@ -6,10 +6,10 @@
   "operations": [
     {
       "name": "search",
-      "description": "Search YouTube videos (the Type: Video filter, so every item is a video): id, title, channel, view count",
+      "description": "Search YouTube videos using an optional combined search filter code",
       "request": {
         "method": "GET",
-        "url": "https://www.youtube.com/results?search_query=%7Bq%7D&sp=EgIQAQ%253D%253D",
+        "url": "https://www.youtube.com/results?search_query=%7Bq%7D&sp=%7Bfilter%7D",
         "headers": {
           "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
           "accept-language": "en-US,en;q=0.9",
@@ -46,11 +46,17 @@
           "at": [
             "query:search_query"
           ]
+        },
+        {
+          "param": "filter",
+          "at": [
+            "query:sp"
+          ]
         }
       ],
       "volatile": [],
       "trigger": {
-        "url": "https://www.youtube.com/results?search_query={q}&sp=EgIQAQ%253D%253D"
+        "url": "https://www.youtube.com/results?search_query={q}&sp={filter}"
       },
       "match": {
         "method": "GET",
@@ -78,11 +84,28 @@
           "required": true,
           "description": "Search terms",
           "example": "kittens"
+        },
+        {
+          "name": "filter",
+          "type": "string",
+          "required": false,
+          "description": "Combined YouTube sp filter code, as listed in the site notes",
+          "default": "EgIQAQ%3D%3D"
         }
       ],
       "readOnly": true,
       "minTier": 1,
-      "learnedLoggedIn": false
+      "learnedLoggedIn": false,
+      "checks": [
+        {
+          "args": {
+            "q": "kittens",
+            "filter": "EgQIAxAB"
+          },
+          "expect": "result",
+          "purpose": "Public video search filtered to this week"
+        }
+      ]
     },
     {
       "name": "getVideo",
@@ -526,6 +549,88 @@
           },
           "expect": "result",
           "purpose": "Public held-out NASA playlist videos"
+        }
+      ]
+    },
+    {
+      "name": "suggest",
+      "description": "Get search suggestions for a query",
+      "request": {
+        "method": "GET",
+        "url": "https://suggestqueries-clients6.youtube.com/complete/search?ds=yt&hl=en&gl=us&client=youtube&gs_ri=youtube&h=180&w=320&ytvs=1&gs_id=1&q=%7Bq%7D&cp=7",
+        "headers": {
+          "accept": "*/*",
+          "origin": "https://www.youtube.com",
+          "referer": "https://www.youtube.com/",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36",
+          "sec-ch-ua": "\"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Google Chrome\";v=\"156\"",
+          "sec-ch-ua-arch": "\"x86\"",
+          "sec-ch-ua-bitness": "\"64\"",
+          "sec-ch-ua-form-factors": "\"Desktop\"",
+          "sec-ch-ua-full-version": "\"156.0.8078.74\"",
+          "sec-ch-ua-full-version-list": "\"Not:A-Brand\";v=\"8.0.0.0\", \"Chromium\";v=\"156.0.8078.74\", \"Google Chrome\";v=\"156.0.8078.74\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-model": "\"\"",
+          "sec-ch-ua-platform": "\"macOS\"",
+          "sec-ch-ua-platform-version": "\"10_15_7\"",
+          "sec-ch-ua-wow64": "?0"
+        }
+      },
+      "slots": [
+        {
+          "param": "q",
+          "at": [
+            "query:q"
+          ]
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://www.youtube.com/results?search_query=kittens",
+        "steps": [
+          {
+            "action": "fill",
+            "selector": "input[name=search_query]",
+            "value": "{q}"
+          },
+          {
+            "action": "wait",
+            "ms": 1500
+          }
+        ]
+      },
+      "match": {
+        "method": "GET",
+        "host": "suggestqueries-clients6.youtube.com",
+        "path": "/complete/search"
+      },
+      "response": {
+        "format": "embedded",
+        "contentType": "text/javascript; charset=UTF-8",
+        "extract": "[1][*][0]",
+        "embedded": {
+          "regex": "window\\.google\\.ac\\.h\\((\\[)"
+        }
+      },
+      "params": [
+        {
+          "name": "q",
+          "type": "string",
+          "required": true,
+          "description": "Search terms to complete",
+          "example": "puppies"
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "checks": [
+        {
+          "args": {
+            "q": "astronomy"
+          },
+          "expect": "result",
+          "purpose": "Public suggestions for a different query"
         }
       ]
     }
