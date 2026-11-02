@@ -12,6 +12,17 @@ No account is needed. English Wikipedia only (en.wikipedia.org).
   top of the page; numbered entries use display numbers such as `3.2`, not MediaWiki API section
   indexes. Their depth indicates the nesting level, and the anchor is a link to that heading.
 - `getCategories` reads visible categories, not hidden maintenance categories.
+- `getArticleText` returns paragraphs in page order, without headings. It can include empty
+  paragraphs, citation markers and text inside quoted passages; tables and lists are not included.
+  Flattened formatting may lose distinctions such as superscripts.
+- `getLinks` reads titled links in paragraphs, not every link in the article. It excludes most
+  citation links and navboxes, but can include non-article namespaces and other Wikimedia sites;
+  links may repeat.
+- Text and links may exceed the 20,000-character result cap. Check `truncated` and use the
+  returned result ID and `more` to retrieve the remainder when available.
+- `getRevisions` reads the first history page (normally 50 entries). Dates and signed byte changes
+  are displayed strings; an editor or summary may be absent. Anonymous editors may be shown as IP
+  addresses, as on the public history page.
 - Wikipedia article text is generally available under CC BY-SA; check the page's attribution and
   licensing requirements before reuse.
 
@@ -41,3 +52,13 @@ passed, 0 failed, 0 inconclusive.
 An infobox recipe was not included: on Moon, nested rows produced misleading pairs and flattening
 superscripts changed scientific notation. Full article/section text, article links, revision
 history and the featured feed were not captured or verified in this pass.
+
+### 2026-11-01, logged out: article text, links and history
+
+Captured the article documents and history pages for Ada Lovelace and Python (programming
+language), then compared calls for the held-out Moon with its captured documents. The text and
+links use the rendered article's paragraph elements; history uses the page's displayed entries.
+The Main Page capture did not show a featured-feed request, so no feed operation was added.
+Section text was not added: the desktop document does not fetch sections independently and the
+table-of-contents display numbers are not API section indexes. The first attempt at a direct
+paragraph/heading selector matched nothing; the working recipe reads paragraph descendants.

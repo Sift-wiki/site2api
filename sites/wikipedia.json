@@ -2,7 +2,7 @@
   "name": "wikipedia",
   "displayName": "Wikipedia",
   "baseUrl": "https://en.wikipedia.org",
-  "description": "English Wikipedia: search-box title suggestions, full-text article search, and an article's summary (lead text, short description, link), through the requests the site's own pages make. Public, logged out.",
+  "description": "English Wikipedia: search, article text, links, sections, categories, summaries and public revision history. Public, logged out.",
   "operations": [
     {
       "name": "searchArticles",
@@ -369,6 +369,200 @@
           },
           "expect": "input",
           "purpose": "a missing article is input, not drift"
+        }
+      ]
+    },
+    {
+      "name": "getArticleText",
+      "description": "Article paragraphs in page order as plain text, including citation markers.",
+      "request": {
+        "method": "GET",
+        "url": "https://en.wikipedia.org/wiki/%7Btitle%7D",
+        "headers": {
+          "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/jxl,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+          "upgrade-insecure-requests": "1",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36",
+          "sec-ch-ua": "\"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Google Chrome\";v=\"156\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\""
+        }
+      },
+      "slots": [
+        {
+          "param": "title",
+          "at": [
+            "path:1"
+          ]
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://en.wikipedia.org/wiki/{title}"
+      },
+      "match": {
+        "method": "GET",
+        "host": "en.wikipedia.org",
+        "path": "/wiki/*"
+      },
+      "response": {
+        "format": "html",
+        "contentType": "text/html; charset=UTF-8",
+        "html": {
+          "items": "#mw-content-text .mw-parser-output p",
+          "fields": {
+            "text": ""
+          }
+        }
+      },
+      "params": [
+        {
+          "name": "title",
+          "type": "string",
+          "required": true,
+          "description": "article title or URL key, such as Ada_Lovelace",
+          "example": "Ada_Lovelace"
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "checks": [
+        {
+          "args": {
+            "title": "Zzqqxx_no_such_page_xyz"
+          },
+          "expect": "input",
+          "purpose": "a missing article is input, not drift"
+        }
+      ]
+    },
+    {
+      "name": "getLinks",
+      "description": "Titled links in article paragraphs, in page order, including repeats and links to other Wikimedia sites.",
+      "request": {
+        "method": "GET",
+        "url": "https://en.wikipedia.org/wiki/%7Btitle%7D",
+        "headers": {
+          "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/jxl,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+          "upgrade-insecure-requests": "1",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36",
+          "sec-ch-ua": "\"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Google Chrome\";v=\"156\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\""
+        }
+      },
+      "slots": [
+        {
+          "param": "title",
+          "at": [
+            "path:1"
+          ]
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://en.wikipedia.org/wiki/{title}"
+      },
+      "match": {
+        "method": "GET",
+        "host": "en.wikipedia.org",
+        "path": "/wiki/*"
+      },
+      "response": {
+        "format": "html",
+        "contentType": "text/html; charset=UTF-8",
+        "html": {
+          "items": "#mw-content-text .mw-parser-output p a[title]",
+          "fields": {
+            "title": "@title",
+            "url": "@href"
+          }
+        }
+      },
+      "params": [
+        {
+          "name": "title",
+          "type": "string",
+          "required": true,
+          "description": "article title or URL key, such as Ada_Lovelace",
+          "example": "Ada_Lovelace"
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "checks": [
+        {
+          "args": {
+            "title": "Zzqqxx_no_such_page_xyz"
+          },
+          "expect": "input",
+          "purpose": "a missing article is input, not drift"
+        }
+      ]
+    },
+    {
+      "name": "getRevisions",
+      "description": "Recent public page history, newest first: displayed timestamp, editor, edit summary and signed byte change.",
+      "request": {
+        "method": "GET",
+        "url": "https://en.wikipedia.org/w/index.php?title=%7Btitle%7D&action=history",
+        "headers": {
+          "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/jxl,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+          "upgrade-insecure-requests": "1",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36",
+          "sec-ch-ua": "\"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Google Chrome\";v=\"156\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\""
+        }
+      },
+      "slots": [
+        {
+          "param": "title",
+          "at": [
+            "query:title"
+          ]
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://en.wikipedia.org/w/index.php?title={title}&action=history"
+      },
+      "match": {
+        "method": "GET",
+        "host": "en.wikipedia.org",
+        "path": "/w/index.php"
+      },
+      "response": {
+        "format": "html",
+        "contentType": "text/html; charset=UTF-8",
+        "html": {
+          "items": "#pagehistory li",
+          "fields": {
+            "timestamp": "a.mw-changeslist-date",
+            "user": "a.mw-userlink",
+            "comment": "span.comment",
+            "sizeChange": ".mw-plusminus-pos, .mw-plusminus-neg, .mw-plusminus-null"
+          }
+        }
+      },
+      "params": [
+        {
+          "name": "title",
+          "type": "string",
+          "required": true,
+          "description": "article title or URL key, such as Ada_Lovelace",
+          "example": "Ada_Lovelace"
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "checks": [
+        {
+          "args": {},
+          "expect": "input",
+          "purpose": "a title is required"
         }
       ]
     }
