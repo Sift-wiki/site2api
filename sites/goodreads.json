@@ -1,14 +1,12 @@
 {
   "name": "goodreads",
+  "displayName": "Goodreads",
   "baseUrl": "https://www.goodreads.com",
+  "description": "Goodreads books, logged out: search, book details, an author's books, and community reviews. Explored and built by an agent with the api-anything skill (bench/explore).",
   "operations": [
     {
       "name": "searchBooks",
-      "links": [
-        { "from": "bookId", "to": { "op": "getBook", "arg": "bookId" } },
-        { "from": "bookId", "to": { "op": "getWorkId", "arg": "bookId" } },
-        { "from": "authorId", "to": { "op": "authorBooks", "arg": "authorId" } }
-      ],
+      "description": "Search books by title or author: the site's own search-box results (top 5), with bookId, title, author, authorId, avgRating and ratingsCount. A \"title author\" query often ranks study guides first; search by title and pick the result by the right author with the most ratings.",
       "request": {
         "method": "GET",
         "url": "https://www.goodreads.com/book/auto_complete?format=json&q=%7Bq%7D",
@@ -61,18 +59,40 @@
           "name": "q",
           "type": "string",
           "required": true,
-          "example": "hyperion",
-          "description": "title or author words, e.g. \"piranesi\""
+          "description": "title or author words, e.g. \"piranesi\"",
+          "example": "hyperion"
         }
       ],
       "readOnly": true,
       "minTier": 1,
       "learnedLoggedIn": false,
-      "learnedAt": "2026-09-28T06:41:32.256Z",
-      "description": "Search books by title or author: the site's own search-box results (top 5), with bookId, title, author, authorId, avgRating and ratingsCount. A \"title author\" query often ranks study guides first; search by title and pick the result by the right author with the most ratings."
+      "links": [
+        {
+          "from": "bookId",
+          "to": {
+            "op": "getBook",
+            "arg": "bookId"
+          }
+        },
+        {
+          "from": "bookId",
+          "to": {
+            "op": "getWorkId",
+            "arg": "bookId"
+          }
+        },
+        {
+          "from": "authorId",
+          "to": {
+            "op": "authorBooks",
+            "arg": "authorId"
+          }
+        }
+      ]
     },
     {
       "name": "getBook",
+      "description": "One book's page: title, author, authorUrl, avgRating, ratingsCount (\"1,481,183 ratings\"), pages (\"393 pages, Hardcover\"), firstPublished, genres (list) and description.",
       "request": {
         "method": "GET",
         "url": "https://www.goodreads.com/book/show/%7BbookId%7D",
@@ -124,20 +144,19 @@
           "name": "bookId",
           "type": "string",
           "required": true,
-          "example": "77566",
           "description": "Goodreads book id, from searchBooks",
+          "example": "77566",
           "pattern": "\\d+",
           "hint": "a numeric Goodreads book id, e.g. 35959740"
         }
       ],
       "readOnly": true,
       "minTier": 1,
-      "learnedLoggedIn": false,
-      "learnedAt": "2026-09-28T06:42:12.101Z",
-      "description": "One book's page: title, author, authorUrl, avgRating, ratingsCount (\"1,481,183 ratings\"), pages (\"393 pages, Hardcover\"), firstPublished, genres (list) and description."
+      "learnedLoggedIn": false
     },
     {
       "name": "getReviews",
+      "description": "Community reviews of a work, 3 a page by default (long ones fill the output): reviewer, rating (1-5) and text (HTML). For the next page, call again with after set to the result's nextPage (hasMore false: no more).",
       "request": {
         "method": "POST",
         "url": "https://kxbwmqov6jgg3daaamb744ycu4.appsync-api.us-east-1.amazonaws.com/graphql",
@@ -213,8 +232,8 @@
           "name": "workId",
           "type": "string",
           "required": true,
-          "example": "kca://work/amzn1.gr.work.v1.xIT2_7WWJ119Me44O0dVMg",
-          "description": "work id from getWorkId, e.g. kca://work/amzn1.gr.work.v1...."
+          "description": "work id from getWorkId, e.g. kca://work/amzn1.gr.work.v1....",
+          "example": "kca://work/amzn1.gr.work.v1.xIT2_7WWJ119Me44O0dVMg"
         },
         {
           "name": "after",
@@ -226,17 +245,15 @@
           "name": "limit",
           "type": "number",
           "required": false,
+          "description": "reviews a page (the site's own page asks 30). Lower it when the result is truncated: a cut review is skipped, since nextPage starts after the page's last one",
           "default": 3,
           "min": 1,
-          "max": 30,
-          "description": "reviews a page (the site's own page asks 30). Lower it when the result is truncated: a cut review is skipped, since nextPage starts after the page's last one"
+          "max": 30
         }
       ],
       "readOnly": true,
       "minTier": 1,
       "learnedLoggedIn": false,
-      "learnedAt": "2026-09-28T06:43:53.650Z",
-      "description": "Community reviews of a work, 3 a page by default (long ones fill the output): reviewer, rating (1-5) and text (HTML). For the next page, call again with after set to the result's nextPage (hasMore false: no more).",
       "paging": {
         "param": "after",
         "next": "data.getReviews.pageInfo.nextPageToken"
@@ -244,9 +261,7 @@
     },
     {
       "name": "getWorkId",
-      "links": [
-        { "from": "workId", "to": { "op": "getReviews", "arg": "workId" } }
-      ],
+      "description": "The work id (kca://work/...) that getReviews needs, for a book id.",
       "request": {
         "method": "GET",
         "url": "https://www.goodreads.com/book/show/%7BbookId%7D",
@@ -298,8 +313,8 @@
           "name": "bookId",
           "type": "string",
           "required": true,
-          "example": "77566",
           "description": "Goodreads book id, from searchBooks",
+          "example": "77566",
           "pattern": "\\d+",
           "hint": "a numeric Goodreads book id, e.g. 35959740"
         }
@@ -307,15 +322,19 @@
       "readOnly": true,
       "minTier": 1,
       "learnedLoggedIn": false,
-      "learnedAt": "2026-09-28T06:44:01.823Z",
-      "description": "The work id (kca://work/...) that getReviews needs, for a book id."
+      "links": [
+        {
+          "from": "workId",
+          "to": {
+            "op": "getReviews",
+            "arg": "workId"
+          }
+        }
+      ]
     },
     {
       "name": "authorBooks",
-      "links": [
-        { "from": "bookId", "to": { "op": "getBook", "arg": "bookId" } },
-        { "from": "bookId", "to": { "op": "getWorkId", "arg": "bookId" } }
-      ],
+      "description": "An author's books (first page, up to 30): bookId, title, avgRating, ratingsCount.",
       "request": {
         "method": "GET",
         "url": "https://www.goodreads.com/author/list/%7BauthorId%7D",
@@ -374,8 +393,8 @@
           "name": "authorId",
           "type": "string",
           "required": true,
-          "example": "2687",
           "description": "Goodreads author id, from searchBooks (authorId)",
+          "example": "2687",
           "pattern": "\\d+",
           "hint": "a numeric Goodreads author id, e.g. 2687"
         }
@@ -383,10 +402,109 @@
       "readOnly": true,
       "minTier": 1,
       "learnedLoggedIn": false,
-      "learnedAt": "2026-09-28T06:44:43.588Z",
-      "description": "An author's books (first page, up to 30): bookId, title, avgRating, ratingsCount."
+      "links": [
+        {
+          "from": "bookId",
+          "to": {
+            "op": "getBook",
+            "arg": "bookId"
+          }
+        },
+        {
+          "from": "bookId",
+          "to": {
+            "op": "getWorkId",
+            "arg": "bookId"
+          }
+        }
+      ]
+    },
+    {
+      "name": "getAuthor",
+      "description": "An author profile: name, dates, website, genres, influences, average rating, ratings count, and biography excerpt where available.",
+      "request": {
+        "method": "GET",
+        "url": "https://www.goodreads.com/author/show/%7BauthorId%7D",
+        "headers": {
+          "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/jxl,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+          "accept-language": "en-US,en;q=0.9",
+          "priority": "u=0, i",
+          "sec-ch-ua": "\"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Google Chrome\";v=\"156\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\"",
+          "sec-fetch-dest": "document",
+          "sec-fetch-mode": "navigate",
+          "sec-fetch-site": "none",
+          "sec-fetch-user": "?1",
+          "upgrade-insecure-requests": "1",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36"
+        }
+      },
+      "slots": [
+        {
+          "param": "authorId",
+          "at": [
+            "path:2"
+          ]
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://www.goodreads.com/author/show/{authorId}"
+      },
+      "match": {
+        "method": "GET",
+        "host": "www.goodreads.com",
+        "path": "/author/show/*"
+      },
+      "response": {
+        "format": "html",
+        "contentType": "text/html; charset=utf-8",
+        "html": {
+          "items": "body",
+          "fields": {
+            "name": "h1.authorName span",
+            "born": "[itemprop=birthDate]",
+            "died": "[itemprop=deathDate]",
+            "website": ".dataItem [itemprop=url]@href",
+            "genres": "all:.dataItem a[href^=\"/genres/\"]",
+            "influences": ".dataItem span[id^=freeTextContainer]",
+            "avgRating": "[itemprop=aggregateRating] [itemprop=ratingValue]",
+            "ratingsCount": "[itemprop=aggregateRating] [itemprop=ratingCount]",
+            "about": ".aboutAuthorInfo span[id^=freeTextContainerauthor]"
+          }
+        }
+      },
+      "params": [
+        {
+          "name": "authorId",
+          "type": "string",
+          "required": true,
+          "description": "Numeric Goodreads author id, as returned by searchBooks",
+          "example": "1077326",
+          "pattern": "\\d+",
+          "hint": "a numeric Goodreads author id, e.g. 1077326"
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "checks": [
+        {
+          "args": {
+            "authorId": "656983"
+          },
+          "expect": "result",
+          "purpose": "Tolkien public author profile"
+        },
+        {
+          "args": {
+            "authorId": "not-an-id"
+          },
+          "expect": "input",
+          "purpose": "Author ids are numeric"
+        }
+      ]
     }
-  ],
-  "displayName": "Goodreads",
-  "description": "Goodreads books, logged out: search, book details, an author's books, and community reviews. Explored and built by an agent with the api-anything skill (bench/explore)."
+  ]
 }
