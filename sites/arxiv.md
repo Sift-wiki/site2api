@@ -4,12 +4,15 @@ No account is needed. Paper licenses vary; check the license on each abstract pa
   It returns one item. `versionUrl` identifies the version shown, usually the latest when no version
   is requested. Comments, journal reference and DOI can be absent. Authors use the citation metadata's
   surname-first format; subjects are page text.
-- `searchPapers` searches all fields, returning the first 50 results in the site's default
-  announcement-date order. The abstract is a search snippet and may contain a “More” marker.
-  Author-only search, ordering and pagination are not exposed.
+- `searchPapers` defaults to all fields and the first 50 results in announcement-date order.
+  Use `searchtype=author` for author search, `order` for sorting, and `start=50`, `100`, etc. for
+  subsequent pages. An empty `order` selects relevance. The abstract is a search snippet and may
+  contain a “More” marker.
 - `listNew` returns the new-submissions section, excluding cross-lists and replacements. Its title
   and subject text retain the page's labels. The page changes on announcement days, and may limit
   long lists; api-anything may also truncate large responses.
+- `listRecent` returns the first page of the category's recent submissions as served by arXiv.
+  Its title and subject text retain the page's labels; lists change over time and may be truncated.
 
 ## Maintainer notes
 
@@ -28,3 +31,21 @@ paper DOI selector returns the linked DOI rather than the adjacent tooltip text.
 the page's Open Graph URL. The search page selected `-announced_date_first` by default, not
 relevance. List pages can have separate new, cross-list and replacement sections; the recipe selects
 the section headed “New submissions”.
+
+### 2026-11-01 extension, logged out
+
+`listRecent` was learned with `cs.LG` and `cs.CL`; held-out `math.CO` matched the live page's
+first title and subjects. An empty home called `astro-ph` at tier 1. The recent page returned 50
+items for the categories inspected.
+
+The search page exposes the full `searchtype` and `order` enums in the spec, including empty
+`order` for relevance. `Lee` searches with all fields versus author, announcement versus submission
+order, and offsets 0 versus 50 produced different results. A held-out author search for `Smith`,
+newest submission first at offset 50, matched the live page's first ID and title. An empty relevance
+order also returned results. The initial author search for `transformer` at offset 50 was empty and
+could not establish the short offset slot, so the learning examples were changed to `Lee`.
+
+The final local spec passed `verify arxiv` 7/7 cases at tier 1, including the existing empty search
+and a result check setting all three optional search parameters. Requests remain public HTML GETs.
+A later attempt to verify a different title-search check timed out twice and then received HTTP 429
+on search; that unverified check was not exported, and no further search requests were made.
