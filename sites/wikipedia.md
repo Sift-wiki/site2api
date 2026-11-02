@@ -23,6 +23,14 @@ No account is needed. English Wikipedia only (en.wikipedia.org).
 - `getRevisions` reads the first history page (normally 50 entries). Dates and signed byte changes
   are displayed strings; an editor or summary may be absent. Anonymous editors may be shown as IP
   addresses, as on the public history page.
+- `getMainPage` reads the current English Main Page, not a dated archive. Sections `mp-tfa`,
+  `mp-itn`, `mp-otd` and `mp-dyk` are the featured article, news, anniversaries and facts,
+  respectively. The featured article has a summary, title and URL; `mp-otd` also has a date in
+  those fields. Section items are plain text, not individual article links.
+- `getLanguages` takes an English article title or URL key. Language names are in their own
+  languages, and language codes need not match the destination's subdomain. Results can exceed the
+  output cap; use the result ID and `more` for the remainder. A page without language links may
+  report drift rather than an empty list.
 - Wikipedia article text is generally available under CC BY-SA; check the page's attribution and
   licensing requirements before reuse.
 
@@ -62,3 +70,16 @@ The Main Page capture did not show a featured-feed request, so no feed operation
 Section text was not added: the desktop document does not fetch sections independently and the
 table-of-contents display numbers are not API section indexes. The first attempt at a direct
 paragraph/heading selector matched nothing; the working recipe reads paragraph descendants.
+
+### 2026-11-01, logged out: Main Page and languages
+
+The mobile Main Page redirected to the desktop Main Page and its capture did not show the featured
+feed, so the operation reads the server-rendered current page, not past dates. The four sections
+matched the captured document; list extraction uses direct child lists to omit navigation and
+ongoing-events lists. The featured article link comes from the first bold link in its paragraph.
+
+`getLanguages` reads `.interlanguage-link a` on captured Ada Lovelace and Python (programming
+language) documents. The held-out Moon call agreed with the captured page for French (Lune) and
+German (Mond); the full list exceeded the output cap. The `#p-lang` selector matched nothing on
+the current desktop layout, which uses `#p-lang-btn`. Final verification passed 19 cases, with no
+failures or inconclusive cases; both operations answered at tier 1.
