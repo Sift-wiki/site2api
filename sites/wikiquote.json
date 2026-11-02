@@ -1,0 +1,210 @@
+{
+  "name": "wikiquote",
+  "displayName": "English Wikiquote",
+  "baseUrl": "https://en.wikiquote.org",
+  "description": "Public English Wikiquote title suggestions, selected quotation list items and the current quote of the day.",
+  "operations": [
+    {
+      "name": "searchPages",
+      "description": "Find page titles by prefix, up to ten suggestions.",
+      "request": {
+        "method": "GET",
+        "url": "https://en.wikiquote.org/w/rest.php/v1/search/title?q=%7Bq%7D&limit=10",
+        "headers": {
+          "referer": "https://en.wikiquote.org/wiki/Main_Page",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36",
+          "accept": "application/json",
+          "sec-ch-ua": "\"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Google Chrome\";v=\"156\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\""
+        }
+      },
+      "slots": [
+        {
+          "param": "q",
+          "at": [
+            "query:q"
+          ]
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://en.wikiquote.org/wiki/Main_Page",
+        "steps": [
+          {
+            "action": "click",
+            "selector": "input[name=search]"
+          },
+          {
+            "action": "fill",
+            "selector": "input[name=search]",
+            "value": "{q}"
+          },
+          {
+            "action": "wait",
+            "ms": 2500
+          }
+        ]
+      },
+      "match": {
+        "method": "GET",
+        "host": "en.wikiquote.org",
+        "path": "/w/rest.php/v1/search/title"
+      },
+      "response": {
+        "format": "json",
+        "contentType": "application/json",
+        "extract": "pages",
+        "pick": [
+          "key",
+          "title",
+          "description"
+        ],
+        "shape": {
+          "pages[].key": "string",
+          "pages[].title": "string",
+          "pages[].description": "string"
+        }
+      },
+      "params": [
+        {
+          "name": "q",
+          "type": "string",
+          "required": true,
+          "description": "Page title prefix, as typed in the search box.",
+          "example": "Einstein"
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "checks": [
+        {
+          "args": { "q": "Marie Curie" },
+          "expect": "result",
+          "purpose": "another prefix finds a page"
+        },
+        {
+          "args": { "q": "zzqqxxnowikiquotepagexyz" },
+          "expect": "empty",
+          "purpose": "an unmatched prefix returns no suggestions"
+        }
+      ]
+    },
+    {
+      "name": "getQuotes",
+      "description": "Extract direct list items in a Quotes or Sourced section, including nested source notes. Subsections are omitted; text includes the notes.",
+      "request": {
+        "method": "GET",
+        "url": "https://en.wikiquote.org/wiki/%7Btitle%7D",
+        "headers": {
+          "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/jxl,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+          "accept-language": "en-US,en;q=0.9",
+          "priority": "u=0, i",
+          "sec-ch-ua": "\"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Google Chrome\";v=\"156\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\"",
+          "sec-fetch-dest": "document",
+          "sec-fetch-mode": "navigate",
+          "sec-fetch-site": "none",
+          "sec-fetch-user": "?1",
+          "upgrade-insecure-requests": "1",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36"
+        }
+      },
+      "slots": [
+        {
+          "param": "title",
+          "at": [
+            "path:1"
+          ]
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://en.wikiquote.org/wiki/{title}"
+      },
+      "match": {
+        "method": "GET",
+        "host": "en.wikiquote.org",
+        "path": "/wiki/*"
+      },
+      "response": {
+        "format": "html",
+        "contentType": "text/html; charset=UTF-8",
+        "html": {
+          "items": ".mw-heading2:has(#Quotes) ~ ul:not(.mw-heading2:has(#Quotes) ~ .mw-heading2 ~ ul) > li, .mw-heading2:has(#Sourced) ~ ul:not(.mw-heading2:has(#Sourced) ~ .mw-heading2 ~ ul) > li",
+          "fields": {
+            "text": "",
+            "source": "all::scope > ul > li"
+          }
+        }
+      },
+      "params": [
+        {
+          "name": "title",
+          "type": "string",
+          "required": true,
+          "description": "Page title or key from searchPages, such as Marie_Curie.",
+          "example": "Albert_Einstein"
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "checks": [
+        {
+          "args": { "title": "Marie_Curie" },
+          "expect": "result",
+          "purpose": "another page has quotation list items"
+        },
+        {
+          "args": { "title": "Zzqqxx_no_such_wikiquote_page_xyz" },
+          "expect": "input",
+          "purpose": "a missing page is an input error"
+        }
+      ]
+    },
+    {
+      "name": "quoteOfTheDay",
+      "description": "Read the current Main Page quote of the day and its attribution.",
+      "request": {
+        "method": "GET",
+        "url": "https://en.wikiquote.org/wiki/Main_Page",
+        "headers": {
+          "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/jxl,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+          "upgrade-insecure-requests": "1",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36",
+          "sec-ch-ua": "\"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Google Chrome\";v=\"156\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\""
+        }
+      },
+      "slots": [],
+      "volatile": [],
+      "trigger": {
+        "url": "https://en.wikiquote.org/wiki/Main_Page"
+      },
+      "match": {
+        "method": "GET",
+        "host": "en.wikiquote.org",
+        "path": "/wiki/Main_Page"
+      },
+      "response": {
+        "format": "html",
+        "contentType": "text/html; charset=UTF-8",
+        "html": {
+          "items": "div[data-mw*=\"Main Page/Quote of the day\"] table.cquote",
+          "fields": {
+            "quote": ":scope > tbody > tr:first-child > td:nth-child(2)",
+            "author": ":scope cite"
+          }
+        }
+      },
+      "params": [],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false
+    }
+  ]
+}
