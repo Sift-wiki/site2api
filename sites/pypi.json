@@ -1,0 +1,253 @@
+{
+  "name": "pypi",
+  "displayName": "Python Package Index",
+  "baseUrl": "https://pypi.org",
+  "description": "Public Python project metadata, release history and release files from PyPI project pages.",
+  "operations": [
+    {
+      "name": "getProject",
+      "description": "Read the latest public release's project metadata from its PyPI project page.",
+      "request": {
+        "method": "GET",
+        "url": "https://pypi.org/project/%7Bname%7D/",
+        "headers": {
+          "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/jxl,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+          "accept-language": "en-US,en;q=0.9",
+          "priority": "u=0, i",
+          "sec-ch-ua": "\"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Google Chrome\";v=\"156\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\"",
+          "sec-fetch-dest": "document",
+          "sec-fetch-mode": "navigate",
+          "sec-fetch-site": "none",
+          "sec-fetch-user": "?1",
+          "upgrade-insecure-requests": "1",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36"
+        }
+      },
+      "slots": [
+        {
+          "param": "name",
+          "at": [
+            "path:1"
+          ]
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://pypi.org/project/{name}/"
+      },
+      "match": {
+        "method": "GET",
+        "host": "pypi.org",
+        "path": "/project/*/"
+      },
+      "response": {
+        "format": "html",
+        "contentType": "text/html; charset=UTF-8",
+        "html": {
+          "items": "html:has(.project-header__name)",
+          "fields": {
+            "name": "meta[property=\"og:title\"]@content",
+            "nameVersion": ".project-header__name",
+            "summary": ".project-header__summary",
+            "released": "#metadata time@datetime",
+            "maintainers": "all:#metadata a[href^=\"/user/\"]",
+            "links": "all:#metadata .sidebar-section:has(h2:contains(Project links)) a@href",
+            "linkLabels": "all:#metadata .sidebar-section:has(h2:contains(Project links)) a",
+            "classifiers": "all:#metadata a[href^=\"/search/?c=\"]",
+            "license": "#metadata .sidebar-section:has(h2:contains(License))",
+            "requiresPython": "#metadata .sidebar-section:has(h2:contains(Requires))"
+          }
+        }
+      },
+      "params": [
+        {
+          "name": "name",
+          "type": "string",
+          "required": true,
+          "description": "Python project name as shown on PyPI.",
+          "example": "requests"
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "checks": [
+        {
+          "args": {
+            "name": "django"
+          },
+          "expect": "result",
+          "purpose": "A different project returns its own metadata."
+        },
+        {
+          "args": {
+            "name": "zzqqxx-no-such-project-987654321"
+          },
+          "expect": "input",
+          "purpose": "A nonexistent project is an input error."
+        }
+      ]
+    },
+    {
+      "name": "getReleases",
+      "description": "List release history from the public project page, including visible pre-release and yanked labels.",
+      "request": {
+        "method": "GET",
+        "url": "https://pypi.org/project/%7Bname%7D/",
+        "headers": {
+          "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/jxl,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+          "accept-language": "en-US,en;q=0.9",
+          "priority": "u=0, i",
+          "sec-ch-ua": "\"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Google Chrome\";v=\"156\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\"",
+          "sec-fetch-dest": "document",
+          "sec-fetch-mode": "navigate",
+          "sec-fetch-site": "none",
+          "sec-fetch-user": "?1",
+          "upgrade-insecure-requests": "1",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36"
+        }
+      },
+      "slots": [
+        {
+          "param": "name",
+          "at": [
+            "path:1"
+          ]
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://pypi.org/project/{name}/#history"
+      },
+      "match": {
+        "method": "GET",
+        "host": "pypi.org",
+        "path": "/project/*/"
+      },
+      "response": {
+        "format": "html",
+        "contentType": "text/html; charset=UTF-8",
+        "html": {
+          "items": "#history .release__card",
+          "fields": {
+            "version": "h3 a",
+            "released": "time@datetime",
+            "status": "a[href*=\"pypi-basics\"]"
+          }
+        }
+      },
+      "params": [
+        {
+          "name": "name",
+          "type": "string",
+          "required": true,
+          "description": "Python project name as shown on PyPI.",
+          "example": "requests"
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "checks": [
+        {
+          "args": {
+            "name": "django"
+          },
+          "expect": "result",
+          "purpose": "Another project has its own release history."
+        },
+        {
+          "args": {
+            "name": "zzqqxx-no-such-project-987654321"
+          },
+          "expect": "input",
+          "purpose": "A nonexistent project is an input error."
+        }
+      ]
+    },
+    {
+      "name": "getFiles",
+      "description": "List the files shown for the latest project release, with size, upload date and download URL.",
+      "request": {
+        "method": "GET",
+        "url": "https://pypi.org/project/%7Bname%7D/",
+        "headers": {
+          "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/jxl,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+          "accept-language": "en-US,en;q=0.9",
+          "priority": "u=0, i",
+          "sec-ch-ua": "\"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Google Chrome\";v=\"156\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\"",
+          "sec-fetch-dest": "document",
+          "sec-fetch-mode": "navigate",
+          "sec-fetch-site": "none",
+          "sec-fetch-user": "?1",
+          "upgrade-insecure-requests": "1",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36"
+        }
+      },
+      "slots": [
+        {
+          "param": "name",
+          "at": [
+            "path:1"
+          ]
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://pypi.org/project/{name}/#files"
+      },
+      "match": {
+        "method": "GET",
+        "host": "pypi.org",
+        "path": "/project/*/"
+      },
+      "response": {
+        "format": "html",
+        "contentType": "text/html; charset=UTF-8",
+        "html": {
+          "items": "#files tr:has(td)",
+          "fields": {
+            "filename": "td a",
+            "size": "td:first-child .file-info__meta:first-child, td:nth-child(2)",
+            "uploaded": "time@datetime",
+            "url": "td a@href"
+          }
+        }
+      },
+      "params": [
+        {
+          "name": "name",
+          "type": "string",
+          "required": true,
+          "description": "Python project name as shown on PyPI.",
+          "example": "requests"
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "checks": [
+        {
+          "args": {
+            "name": "django"
+          },
+          "expect": "result",
+          "purpose": "Another project has its own release files."
+        },
+        {
+          "args": {
+            "name": "zzqqxx-no-such-project-987654321"
+          },
+          "expect": "input",
+          "purpose": "A nonexistent project is an input error."
+        }
+      ]
+    }
+  ]
+}
