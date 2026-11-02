@@ -26,3 +26,9 @@ Fragments select page sections and are not separate requests. The capture includ
 GitHub statistics requests, but no request to PyPI's JSON API; the operations use the project
 document only. The search document returned a Fastly challenge, so search was not learned.
 The user-project page was not investigated. No writes are provided.
+
+### 2026-11-01: user-project pages, logged out
+
+The public user pages for `sethmlarson` and `kennethreitz` returned Fastly client challenges
+in separate browser runs. No user-project operation was added, and search was not retried.
+The challenge page itself sent POST requests; no write operation was invoked.
