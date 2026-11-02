@@ -109,10 +109,7 @@
           "num_comments",
           "objectID",
           "author",
-          "created_at",
-          "comment_text",
-          "story_title",
-          "story_url"
+          "created_at"
         ],
         "shape": {
           "hits": "array",

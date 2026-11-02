@@ -1,37 +1,20 @@
-No account is needed for public repositories.
+No account is needed for public repositories. A missing or private repo, path, issue or user (an
+organization too, for `getUser`) answers `class: "input"`. Unset fields are absent.
 
-- `searchRepos` returns page 1 (10), best-match order, not stars. Matched words in `description`
-  have `<em>` tags; `stars` is the count, and `language` is absent if none is detected.
-- `getRepo` follows renames (`facebook/react` becomes `react/react`); missing or private repos
-  return `class: "input"`. Unset `website`, `license` and `description` are absent; an
-  unrecognized license is `"Other"`. `releases` counts published releases, not tags.
-- `listIssues` returns page 1 (25), newest first, excluding PRs. `query` defaults to
-  `is:issue state:open`; replace the whole filter, keeping `is:issue` (e.g.
-  `is:issue state:closed label:bug`). State is `REPO_ISSUE_STATE_OPEN` or
-  `REPO_ISSUE_STATE_CLOSED`; `comments` and `labels` are absent when none.
-- `listPullRequests` returns page 1 (up to 25), newest first. `query` defaults to `is:pr is:open`;
-  replace the whole filter, keeping `is:pr`. State is `REPO_ISSUE_PULL_REQUEST_STATE_OPEN`,
-  `REPO_ISSUE_PULL_REQUEST_STATE_CLOSED` or `REPO_ISSUE_PULL_REQUEST_STATE_MERGED`.
-  `labels` is absent when none.
-- `listDirectory` takes a nonempty repository-relative path, including nested paths, not the root.
-  Its `type` uses GitHub's values, such as `directory` and `file`.
-- `getFile` returns an array of lines from GitHub's blob page; binary or large files may not
-  provide lines. Check for truncation.
-- For `listDirectory` and `getFile`, `ref` defaults to `HEAD`, GitHub's default-branch ref.
-  A branch, tag or commit can be supplied instead. A missing path answers `class: "input"`.
-- `listReleases` returns page 1, up to 10. `status` is GitHub's label (e.g. `Pre-release` or
-  `Latest`), not a boolean, and is absent if unlabeled. `summary` is the first rendered paragraph,
-  if present.
-- `getUser` returns a one-item list for a public user; organizations and missing users return
-  `class: "input"`. Counts are displayed strings, sometimes abbreviated (`330k`); pinned repos
-  are names, not owner/name pairs. Unset profile fields may be absent.
-- `getIssue` returns the issue's main post in Markdown, not the comment thread. `comments` is the
-  total comment count; `labels` can be empty. A missing issue answers `class: "input"`.
-- Trending periods default to `daily`; an empty `language` means all languages. Repository links
-  are full URLs, counts are displayed strings, and descriptions or languages may be missing.
-  Developer names can fall back to the username and popular repository links may be absent.
-- `getLanguages` gives GitHub's rounded percentages, including an `Other` group when present.
-- GitHub limits how fast logged-out visitors can search. Keep `searchRepos` calls spaced out.
+- `searchRepos`: page 1 (10), best match, not stars; `<em>` marks matched words in `description`.
+  Logged-out search is rate-limited: space calls out.
+- `getRepo` follows renames (`facebook/react` -> `react/react`); an unrecognized license is
+  `"Other"`; `releases` counts published releases, not tags.
+- `listIssues` / `listPullRequests`: page 1 (25), newest first. `query` defaults to
+  `is:issue state:open` / `is:pr is:open`; pass a whole filter keeping `is:issue` / `is:pr`.
+  `state` is GitHub's enum (`REPO_ISSUE_STATE_CLOSED`, `REPO_ISSUE_PULL_REQUEST_STATE_MERGED`...).
+- `listDirectory` takes a nonempty path (not the root); `getFile` returns the blob's lines (none
+  for binary or large files; check `truncated`). Both take `ref`, default `HEAD` (default branch).
+- `listReleases`: page 1 (10); `status` is a label (`Latest`, `Pre-release`), not a boolean.
+- `getUser`: one item; counts are display strings (`330k`); pinned repos are names only.
+- `getIssue`: the main post in Markdown and the comment count, not the thread.
+- Trending: `since` defaults to `daily`, empty `language` means all; counts are display strings.
+- `getLanguages`: GitHub's rounded percentages, with an `Other` group when present.
 
 ## Maintainer notes
 

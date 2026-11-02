@@ -450,7 +450,7 @@ async function names(
     reg.received.some((r) => r.path === "/v1/search?q=shelfari.com&limit=10"),
     "the registry was asked for the domain",
   );
-  assert.equal((await learn("https://www.crates.io/search?q={q}")).site, "crates-io");
+  assert.equal((await learn("https://www.rubygems.org/search?q={q}")).site, "rubygems-org");
   assert.equal((await learn("https://search.lobste.rs/s?q={q}")).site, "lobste-rs");
   assert.equal(
     (await learn("https://news.ycombinator.com/s?q={q}")).site,

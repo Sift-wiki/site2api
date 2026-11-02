@@ -1,38 +1,22 @@
-No account is needed. English Wikipedia only (en.wikipedia.org).
+No account is needed. English Wikipedia only. Text is CC BY-SA: attribute on reuse. Long results
+(text, links, languages) can be truncated: check `truncated` and use `more`.
 
-- `searchArticles` matches titles by prefix, like the search box: use it to turn a name into an
-  article `key`. For a topic rather than a name, use `searchText`.
-- `getSummary` takes the `key` from `searchArticles` (`Ada_Lovelace`). A title that redirects
-  (`USA`) answers with the target article (`United States`). A title that doesn't exist answers `class: "input"`.
-- A `getSummary` with `type: "disambiguation"` is a page listing several meanings: its `extract`
-  says little. Search again with a more specific title.
-- `searchText` returns page 1 only (20 hits). `url` is the full article link; the article `key` is
-  its last path segment.
-- `getSections` reads the article's displayed table of contents. The first entry is the unnumbered
-  top of the page; numbered entries use display numbers such as `3.2`, not MediaWiki API section
-  indexes. Their depth indicates the nesting level, and the anchor is a link to that heading.
-- `getCategories` reads visible categories, not hidden maintenance categories.
-- `getArticleText` returns paragraphs in page order, without headings. It can include empty
-  paragraphs, citation markers and text inside quoted passages; tables and lists are not included.
-  Flattened formatting may lose distinctions such as superscripts.
-- `getLinks` reads titled links in paragraphs, not every link in the article. It excludes most
-  citation links and navboxes, but can include non-article namespaces and other Wikimedia sites;
-  links may repeat.
-- Text and links may exceed the 20,000-character result cap. Check `truncated` and use the
-  returned result ID and `more` to retrieve the remainder when available.
-- `getRevisions` reads the first history page (normally 50 entries). Dates and signed byte changes
-  are displayed strings; an editor or summary may be absent. Anonymous editors may be shown as IP
-  addresses, as on the public history page.
-- `getMainPage` reads the current English Main Page, not a dated archive. Sections `mp-tfa`,
-  `mp-itn`, `mp-otd` and `mp-dyk` are the featured article, news, anniversaries and facts,
-  respectively. The featured article has a summary, title and URL; `mp-otd` also has a date in
-  those fields. Section items are plain text, not individual article links.
-- `getLanguages` takes an English article title or URL key. Language names are in their own
-  languages, and language codes need not match the destination's subdomain. Results can exceed the
-  output cap; use the result ID and `more` for the remainder. A page without language links may
-  report drift rather than an empty list.
-- Wikipedia article text is generally available under CC BY-SA; check the page's attribution and
-  licensing requirements before reuse.
+- `searchArticles` matches titles by prefix, giving an article `key` (`Ada_Lovelace`) for the
+  other ops; for a topic, use `searchText` (page 1, 20 hits; the `key` ends its `url`).
+- `getSummary` follows redirects (`USA` -> `United States`); a missing title answers `input`.
+  `type: "disambiguation"` means a page of meanings: search with a more specific title.
+- `getSections`: the displayed table of contents; the first entry is the unnumbered top, and
+  numbers like `3.2` are display numbers, not API section indexes.
+- `getCategories`: visible categories only.
+- `getArticleText`: paragraphs in order, no headings, tables or lists; may include empty
+  paragraphs and citation markers.
+- `getLinks`: titled links in paragraphs (not navboxes); may repeat or leave the article namespace.
+- `getRevisions`: the first history page (about 50); dates and byte changes are display strings;
+  anonymous editors appear as IPs.
+- `getMainPage`: today's Main Page by section (`mp-tfa` featured article, `mp-itn` news,
+  `mp-otd` anniversaries, `mp-dyk` facts); items are plain text.
+- `getLanguages`: language names in their own language; codes need not match subdomains. A page
+  with no language links may answer drift instead of an empty list.
 
 ## Maintainer notes
 

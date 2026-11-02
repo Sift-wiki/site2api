@@ -4,7 +4,8 @@ No account is needed.
   `url` such as `item?id=...`. Only the first page is included, with no pagination.
 - `search` defaults to stories ranked by popularity, page 0 (30 hits). `searchByDate` sorts newest
   first. Both accept `type` (`story`, `comment`, `ask_hn`, `show_hn`, `poll`, `job`) and zero-based
-  `page`. Comment hits have comment text and story context instead of story titles and points.
+  `page`. `search` returns story fields only, so use `searchByDate` with `type=comment` to read
+  comments: its comment hits carry `comment_text` and story context instead of titles and points.
 - `getItem` takes a story's id; a comment's id returns no story. `text` is set only on self posts
   (Ask HN). `getComments` returns the comments the item page shows, in thread order; `depth` is
   the indentation level (`0` for a top-level comment). Very long threads are split across pages
