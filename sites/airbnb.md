@@ -37,3 +37,18 @@ The calendar, reviews and booking-panel quote requests were observed, but their 
 different base64-encoded GraphQL IDs rather than the numeric ID in the page URL. They were not
 bundled without a reliably learned conversion. No empty-result check was established, and no
 write or reservation was attempted. No challenge or blocking was observed.
+
+### Reviews, 2026-11-01, logged out
+
+An experimental `getReviews` replayed the read-only `StaysPdpReviewsQuery` GET using a slot
+that base64-encodes `StayListing:<numeric room id>`. Captures used rooms 31315228 and 34566309;
+the held-out room 19615050 returned the same 24 ratings and dates as the request captured from
+its live page. It passed verification and an empty-home call at tier 1, but is not bundled:
+shared-spec vetting rejects a parameterized `b64` layer, including one nested in a GET query.
+The returned reviews use Airbnb's relevance order, not strictly newest first.
+
+The calendar request encodes `DemandStayListing:<numeric room id>` but also fixes its start month
+and year in the request, so replaying a captured template would eventually return stale months.
+The observed booking-panel query returned an unavailable result for the sampled dates rather than
+an itemized quote. Neither operation was bundled without a reliable, validated result. No
+challenge or blocking was observed during these captures.
