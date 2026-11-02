@@ -1,0 +1,86 @@
+{
+  "name": "tmdb",
+  "displayName": "The Movie Database",
+  "baseUrl": "https://www.themoviedb.org",
+  "description": "Search public movie, television and person listings on The Movie Database.",
+  "operations": [
+    {
+      "name": "search",
+      "description": "Search the first page of movie, television and person results.",
+      "request": {
+        "method": "GET",
+        "url": "https://www.themoviedb.org/search?query=%7Bq%7D",
+        "headers": {
+          "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/jxl,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+          "accept-language": "en-US,en;q=0.9",
+          "priority": "u=0, i",
+          "sec-ch-ua": "\"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Google Chrome\";v=\"156\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\"",
+          "sec-fetch-dest": "document",
+          "sec-fetch-mode": "navigate",
+          "sec-fetch-site": "none",
+          "sec-fetch-user": "?1",
+          "upgrade-insecure-requests": "1",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36"
+        }
+      },
+      "slots": [
+        {
+          "param": "q",
+          "at": [
+            "query:query"
+          ]
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://www.themoviedb.org/search?query={q}"
+      },
+      "match": {
+        "method": "GET",
+        "host": "www.themoviedb.org",
+        "path": "/search"
+      },
+      "response": {
+        "format": "html",
+        "contentType": "text/html;charset=utf-8",
+        "html": {
+          "items": "#movie_results .media-card-list > div, #tv_results .media-card-list > div, #person_results .item.profile",
+          "fields": {
+            "title": "h2, p.name",
+            "url": "a@href",
+            "mediaType": "a@data-media-type",
+            "releaseDate": ".release_date",
+            "overview": "div[class^=mt-4] p",
+            "knownFor": "p.sub"
+          }
+        }
+      },
+      "params": [
+        {
+          "name": "q",
+          "type": "string",
+          "required": true,
+          "description": "Movie, television series or person search terms.",
+          "example": "Inception"
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "checks": [
+        {
+          "args": {
+            "q": "Breaking Bad"
+          },
+          "expect": "result"
+        },
+        {
+          "args": {},
+          "expect": "input"
+        }
+      ]
+    }
+  ]
+}
