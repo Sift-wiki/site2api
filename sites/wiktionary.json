@@ -1,0 +1,250 @@
+{
+  "name": "wiktionary",
+  "displayName": "English Wiktionary",
+  "baseUrl": "https://en.wiktionary.org",
+  "description": "Public dictionary entry definitions, title suggestions, and English IPA pronunciations from English Wiktionary.",
+  "operations": [
+    {
+      "name": "searchWords",
+      "description": "Find up to ten entry titles by prefix, as in the search box.",
+      "request": {
+        "method": "GET",
+        "url": "https://en.wiktionary.org/w/rest.php/v1/search/title?q=%7Bq%7D&limit=10",
+        "headers": {
+          "referer": "https://en.wiktionary.org/wiki/Wiktionary:Main_Page",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36",
+          "accept": "application/json",
+          "sec-ch-ua": "\"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Google Chrome\";v=\"156\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\""
+        }
+      },
+      "slots": [
+        {
+          "param": "q",
+          "at": [
+            "query:q"
+          ]
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://en.wiktionary.org/wiki/Wiktionary:Main_Page",
+        "steps": [
+          {
+            "action": "click",
+            "selector": "input[name=search]"
+          },
+          {
+            "action": "fill",
+            "selector": "input[name=search]",
+            "value": "{q}"
+          },
+          {
+            "action": "wait",
+            "ms": 2500
+          }
+        ]
+      },
+      "match": {
+        "method": "GET",
+        "host": "en.wiktionary.org",
+        "path": "/w/rest.php/v1/search/title"
+      },
+      "response": {
+        "format": "json",
+        "contentType": "application/json",
+        "extract": "pages",
+        "pick": [
+          "id",
+          "key",
+          "title",
+          "description"
+        ],
+        "shape": {
+          "pages[].id": "number",
+          "pages[].key": "string",
+          "pages[].title": "string",
+          "pages[].description": "null"
+        }
+      },
+      "params": [
+        {
+          "name": "q",
+          "type": "string",
+          "required": true,
+          "description": "Entry title prefix to search for.",
+          "example": "serendipity"
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "checks": [
+        {
+          "args": {
+            "q": "ephemeral"
+          },
+          "expect": "result",
+          "purpose": "another prefix yields suggestions"
+        },
+        {
+          "args": {
+            "q": "zzqqxxnoentrywiktionaryxyz"
+          },
+          "expect": "empty",
+          "purpose": "an unmatched prefix yields no suggestions"
+        }
+      ]
+    },
+    {
+      "name": "define",
+      "description": "Get the definition endpoint's language groups and parts of speech, with definitions and examples when supplied. Results may omit senses shown on the entry page.",
+      "request": {
+        "method": "GET",
+        "url": "https://en.wiktionary.org/api/rest_v1/page/definition/%7Bword%7D",
+        "headers": {
+          "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/jxl,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+          "accept-language": "en-US,en;q=0.9",
+          "priority": "u=0, i",
+          "sec-ch-ua": "\"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Google Chrome\";v=\"156\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\"",
+          "sec-fetch-dest": "document",
+          "sec-fetch-mode": "navigate",
+          "sec-fetch-site": "none",
+          "sec-fetch-user": "?1",
+          "upgrade-insecure-requests": "1",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36"
+        }
+      },
+      "slots": [
+        {
+          "param": "word",
+          "at": [
+            "path:4"
+          ]
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://en.wiktionary.org/api/rest_v1/page/definition/{word}"
+      },
+      "match": {
+        "method": "GET",
+        "host": "en.wiktionary.org",
+        "path": "/api/rest_v1/page/definition/*"
+      },
+      "response": {
+        "format": "json",
+        "contentType": "application/json; charset=utf-8; profile=\"https://www.mediawiki.org/wiki/Specs/definition/0.8.1\"",
+        "extract": "."
+      },
+      "params": [
+        {
+          "name": "word",
+          "type": "string",
+          "required": true,
+          "description": "Exact entry title or URL key, such as serendipity.",
+          "example": "serendipity"
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "checks": [
+        {
+          "args": {
+            "word": "ephemeral"
+          },
+          "expect": "result",
+          "purpose": "another word has definitions"
+        },
+        {
+          "args": {
+            "word": "zzqqxxnoentrywiktionaryxyz"
+          },
+          "expect": "input",
+          "purpose": "a missing entry is input"
+        }
+      ]
+    },
+    {
+      "name": "getPronunciation",
+      "description": "Get IPA strings displayed in the English section of an entry.",
+      "request": {
+        "method": "GET",
+        "url": "https://en.wiktionary.org/wiki/%7Bword%7D",
+        "headers": {
+          "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/jxl,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+          "accept-language": "en-US,en;q=0.9",
+          "priority": "u=0, i",
+          "sec-ch-ua": "\"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Google Chrome\";v=\"156\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\"",
+          "sec-fetch-dest": "document",
+          "sec-fetch-mode": "navigate",
+          "sec-fetch-site": "none",
+          "sec-fetch-user": "?1",
+          "upgrade-insecure-requests": "1",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36"
+        }
+      },
+      "slots": [
+        {
+          "param": "word",
+          "at": [
+            "path:1"
+          ]
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://en.wiktionary.org/wiki/{word}"
+      },
+      "match": {
+        "method": "GET",
+        "host": "en.wiktionary.org",
+        "path": "/wiki/*"
+      },
+      "response": {
+        "format": "html",
+        "contentType": "text/html; charset=UTF-8",
+        "html": {
+          "items": ".mw-heading2:has(#English) ~ ul:not(.mw-heading2:has(#English) ~ .mw-heading2 ~ ul) .IPA",
+          "fields": {
+            "ipa": ""
+          }
+        }
+      },
+      "params": [
+        {
+          "name": "word",
+          "type": "string",
+          "required": true,
+          "description": "Exact entry title or URL key, such as serendipity.",
+          "example": "serendipity"
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "checks": [
+        {
+          "args": {
+            "word": "ephemeral"
+          },
+          "expect": "result",
+          "purpose": "another English entry has IPA"
+        },
+        {
+          "args": {
+            "word": "zzqqxxnoentrywiktionaryxyz"
+          },
+          "expect": "input",
+          "purpose": "a missing entry is input"
+        }
+      ]
+    }
+  ]
+}
