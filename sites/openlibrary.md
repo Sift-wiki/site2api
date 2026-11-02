@@ -10,9 +10,37 @@ No account is needed.
 - `getAuthor`: `bio` follows the same text-or-object rule. `birthDate` and `deathDate` are
   free text in whatever format the record has (`21 October 1929`, `January 4, 1976`), and each
   can be missing.
+- `getEditions` returns the first 50 editions, not all editions. Edition ids are keys like
+  `/books/OL7353617M`; language values are keys like `/languages/eng`. ISBNs, publisher,
+  publication date, pages and languages may be missing.
+- `getByIsbn` accepts an ISBN-10 or ISBN-13 without hyphens. Work and author values are keys
+  such as `/works/OL45804W` and `/authors/OL34184A`, and may be absent.
+- `getAuthorWorks` returns the first 50 works. Its work ids are `/works/` keys, and first
+  publication dates are free text and often missing.
+- `getSubject` takes a subject slug such as `science_fiction` and returns the first 12 works.
+  It does not return the subject's total work count. Authors and first publication year may be
+  missing.
 - A cover image is `https://covers.openlibrary.org/b/id/<coverId>-M.jpg` (`-S`, `-M` or `-L`).
 
 ## Maintainer notes
+
+### 2026-11-01, logged out
+
+- Captured two differing JSON documents for each new operation. Held-out calls at tier 1 matched
+  captured JSON documents: `getEditions(OL66554W)` first returned `/books/OL49198652M`;
+  `getByIsbn(9780141439518)` resolved to `/books/OL37076991M`;
+  `getAuthorWorks(OL34184A)` first returned `/works/OL15158644W`;
+  `getSubject(fantasy)` first returned `/works/OL138052W`. The actual HTML edition and subject
+  pages redirected to `/verify_human`, so a comparison with their rendered pages was not possible.
+- The ISBN JSON URL redirects to a `/books/` JSON document. Capturing the redirect yields a 302
+  HTML response, so its learned response recipe was corrected to JSON for the final response;
+  tier-1 fetch follows the redirect.
+- Subject JSON contains name and count alongside full work records. The recipe extracts the
+  work list instead: selecting whole records caused oversized, truncated results and redacted
+  nested `key` fields. The count is not returned.
+- No separate availability operation was added: the challenged HTML pages did not expose their
+  button requests. Reading logs, lists and borrowing are not included. The challenge page sent
+  a Sentry analytics POST on its own; no write operation was called.
 
 Verified 2026-10-31, logged out, from a clean `API_ANYTHING_HOME`: `api-anything verify
 openlibrary` passed 5 of 5 cases (each op's example, an `empty` check for `searchBooks`, and an
