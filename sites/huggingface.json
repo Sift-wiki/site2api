@@ -2,27 +2,11 @@
   "name": "huggingface",
   "displayName": "Hugging Face",
   "baseUrl": "https://huggingface.co",
-  "description": "Hugging Face Hub: search models and datasets the way the site's model and dataset lists do, and read one model's record (task, license, size, downloads). Public, logged out.",
+  "description": "Hugging Face Hub: search public models, datasets and Spaces, and read their repository metadata while logged out.",
   "operations": [
     {
       "name": "searchModels",
       "description": "Search models by name, as typed into the Filter by name box on huggingface.co/models (trending order, up to 30): id (\"owner/name\"), author, name, task, downloads, likes, lastModified and gated.",
-      "links": [
-        {
-          "from": "author",
-          "to": {
-            "op": "getModel",
-            "arg": "author"
-          }
-        },
-        {
-          "from": "name",
-          "to": {
-            "op": "getModel",
-            "arg": "name"
-          }
-        }
-      ],
       "request": {
         "method": "GET",
         "url": "https://huggingface.co/models-json?sort=trending&search=%7Bq%7D&withCount=true",
@@ -94,8 +78,8 @@
           "name": "q",
           "type": "string",
           "required": true,
-          "example": "whisper",
-          "description": "words in the model id"
+          "description": "words in the model id",
+          "example": "whisper"
         }
       ],
       "readOnly": true,
@@ -108,6 +92,22 @@
           },
           "expect": "empty",
           "purpose": "a name nothing matches reads as an empty list"
+        }
+      ],
+      "links": [
+        {
+          "from": "author",
+          "to": {
+            "op": "getModel",
+            "arg": "author"
+          }
+        },
+        {
+          "from": "name",
+          "to": {
+            "op": "getModel",
+            "arg": "name"
+          }
         }
       ]
     },
@@ -179,15 +179,15 @@
           "name": "author",
           "type": "string",
           "required": true,
-          "example": "openai",
-          "description": "the owner (user or organization): the part of the model id before \"/\""
+          "description": "the owner (user or organization): the part of the model id before \"/\"",
+          "example": "openai"
         },
         {
           "name": "name",
           "type": "string",
           "required": true,
-          "example": "whisper-large-v3",
-          "description": "the model name: the part of the model id after \"/\""
+          "description": "the model name: the part of the model id after \"/\"",
+          "example": "whisper-large-v3"
         }
       ],
       "readOnly": true,
@@ -269,8 +269,8 @@
           "name": "q",
           "type": "string",
           "required": true,
-          "example": "squad",
-          "description": "words in the dataset id"
+          "description": "words in the dataset id",
+          "example": "squad"
         }
       ],
       "readOnly": true,
@@ -285,6 +285,255 @@
           "purpose": "a name nothing matches reads as an empty list"
         }
       ]
+    },
+    {
+      "name": "getDataset",
+      "description": "Read a public dataset's card summary, downloads, likes, tags, task categories, size categories, license and last modification time.",
+      "request": {
+        "method": "GET",
+        "url": "https://huggingface.co/api/datasets/%7Bauthor%7D/%7Bname%7D",
+        "headers": {
+          "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/jxl,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+          "accept-language": "en-US,en;q=0.9",
+          "priority": "u=0, i",
+          "sec-ch-ua": "\"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Google Chrome\";v=\"156\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\"",
+          "sec-fetch-dest": "document",
+          "sec-fetch-mode": "navigate",
+          "sec-fetch-site": "none",
+          "sec-fetch-user": "?1",
+          "upgrade-insecure-requests": "1",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36"
+        }
+      },
+      "slots": [
+        {
+          "param": "author",
+          "at": [
+            "path:2"
+          ]
+        },
+        {
+          "param": "name",
+          "at": [
+            "path:3"
+          ]
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://huggingface.co/api/datasets/{author}/{name}"
+      },
+      "match": {
+        "method": "GET",
+        "host": "huggingface.co",
+        "path": "/api/datasets/*/*"
+      },
+      "response": {
+        "format": "json",
+        "contentType": "",
+        "extract": ".",
+        "pick": [
+          "id",
+          "description",
+          "downloads",
+          "likes",
+          "tags",
+          "taskCategories=cardData.task_categories",
+          "sizeCategories=cardData.size_categories",
+          "license=cardData.license",
+          "lastModified"
+        ]
+      },
+      "params": [
+        {
+          "name": "author",
+          "type": "string",
+          "required": true,
+          "description": "dataset owner, the part of the repository id before the slash",
+          "example": "openai"
+        },
+        {
+          "name": "name",
+          "type": "string",
+          "required": true,
+          "description": "dataset name, the part of the repository id after the slash",
+          "example": "gsm8k"
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false
+    },
+    {
+      "name": "searchSpaces",
+      "description": "Search public Spaces by name, returning the first page of titles, SDKs, emoji, likes and last modification times.",
+      "request": {
+        "method": "GET",
+        "url": "https://huggingface.co/spaces-json?search=%7Bq%7D&includeNonRunning=true&withCount=true",
+        "headers": {
+          "accept": "*/*",
+          "referer": "https://huggingface.co/spaces",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36",
+          "sec-ch-ua": "\"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Google Chrome\";v=\"156\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\""
+        }
+      },
+      "slots": [
+        {
+          "param": "q",
+          "at": [
+            "query:search"
+          ]
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://huggingface.co/spaces",
+        "steps": [
+          {
+            "action": "wait",
+            "ms": 3000
+          },
+          {
+            "action": "fill",
+            "selector": "input[placeholder=\"Filter by name\"]",
+            "value": "{q}"
+          },
+          {
+            "action": "wait",
+            "ms": 3000
+          }
+        ]
+      },
+      "match": {
+        "path": "/spaces-json"
+      },
+      "response": {
+        "format": "json",
+        "contentType": "application/json; charset=utf-8",
+        "extract": "spaces",
+        "pick": [
+          "id",
+          "title",
+          "emoji",
+          "sdk",
+          "likes",
+          "lastModified"
+        ],
+        "shape": {
+          "spaces[].emoji": "string",
+          "spaces[].id": "string",
+          "spaces[].lastModified": "string",
+          "spaces[].likes": "number",
+          "spaces[].sdk": "string",
+          "spaces[].title": "string"
+        }
+      },
+      "params": [
+        {
+          "name": "q",
+          "type": "string",
+          "required": true,
+          "description": "words in the Space repository id",
+          "example": "gradio"
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "checks": [
+        {
+          "args": {
+            "q": "zzqqxxwvnothingmatch"
+          },
+          "expect": "empty",
+          "purpose": "an unmatched name returns an empty list"
+        }
+      ]
+    },
+    {
+      "name": "getSpace",
+      "description": "Read a public Space's title, SDK, runtime stage, hardware, likes and linked model and dataset repositories.",
+      "request": {
+        "method": "GET",
+        "url": "https://huggingface.co/api/spaces/%7Bauthor%7D/%7Bname%7D",
+        "headers": {
+          "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/jxl,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+          "accept-language": "en-US,en;q=0.9",
+          "priority": "u=0, i",
+          "sec-ch-ua": "\"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Google Chrome\";v=\"156\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\"",
+          "sec-fetch-dest": "document",
+          "sec-fetch-mode": "navigate",
+          "sec-fetch-site": "none",
+          "sec-fetch-user": "?1",
+          "upgrade-insecure-requests": "1",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36"
+        }
+      },
+      "slots": [
+        {
+          "param": "author",
+          "at": [
+            "path:2"
+          ]
+        },
+        {
+          "param": "name",
+          "at": [
+            "path:3"
+          ]
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://huggingface.co/api/spaces/{author}/{name}"
+      },
+      "match": {
+        "method": "GET",
+        "host": "huggingface.co",
+        "path": "/api/spaces/*/*"
+      },
+      "response": {
+        "format": "json",
+        "contentType": "",
+        "extract": ".",
+        "pick": [
+          "id",
+          "title=cardData.title",
+          "emoji=cardData.emoji",
+          "sdk",
+          "runtimeStage=runtime.stage",
+          "hardware=runtime.hardware",
+          "likes",
+          "models",
+          "datasets",
+          "lastModified"
+        ]
+      },
+      "params": [
+        {
+          "name": "author",
+          "type": "string",
+          "required": true,
+          "description": "Space owner, the part of the repository id before the slash",
+          "example": "gradio"
+        },
+        {
+          "name": "name",
+          "type": "string",
+          "required": true,
+          "description": "Space name, the part of the repository id after the slash",
+          "example": "hello_world"
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false
     }
   ]
 }

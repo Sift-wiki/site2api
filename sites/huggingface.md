@@ -14,6 +14,12 @@ No account is needed. Reads public repositories only.
   doesn't declare them; `parameters` is counted only from safetensors weights.
 - In `searchDatasets`, `rows` and `modalities` come from the dataset viewer and are missing for a
   dataset it can't read.
+- `getDataset` and `getSpace` also take case-sensitive `author` and `name` parts of a repository
+  id. Dataset card fields can be absent; the description is a shortened card summary and
+  `license` can be a string or a list.
+- `searchSpaces` returns the first page, including Spaces that are not running. A Space's linked
+  models or datasets, runtime hardware, SDK, title and emoji may be absent when not declared.
+  Runtime status can change independently of the repository's last modification time.
 
 ## Maintainer notes
 
@@ -37,3 +43,25 @@ Every call answered at tier 1 (plain HTTP).
 - `getModel` was not given an `input` check, because a missing id answers 401 (`class: "auth"`).
 - The pages also load an AWS WAF script (`edge.sdk.awswaf.com`); its beacons are stopped during
   learning, and plain HTTP calls were never challenged.
+
+### 2026-11-01, logged out
+
+- `getDataset` uses the public `GET /api/datasets/<owner>/<name>` JSON, opened directly, as
+  `getModel` already does. The dataset page itself was server-rendered and did not request that
+  endpoint in the capture. Learned with `openai/gsm8k` and `stanfordnlp/imdb`; held out
+  `rajpurkar/squad`, whose card summary identifies SQuAD.
+- `searchSpaces` uses the page's `GET /spaces-json` after filling Filter by name. Learned with
+  `gradio` and `whisper`; held out `diffusion`. The result included
+  `kadirnar/Video-Diffusion-WebUI`, with the same title, SDK, likes and modification time as
+  `getSpace`.
+- `getSpace` uses the public `GET /api/spaces/<owner>/<name>` JSON, opened directly; the captured
+  Space page itself was server-rendered and did not request that endpoint. Learned with
+  `gradio/hello_world` and `mediasynthesismuseum/stable-video-diffusion`; held out
+  `kadirnar/Video-Diffusion-WebUI`. No Space action was submitted.
+- A first Space example, `huggingface/HuggingChat`, did not produce a matching usable response;
+  it was replaced with a public example. Dataset and Space metadata requests were opened directly,
+  not claimed to be requests made by their respective detail pages.
+- The dated papers and paper-detail captures were server-rendered with no suitable JSON request
+  found; no paper operation was added. Sort/filter and model-file operations were not attempted.
+- Pages sent AWS WAF and Stripe requests on their own; `add` stopped non-read beacons. The
+  per-request `x-request-id` was removed from the Spaces search template.
