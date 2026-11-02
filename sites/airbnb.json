@@ -2,13 +2,14 @@
   "name": "airbnb",
   "displayName": "Airbnb",
   "baseUrl": "https://www.airbnb.com",
-  "description": "Airbnb stay search",
+  "description": "Search Airbnb stays by date and inspect public listings",
   "operations": [
     {
       "name": "search",
+      "description": "Search the first page of stays for a place, dates, and adult guests",
       "request": {
         "method": "POST",
-        "url": "https://www.airbnb.com/api/v3/StaysSearch/0afda3efc932f8c6fbd5dc8e8c3257fe33d2f075da8381adc2a5f63841255c3f?operationName=StaysSearch&locale=en&currency=USD",
+        "url": "https://www.airbnb.com/api/v3/StaysSearch/a607fc0d39cdab40dece08de7ba484a17ec5ebb81b355bc5c9816f8d7fb0cf23?operationName=StaysSearch&locale=en&currency=USD",
         "headers": {
           "accept": "*/*",
           "accept-language": "en-US,en;q=0.9",
@@ -16,10 +17,9 @@
           "ect": "4g",
           "origin": "https://www.airbnb.com",
           "priority": "u=1, i",
-          "referer": "https://www.airbnb.com/s/{loc}/homes",
           "sec-ch-device-memory": "16",
           "sec-ch-dpr": "1",
-          "sec-ch-ua": "\"Google Chrome\";v=\"153\", \"Not_A Brand\";v=\"8\", \"Chromium\";v=\"153\"",
+          "sec-ch-ua": "\"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Google Chrome\";v=\"156\"",
           "sec-ch-ua-mobile": "?0",
           "sec-ch-ua-platform": "\"macOS\"",
           "sec-ch-ua-platform-version": "\"10_15_7\"",
@@ -27,53 +27,118 @@
           "sec-fetch-dest": "empty",
           "sec-fetch-mode": "cors",
           "sec-fetch-site": "same-origin",
-          "traceparent": "00-37d932d51b90eb3ab22a3ea76ab53df4-1a80f7c89c07e278-00",
-          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.0.0 Safari/537.36",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36",
           "x-airbnb-api-key": "d306zoyjsyarp7ifhu67rjxn52tv0t20",
-          "x-airbnb-client-trace-id": "0297hzz08zgll61vtq76b0859dsq",
           "x-airbnb-graphql-platform": "web",
           "x-airbnb-graphql-platform-client": "minimalist-niobe",
-          "x-airbnb-network-log-link": "0edzlvn1rljwio02r7c051fad818",
           "x-airbnb-supports-airlock-v2": "true",
-          "x-client-request-id": "06viep60u1c5au1idoqzt1st9f78",
-          "x-client-version": "272df2c80bfe91a5efce64f09be16093b452eb95",
+          "x-client-version": "",
           "x-csrf-token": "",
           "x-csrf-without-token": ""
         },
-        "body": "{\"operationName\":\"StaysSearch\",\"variables\":{\"staysSearchRequest\":{\"metadataOnly\":false,\"requestedPageType\":\"STAYS_SEARCH\",\"treatmentFlags\":[\"feed_map_decouple_m11_treatment\",\"recommended_amenities_2024_treatment_b\",\"filter_redesign_2024_treatment\",\"filter_reordering_2024_roomtype_treatment\",\"p2_category_bar_removal_treatment\",\"selected_filters_2024_treatment\",\"recommended_filters_2024_treatment_b\",\"m13_search_input_phase2_treatment\",\"m13_search_input_services_enabled\",\"m13_2025_experiences_p2_treatment\",\"homes_p25_refresh_2025_treatment\"],\"maxMapItems\":9999,\"rawParams\":[{\"filterName\":\"cdnCacheSafe\",\"filterValues\":[\"false\"]},{\"filterName\":\"itemsPerGrid\",\"filterValues\":[\"18\"]},{\"filterName\":\"query\",\"filterValues\":[\"{loc}\"]},{\"filterName\":\"refinementPaths\",\"filterValues\":[\"/homes\"]},{\"filterName\":\"screenSize\",\"filterValues\":[\"large\"]},{\"filterName\":\"tabId\",\"filterValues\":[\"home_tab\"]},{\"filterName\":\"version\",\"filterValues\":[\"1.8.8\"]}]},\"staysMapSearchRequestV2\":{\"metadataOnly\":false,\"requestedPageType\":\"STAYS_SEARCH\",\"treatmentFlags\":[\"feed_map_decouple_m11_treatment\",\"recommended_amenities_2024_treatment_b\",\"filter_redesign_2024_treatment\",\"filter_reordering_2024_roomtype_treatment\",\"p2_category_bar_removal_treatment\",\"selected_filters_2024_treatment\",\"recommended_filters_2024_treatment_b\",\"m13_search_input_phase2_treatment\",\"m13_search_input_services_enabled\",\"m13_2025_experiences_p2_treatment\",\"homes_p25_refresh_2025_treatment\"],\"rawParams\":[{\"filterName\":\"cdnCacheSafe\",\"filterValues\":[\"false\"]},{\"filterName\":\"query\",\"filterValues\":[\"{loc}\"]},{\"filterName\":\"refinementPaths\",\"filterValues\":[\"/homes\"]},{\"filterName\":\"screenSize\",\"filterValues\":[\"large\"]},{\"filterName\":\"tabId\",\"filterValues\":[\"home_tab\"]},{\"filterName\":\"version\",\"filterValues\":[\"1.8.8\"]}]},\"isLeanTreatment\":false,\"aiSearchEnabled\":false},\"extensions\":{\"persistedQuery\":{\"version\":1,\"sha256Hash\":\"0afda3efc932f8c6fbd5dc8e8c3257fe33d2f075da8381adc2a5f63841255c3f\"}}}"
+        "body": "{\"operationName\":\"StaysSearch\",\"variables\":{\"staysSearchRequest\":{\"metadataOnly\":false,\"requestedPageType\":\"STAYS_SEARCH\",\"treatmentFlags\":[\"upfront_pricing_enabled\",\"feed_map_decouple_m11_treatment\",\"recommended_amenities_2024_treatment_b\",\"filter_redesign_2024_treatment\",\"filter_reordering_2024_roomtype_treatment\",\"p2_category_bar_removal_treatment\",\"selected_filters_2024_treatment\",\"recommended_filters_2024_treatment_b\",\"\",\"\",\"m13_2025_experiences_p2_treatment\",\"homes_p25_refresh_2025_treatment\"],\"maxMapItems\":9999,\"rawParams\":[{\"filterName\":\"adults\",\"filterValues\":[\"{adults}\"]},{\"filterName\":\"cdnCacheSafe\",\"filterValues\":[\"false\"]},{\"filterName\":\"checkin\",\"filterValues\":[\"{checkin}\"]},{\"filterName\":\"checkout\",\"filterValues\":[\"{checkout}\"]},{\"filterName\":\"itemsPerGrid\",\"filterValues\":[\"18\"]},{\"filterName\":\"query\",\"filterValues\":[\"{loc}\"]},{\"filterName\":\"refinementPaths\",\"filterValues\":[\"/homes\"]},{\"filterName\":\"screenSize\",\"filterValues\":[\"large\"]},{\"filterName\":\"tabId\",\"filterValues\":[\"home_tab\"]},{\"filterName\":\"version\",\"filterValues\":[\"1.8.8\"]}]},\"staysMapSearchRequestV2\":{\"metadataOnly\":false,\"requestedPageType\":\"STAYS_SEARCH\",\"treatmentFlags\":[\"upfront_pricing_enabled\",\"feed_map_decouple_m11_treatment\",\"recommended_amenities_2024_treatment_b\",\"filter_redesign_2024_treatment\",\"filter_reordering_2024_roomtype_treatment\",\"p2_category_bar_removal_treatment\",\"selected_filters_2024_treatment\",\"recommended_filters_2024_treatment_b\",\"\",\"\",\"m13_2025_experiences_p2_treatment\",\"homes_p25_refresh_2025_treatment\"],\"rawParams\":[{\"filterName\":\"adults\",\"filterValues\":[\"{adults}\"]},{\"filterName\":\"cdnCacheSafe\",\"filterValues\":[\"false\"]},{\"filterName\":\"checkin\",\"filterValues\":[\"{checkin}\"]},{\"filterName\":\"checkout\",\"filterValues\":[\"{checkout}\"]},{\"filterName\":\"query\",\"filterValues\":[\"{loc}\"]},{\"filterName\":\"refinementPaths\",\"filterValues\":[\"/homes\"]},{\"filterName\":\"screenSize\",\"filterValues\":[\"large\"]},{\"filterName\":\"tabId\",\"filterValues\":[\"home_tab\"]},{\"filterName\":\"version\",\"filterValues\":[\"1.8.8\"]}]}},\"extensions\":{\"persistedQuery\":{\"version\":1,\"sha256Hash\":\"a607fc0d39cdab40dece08de7ba484a17ec5ebb81b355bc5c9816f8d7fb0cf23\"}}}"
       },
       "slots": [
         {
           "param": "loc",
           "at": [
             "body",
-            "json:/variables/staysSearchRequest/rawParams/2/filterValues/0"
+            "json:/variables/staysSearchRequest/rawParams/5/filterValues/0"
           ]
         },
         {
           "param": "loc",
           "at": [
             "body",
-            "json:/variables/staysMapSearchRequestV2/rawParams/1/filterValues/0"
+            "json:/variables/staysMapSearchRequestV2/rawParams/4/filterValues/0"
           ]
         },
         {
-          "param": "loc",
+          "param": "checkin",
           "at": [
-            "header:referer"
-          ],
-          "template": "https://www.airbnb.com/s/{loc}/homes"
+            "body",
+            "json:/variables/staysSearchRequest/rawParams/2/filterValues/0"
+          ]
         },
         {
-          "ref": "session:x-csrf-token",
+          "param": "checkin",
+          "at": [
+            "body",
+            "json:/variables/staysMapSearchRequestV2/rawParams/2/filterValues/0"
+          ]
+        },
+        {
+          "param": "checkout",
+          "at": [
+            "body",
+            "json:/variables/staysSearchRequest/rawParams/3/filterValues/0"
+          ]
+        },
+        {
+          "param": "checkout",
+          "at": [
+            "body",
+            "json:/variables/staysMapSearchRequestV2/rawParams/3/filterValues/0"
+          ]
+        },
+        {
+          "param": "adults",
+          "at": [
+            "body",
+            "json:/variables/staysSearchRequest/rawParams/0/filterValues/0"
+          ]
+        },
+        {
+          "param": "adults",
+          "at": [
+            "body",
+            "json:/variables/staysMapSearchRequestV2/rawParams/0/filterValues/0"
+          ]
+        },
+        {
+          "ref": "session:search/x-csrf-token",
           "at": [
             "header:x-csrf-token"
           ]
         },
         {
-          "ref": "session:x-csrf-without-token",
+          "ref": "session:search/x-csrf-without-token",
           "at": [
             "header:x-csrf-without-token"
+          ]
+        },
+        {
+          "ref": "session:search/x-client-version@%5B%22header%3Ax-client-version%22%5D",
+          "at": [
+            "header:x-client-version"
+          ]
+        },
+        {
+          "ref": "session:search/8@%5B%22body%22%2C%22json%3A%2Fvariables%2FstaysSearchRequest%2FtreatmentFlags%2F8%22%5D",
+          "at": [
+            "body",
+            "json:/variables/staysSearchRequest/treatmentFlags/8"
+          ]
+        },
+        {
+          "ref": "session:search/9@%5B%22body%22%2C%22json%3A%2Fvariables%2FstaysSearchRequest%2FtreatmentFlags%2F9%22%5D",
+          "at": [
+            "body",
+            "json:/variables/staysSearchRequest/treatmentFlags/9"
+          ]
+        },
+        {
+          "ref": "session:search/8@%5B%22body%22%2C%22json%3A%2Fvariables%2FstaysSearchRequest%2FtreatmentFlags%2F8%22%5D",
+          "at": [
+            "body",
+            "json:/variables/staysMapSearchRequestV2/treatmentFlags/8"
+          ]
+        },
+        {
+          "ref": "session:search/9@%5B%22body%22%2C%22json%3A%2Fvariables%2FstaysSearchRequest%2FtreatmentFlags%2F9%22%5D",
+          "at": [
+            "body",
+            "json:/variables/staysMapSearchRequestV2/treatmentFlags/9"
           ]
         }
       ],
@@ -101,7 +166,7 @@
         }
       ],
       "trigger": {
-        "url": "https://www.airbnb.com/s/{loc}/homes",
+        "url": "https://www.airbnb.com/s/{loc}/homes?checkin={checkin}&checkout={checkout}&adults={adults}",
         "softFrom": "https://www.airbnb.com/"
       },
       "match": {
@@ -126,7 +191,30 @@
           "name": "loc",
           "type": "string",
           "required": true,
-          "example": "Lisbon"
+          "example": "Lisbon",
+          "description": "Destination place name"
+        },
+        {
+          "name": "checkin",
+          "type": "string",
+          "required": true,
+          "example": "2027-05-10",
+          "description": "Check-in date, YYYY-MM-DD"
+        },
+        {
+          "name": "checkout",
+          "type": "string",
+          "required": true,
+          "example": "2027-05-15",
+          "description": "Check-out date, YYYY-MM-DD"
+        },
+        {
+          "name": "adults",
+          "type": "string",
+          "required": false,
+          "default": "1",
+          "example": "3",
+          "description": "Number of adult guests"
         }
       ],
       "readOnly": true,
@@ -135,8 +223,101 @@
       ],
       "minTier": 1,
       "learnedLoggedIn": false,
-      "learnedAt": "2026-09-27T17:44:41.443Z",
-      "description": "Search Airbnb stays in a place: id, name, total price, rating"
+      "checks": [
+        {
+          "args": {
+            "loc": "Porto",
+            "checkin": "2027-07-10",
+            "checkout": "2027-07-14",
+            "adults": "4"
+          },
+          "expect": "result",
+          "purpose": "Dated Porto search with four adults"
+        }
+      ]
+    },
+    {
+      "name": "getListing",
+      "description": "Get public listing details by numeric room ID",
+      "request": {
+        "method": "GET",
+        "url": "https://www.airbnb.com/rooms/%7Bid%7D",
+        "headers": {
+          "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/jxl,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+          "accept-language": "en-US,en;q=0.9",
+          "ect": "4g",
+          "priority": "u=0, i",
+          "sec-ch-device-memory": "16",
+          "sec-ch-dpr": "1",
+          "sec-ch-ua": "\"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Google Chrome\";v=\"156\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\"",
+          "sec-ch-ua-platform-version": "\"10_15_7\"",
+          "sec-ch-viewport-width": "1280",
+          "sec-fetch-dest": "document",
+          "sec-fetch-mode": "navigate",
+          "sec-fetch-site": "none",
+          "sec-fetch-user": "?1",
+          "upgrade-insecure-requests": "1",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36"
+        }
+      },
+      "slots": [
+        {
+          "param": "id",
+          "at": [
+            "path:1"
+          ]
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://www.airbnb.com/rooms/{id}"
+      },
+      "match": {
+        "method": "GET",
+        "host": "www.airbnb.com",
+        "path": "/rooms/*"
+      },
+      "response": {
+        "format": "embedded",
+        "contentType": "text/html;charset=utf-8",
+        "pick": [
+          "id=identifier",
+          "title=name",
+          "description",
+          "address=address.addressLocality",
+          "latitude",
+          "longitude",
+          "rating=aggregateRating.ratingValue",
+          "reviewCount=aggregateRating.ratingCount",
+          "photos=image"
+        ],
+        "embedded": {
+          "regex": "application/ld\\+json[^>]*>\\s*(\\{)(?=[^<]*?\"@type\"\\s*:\\s*\"VacationRental\")"
+        }
+      },
+      "params": [
+        {
+          "name": "id",
+          "type": "string",
+          "required": true,
+          "example": "31315228",
+          "description": "Numeric room ID from an Airbnb listing URL"
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "checks": [
+        {
+          "args": {
+            "id": "19615050"
+          },
+          "expect": "result",
+          "purpose": "Public Porto listing"
+        }
+      ]
     }
   ]
 }

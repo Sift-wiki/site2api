@@ -1,0 +1,232 @@
+{
+  "name": "bbc",
+  "displayName": "BBC News",
+  "baseUrl": "https://www.bbc.com",
+  "description": "Read BBC section fronts and public news articles.",
+  "operations": [
+    {
+      "name": "getSection",
+      "description": "Read story cards from a BBC section front.",
+      "request": {
+        "method": "GET",
+        "url": "https://www.bbc.com/%7Bsection%7D",
+        "headers": {
+          "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/jxl,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+          "accept-language": "en-US,en;q=0.9",
+          "priority": "u=0, i",
+          "sec-ch-ua": "\"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Google Chrome\";v=\"156\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\"",
+          "sec-fetch-dest": "document",
+          "sec-fetch-mode": "navigate",
+          "sec-fetch-site": "none",
+          "sec-fetch-user": "?1",
+          "upgrade-insecure-requests": "1",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36"
+        }
+      },
+      "slots": [
+        {
+          "param": "section",
+          "at": [
+            "path:0"
+          ]
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://www.bbc.com/{section}"
+      },
+      "match": {
+        "method": "GET",
+        "host": "www.bbc.com",
+        "path": "/*"
+      },
+      "response": {
+        "format": "html",
+        "contentType": "text/html; charset=utf-8",
+        "html": {
+          "items": "[data-indexcard=true]:has([data-testid=card-headline]):has(a[href])",
+          "fields": {
+            "title": "[data-testid=card-headline]",
+            "summary": "p",
+            "url": "a@href",
+            "date": "[data-testid=card-metadata-lastupdated]",
+            "topic": "[data-testid=card-metadata-tag]"
+          }
+        }
+      },
+      "params": [
+        {
+          "name": "section",
+          "type": "string",
+          "required": false,
+          "description": "Top-level path segment, such as news, business, sport or technology.",
+          "example": "news",
+          "default": "news"
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "checks": [
+        {
+          "args": {
+            "section": "technology"
+          },
+          "expect": "result",
+          "purpose": "Held-out public section"
+        }
+      ]
+    },
+    {
+      "name": "getArticle",
+      "description": "Read the headline, dates, byline, topics and visible paragraphs of a BBC News article.",
+      "request": {
+        "method": "GET",
+        "url": "https://www.bbc.com/news/articles/%7Bid%7D",
+        "headers": {
+          "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/jxl,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+          "accept-language": "en-US,en;q=0.9",
+          "priority": "u=0, i",
+          "sec-ch-ua": "\"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Google Chrome\";v=\"156\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\"",
+          "sec-fetch-dest": "document",
+          "sec-fetch-mode": "navigate",
+          "sec-fetch-site": "none",
+          "sec-fetch-user": "?1",
+          "upgrade-insecure-requests": "1",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36"
+        }
+      },
+      "slots": [
+        {
+          "param": "id",
+          "at": [
+            "path:2"
+          ]
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://www.bbc.com/news/articles/{id}"
+      },
+      "match": {
+        "method": "GET",
+        "host": "www.bbc.com",
+        "path": "/news/articles/*"
+      },
+      "response": {
+        "format": "html",
+        "contentType": "text/html; charset=utf-8",
+        "html": {
+          "items": "html",
+          "fields": {
+            "headline": "article h1",
+            "published": "meta[name=\"cXenseParse:publishtime\"]@content",
+            "updated": "meta[name=\"article:modified_time\"]@content",
+            "byline": "[data-testid=byline-contributors]",
+            "topics": "all:article a[href*=\"/news/topics/\"]",
+            "paragraphs": "all:article [data-component=text-block] p"
+          }
+        }
+      },
+      "params": [
+        {
+          "name": "id",
+          "type": "string",
+          "required": true,
+          "description": "Final ID segment of a /news/articles/ URL.",
+          "example": "c51kdy1ew7zvo"
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "checks": [
+        {
+          "args": {
+            "id": "cq5ynzvkn1d8o"
+          },
+          "expect": "result",
+          "purpose": "Held-out public article"
+        }
+      ]
+    },
+    {
+      "name": "getNewsSection",
+      "description": "Read a news subsection front such as world or UK.",
+      "request": {
+        "method": "GET",
+        "url": "https://www.bbc.com/news/%7Bsection%7D",
+        "headers": {
+          "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/jxl,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+          "accept-language": "en-US,en;q=0.9",
+          "priority": "u=0, i",
+          "sec-ch-ua": "\"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Google Chrome\";v=\"156\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\"",
+          "sec-fetch-dest": "document",
+          "sec-fetch-mode": "navigate",
+          "sec-fetch-site": "none",
+          "sec-fetch-user": "?1",
+          "upgrade-insecure-requests": "1",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36"
+        }
+      },
+      "slots": [
+        {
+          "param": "section",
+          "at": [
+            "path:1"
+          ]
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://www.bbc.com/news/{section}"
+      },
+      "match": {
+        "method": "GET",
+        "host": "www.bbc.com",
+        "path": "/news/*"
+      },
+      "response": {
+        "format": "html",
+        "contentType": "text/html; charset=utf-8",
+        "html": {
+          "items": "[data-indexcard=true]:has([data-testid=card-headline]):has(a[href])",
+          "fields": {
+            "title": "[data-testid=card-headline]",
+            "summary": "p",
+            "url": "a@href",
+            "date": "[data-testid=card-metadata-lastupdated]",
+            "topic": "[data-testid=card-metadata-tag]"
+          }
+        }
+      },
+      "params": [
+        {
+          "name": "section",
+          "type": "string",
+          "required": true,
+          "description": "Single path segment after /news/, such as world, uk or scotland.",
+          "example": "world"
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "checks": [
+        {
+          "args": {
+            "section": "scotland"
+          },
+          "expect": "result",
+          "purpose": "Held-out public subsection"
+        }
+      ]
+    }
+  ]
+}

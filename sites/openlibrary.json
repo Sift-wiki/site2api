@@ -7,22 +7,6 @@
     {
       "name": "searchBooks",
       "description": "Search books by title, author or subject, from the site's search page (page 1, up to 20 works): workId, title, author (list), authorId (the first author), firstPublished (\"First published in 1969\") and editions (\"92 editions\").",
-      "links": [
-        {
-          "from": "workId",
-          "to": {
-            "op": "getWork",
-            "arg": "workId"
-          }
-        },
-        {
-          "from": "authorId",
-          "to": {
-            "op": "getAuthor",
-            "arg": "authorId"
-          }
-        }
-      ],
       "request": {
         "method": "GET",
         "url": "https://openlibrary.org/search?q=%7Bq%7D&mode=everything",
@@ -87,8 +71,8 @@
           "name": "q",
           "type": "string",
           "required": true,
-          "example": "the left hand of darkness",
-          "description": "title, author or subject words"
+          "description": "title, author or subject words",
+          "example": "the left hand of darkness"
         }
       ],
       "readOnly": true,
@@ -101,6 +85,22 @@
           },
           "expect": "empty",
           "purpose": "a query nothing matches reads as an empty list"
+        }
+      ],
+      "links": [
+        {
+          "from": "workId",
+          "to": {
+            "op": "getWork",
+            "arg": "workId"
+          }
+        },
+        {
+          "from": "authorId",
+          "to": {
+            "op": "getAuthor",
+            "arg": "authorId"
+          }
         }
       ]
     },
@@ -162,8 +162,8 @@
           "name": "workId",
           "type": "string",
           "required": true,
-          "example": "OL59800W",
           "description": "Open Library work id, from searchBooks",
+          "example": "OL59800W",
           "pattern": "OL\\d+W",
           "hint": "a work id like OL59800W"
         }
@@ -238,8 +238,8 @@
           "name": "authorId",
           "type": "string",
           "required": true,
-          "example": "OL31353A",
           "description": "Open Library author id, from searchBooks (or the last part of a getWork authorIds key)",
+          "example": "OL31353A",
           "pattern": "OL\\d+A",
           "hint": "an author id like OL31353A"
         }
@@ -247,6 +247,304 @@
       "readOnly": true,
       "minTier": 1,
       "learnedLoggedIn": false
+    },
+    {
+      "name": "getEditions",
+      "description": "List the first page of a work’s editions, including ISBNs and publication details.",
+      "request": {
+        "method": "GET",
+        "url": "https://openlibrary.org/works/%7BworkId%7D/editions.json",
+        "headers": {
+          "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/jxl,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+          "accept-language": "en-US,en;q=0.9",
+          "priority": "u=0, i",
+          "sec-ch-ua": "\"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Google Chrome\";v=\"156\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\"",
+          "sec-fetch-dest": "document",
+          "sec-fetch-mode": "navigate",
+          "sec-fetch-site": "none",
+          "sec-fetch-user": "?1",
+          "upgrade-insecure-requests": "1",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36"
+        }
+      },
+      "slots": [
+        {
+          "param": "workId",
+          "at": [
+            "path:1"
+          ]
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://openlibrary.org/works/{workId}/editions.json"
+      },
+      "match": {
+        "method": "GET",
+        "host": "openlibrary.org",
+        "path": "/works/*/editions.json"
+      },
+      "response": {
+        "format": "json",
+        "contentType": "application/json",
+        "extract": "entries",
+        "pick": [
+          "editionId=key",
+          "title",
+          "publishers",
+          "publishDate=publish_date",
+          "isbn10=isbn_10",
+          "isbn13=isbn_13",
+          "pages=number_of_pages",
+          "languages=languages[*].key"
+        ]
+      },
+      "params": [
+        {
+          "name": "workId",
+          "type": "string",
+          "required": true,
+          "description": "Open Library work id, for example OL45804W",
+          "example": "OL45804W",
+          "pattern": "OL\\d+W",
+          "hint": "a work id like OL45804W"
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "checks": [
+        {
+          "args": {
+            "workId": "OL999999999W"
+          },
+          "expect": "input",
+          "purpose": "A nonexistent work id returns 404"
+        }
+      ]
+    },
+    {
+      "name": "getAuthorWorks",
+      "description": "List the first page of an author’s works and their first publication dates when recorded.",
+      "request": {
+        "method": "GET",
+        "url": "https://openlibrary.org/authors/%7BauthorId%7D/works.json",
+        "headers": {
+          "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/jxl,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+          "accept-language": "en-US,en;q=0.9",
+          "priority": "u=0, i",
+          "sec-ch-ua": "\"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Google Chrome\";v=\"156\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\"",
+          "sec-fetch-dest": "document",
+          "sec-fetch-mode": "navigate",
+          "sec-fetch-site": "none",
+          "sec-fetch-user": "?1",
+          "upgrade-insecure-requests": "1",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36"
+        }
+      },
+      "slots": [
+        {
+          "param": "authorId",
+          "at": [
+            "path:1"
+          ]
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://openlibrary.org/authors/{authorId}/works.json"
+      },
+      "match": {
+        "method": "GET",
+        "host": "openlibrary.org",
+        "path": "/authors/*/works.json"
+      },
+      "response": {
+        "format": "json",
+        "contentType": "application/json",
+        "extract": "entries",
+        "pick": [
+          "workId=key",
+          "title",
+          "firstPublished=first_publish_date"
+        ]
+      },
+      "params": [
+        {
+          "name": "authorId",
+          "type": "string",
+          "required": true,
+          "description": "Open Library author id, for example OL23919A",
+          "example": "OL23919A",
+          "pattern": "OL\\d+A",
+          "hint": "an author id like OL23919A"
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "checks": [
+        {
+          "args": {
+            "authorId": "OL999999999A"
+          },
+          "expect": "input",
+          "purpose": "A nonexistent author id returns 404"
+        }
+      ]
+    },
+    {
+      "name": "getSubject",
+      "description": "List the first page of works for a subject, with authors and first publication year when available.",
+      "request": {
+        "method": "GET",
+        "url": "https://openlibrary.org/subjects/%7Bsubject%7D.json",
+        "headers": {
+          "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/jxl,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+          "accept-language": "en-US,en;q=0.9",
+          "priority": "u=0, i",
+          "sec-ch-ua": "\"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Google Chrome\";v=\"156\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\"",
+          "sec-fetch-dest": "document",
+          "sec-fetch-mode": "navigate",
+          "sec-fetch-site": "none",
+          "sec-fetch-user": "?1",
+          "upgrade-insecure-requests": "1",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36"
+        }
+      },
+      "slots": [
+        {
+          "param": "subject",
+          "at": [
+            "path:1"
+          ],
+          "template": "{subject}.json"
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://openlibrary.org/subjects/{subject}.json"
+      },
+      "match": {
+        "method": "GET",
+        "host": "openlibrary.org",
+        "path": "/subjects/*"
+      },
+      "response": {
+        "format": "json",
+        "contentType": "application/json",
+        "extract": "works",
+        "pick": [
+          "workId=key",
+          "title",
+          "authors=authors[*].name",
+          "firstPublished=first_publish_year"
+        ]
+      },
+      "params": [
+        {
+          "name": "subject",
+          "type": "string",
+          "required": true,
+          "description": "Open Library subject slug, such as science_fiction",
+          "example": "love"
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "checks": [
+        {
+          "args": {
+            "subject": "fantasy"
+          },
+          "expect": "result",
+          "purpose": "Fantasy has works in the subject list"
+        }
+      ]
+    },
+    {
+      "name": "getByIsbn",
+      "description": "Look up a book edition by ISBN.",
+      "request": {
+        "method": "GET",
+        "url": "https://openlibrary.org/isbn/%7Bisbn%7D.json",
+        "headers": {
+          "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/jxl,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+          "accept-language": "en-US,en;q=0.9",
+          "priority": "u=0, i",
+          "sec-ch-ua": "\"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Google Chrome\";v=\"156\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\"",
+          "sec-fetch-dest": "document",
+          "sec-fetch-mode": "navigate",
+          "sec-fetch-site": "none",
+          "sec-fetch-user": "?1",
+          "upgrade-insecure-requests": "1",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36"
+        }
+      },
+      "slots": [
+        {
+          "param": "isbn",
+          "at": [
+            "path:1"
+          ],
+          "template": "{isbn}.json"
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://openlibrary.org/isbn/{isbn}.json"
+      },
+      "match": {
+        "method": "GET",
+        "host": "openlibrary.org",
+        "path": "/isbn/*"
+      },
+      "response": {
+        "format": "json",
+        "contentType": "application/json",
+        "extract": ".",
+        "pick": [
+          "editionId=key",
+          "title",
+          "publishers",
+          "publishDate=publish_date",
+          "pages=number_of_pages",
+          "works=works[*].key",
+          "authors=authors[*].key"
+        ]
+      },
+      "params": [
+        {
+          "name": "isbn",
+          "type": "string",
+          "required": true,
+          "description": "ISBN-10 or ISBN-13, without hyphens",
+          "example": "9780140328721",
+          "pattern": "(?:[0-9]{13}|[0-9]{9}[0-9Xx])",
+          "hint": "an ISBN-10 or ISBN-13 without hyphens"
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "checks": [
+        {
+          "args": {
+            "isbn": "9780141439518"
+          },
+          "expect": "result",
+          "purpose": "An ISBN resolves to the Pride and Prejudice edition"
+        }
+      ]
     }
   ]
 }

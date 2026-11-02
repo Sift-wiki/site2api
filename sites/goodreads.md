@@ -5,6 +5,8 @@ No account is needed.
 - Page 1 only: 5 search results, 30 of an author's books, the first reviews.
 - On a new install, the first `getReviews` call opens the page in Chrome once (about 6 s) to pick up
   a site-wide API key. Later calls are plain HTTP.
+- `getAuthor` takes the numeric `authorId` from `searchBooks`. Dates, website, genres and influences
+  may be absent. Influences and the biography are the page's visible excerpts, not necessarily complete.
 
 ## Maintainer notes
 
@@ -39,3 +41,9 @@ Chains:
 - `getReviews` sends a site-wide API key that the page itself uses. The key isn't in the spec. Its
   trigger is fixed to one book's page, so if the request itself changes, repair can't re-learn it
   for other works. The call fails rather than return another book's reviews.
+
+### 2026-11-01, logged out
+
+`getAuthor` was learned from J.K. Rowling (1077326) and Stephen King (3389). A held-out
+J.R.R. Tolkien profile (656983) matched the page's name, dates, website, genres, rating,
+ratings count and biography excerpt. The profile is server-rendered HTML.

@@ -1,0 +1,74 @@
+{
+  "name": "aljazeera",
+  "displayName": "Al Jazeera English",
+  "baseUrl": "https://www.aljazeera.com",
+  "description": "Read Al Jazeera English section fronts.",
+  "operations": [
+    {
+      "name": "getSection",
+      "description": "Read story cards from an Al Jazeera English section front.",
+      "request": {
+        "method": "GET",
+        "url": "https://www.aljazeera.com/%7Bsection%7D/",
+        "headers": {
+          "upgrade-insecure-requests": "1",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\""
+        }
+      },
+      "slots": [
+        {
+          "param": "section",
+          "at": [
+            "path:0"
+          ]
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://www.aljazeera.com/{section}/"
+      },
+      "match": {
+        "method": "GET",
+        "host": "www.aljazeera.com",
+        "path": "/*/"
+      },
+      "response": {
+        "format": "html",
+        "contentType": "text/html; charset=utf-8",
+        "html": {
+          "items": "article:has(.article-card__title):has(a.article-card__link)",
+          "fields": {
+            "title": ".article-card__title",
+            "excerpt": ".article-card__excerpt",
+            "url": "a.article-card__link@href",
+            "date": ".gc__date .screen-reader-text"
+          }
+        }
+      },
+      "params": [
+        {
+          "name": "section",
+          "type": "string",
+          "required": false,
+          "description": "One section path segment, such as news, middle-east, africa, economy or sports.",
+          "example": "news",
+          "default": "news"
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "checks": [
+        {
+          "args": {
+            "section": "economy"
+          },
+          "expect": "result",
+          "purpose": "Held-out public section"
+        }
+      ]
+    }
+  ]
+}

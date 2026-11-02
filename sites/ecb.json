@@ -1,0 +1,159 @@
+{
+  "name": "ecb",
+  "displayName": "European Central Bank",
+  "baseUrl": "https://www.ecb.europa.eu",
+  "description": "Get official euro foreign-exchange reference rates and recent currency history.",
+  "operations": [
+    {
+      "name": "getRates",
+      "description": "Get the latest euro foreign-exchange reference rates.",
+      "request": {
+        "method": "GET",
+        "url": "https://www.ecb.europa.eu/stats/policy_and_exchange_rates/euro_reference_exchange_rates/html/index.en.html",
+        "headers": {
+          "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/jxl,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+          "accept-language": "en-US,en;q=0.9",
+          "priority": "u=0, i",
+          "sec-ch-ua": "\"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Google Chrome\";v=\"156\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\"",
+          "sec-fetch-dest": "document",
+          "sec-fetch-mode": "navigate",
+          "sec-fetch-site": "none",
+          "sec-fetch-user": "?1",
+          "upgrade-insecure-requests": "1",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36"
+        }
+      },
+      "slots": [],
+      "volatile": [],
+      "trigger": {
+        "url": "https://www.ecb.europa.eu/stats/policy_and_exchange_rates/euro_reference_exchange_rates/html/index.en.html"
+      },
+      "match": {
+        "method": "GET",
+        "host": "www.ecb.europa.eu",
+        "path": "/stats/policy_and_exchange_rates/euro_reference_exchange_rates/html/index.en.html"
+      },
+      "response": {
+        "format": "html",
+        "contentType": "text/html; charset=UTF-8",
+        "html": {
+          "items": ".jumbo-box:has(table.forextable)",
+          "fields": {
+            "date": ".upper h3",
+            "codes": "all:table.forextable tbody td.currency",
+            "names": "all:table.forextable tbody td.alignLeft",
+            "rates": "all:table.forextable tbody span.rate"
+          }
+        }
+      },
+      "params": [],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "checks": [
+        {
+          "args": {},
+          "expect": "result",
+          "purpose": "The latest reference table remains available."
+        }
+      ]
+    },
+    {
+      "name": "getCurrencyHistory",
+      "description": "Get recent euro reference rates for one currency as monthly calendars.",
+      "request": {
+        "method": "GET",
+        "url": "https://www.ecb.europa.eu/stats/policy_and_exchange_rates/euro_reference_exchange_rates/html/eurofxref-graph-%7Bcurrency%7D.en.html",
+        "headers": {
+          "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/jxl,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+          "accept-language": "en-US,en;q=0.9",
+          "priority": "u=0, i",
+          "sec-ch-ua": "\"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Google Chrome\";v=\"156\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\"",
+          "sec-fetch-dest": "document",
+          "sec-fetch-mode": "navigate",
+          "sec-fetch-site": "none",
+          "sec-fetch-user": "?1",
+          "upgrade-insecure-requests": "1",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36"
+        }
+      },
+      "slots": [
+        {
+          "param": "currency",
+          "at": [
+            "path:4"
+          ],
+          "template": "eurofxref-graph-{currency}.en.html"
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://www.ecb.europa.eu/stats/policy_and_exchange_rates/euro_reference_exchange_rates/html/eurofxref-graph-{currency}.en.html"
+      },
+      "match": {
+        "method": "GET",
+        "host": "www.ecb.europa.eu",
+        "path": "/stats/policy_and_exchange_rates/euro_reference_exchange_rates/html/*"
+      },
+      "response": {
+        "format": "html",
+        "contentType": "text/html; charset=UTF-8",
+        "html": {
+          "items": ".table-wrapper > .table:has(table.tablecalendar)",
+          "fields": {
+            "month": ".header .title",
+            "days": "all:table.tablecalendar tbody td:has(strong)"
+          }
+        }
+      },
+      "params": [
+        {
+          "name": "currency",
+          "type": "string",
+          "required": true,
+          "description": "Lowercase ISO currency code, such as usd, gbp, jpy, chf or cny.",
+          "example": "usd",
+          "pattern": "[a-z]{3}",
+          "hint": "a lowercase three-letter currency code"
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "checks": [
+        {
+          "args": {
+            "currency": "jpy"
+          },
+          "expect": "result",
+          "purpose": "The yen calendar returns reference rates for a currency other than the example."
+        },
+        {
+          "args": {
+            "currency": "chf"
+          },
+          "expect": "result",
+          "purpose": "The Swiss franc calendar returns recent reference rates."
+        },
+        {
+          "args": {
+            "currency": "cny"
+          },
+          "expect": "result",
+          "purpose": "The Chinese yuan calendar returns recent reference rates."
+        },
+        {
+          "args": {
+            "currency": "USD"
+          },
+          "expect": "input",
+          "purpose": "Currency codes must be lowercase."
+        }
+      ]
+    }
+  ]
+}

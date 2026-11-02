@@ -1,0 +1,250 @@
+{
+  "name": "docsrs",
+  "displayName": "docs.rs",
+  "baseUrl": "https://docs.rs",
+  "description": "Read public Rust crate documentation and release overviews on docs.rs.",
+  "operations": [
+    {
+      "name": "getCrateRoot",
+      "description": "List items documented at the root of a Rust crate.",
+      "request": {
+        "method": "GET",
+        "url": "https://docs.rs/%7Bcrate%7D/latest/%7Bcrate%7D/",
+        "headers": {
+          "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/jxl,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+          "accept-language": "en-US,en;q=0.9",
+          "priority": "u=0, i",
+          "sec-ch-ua": "\"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Google Chrome\";v=\"156\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\"",
+          "sec-fetch-dest": "document",
+          "sec-fetch-mode": "navigate",
+          "sec-fetch-site": "none",
+          "sec-fetch-user": "?1",
+          "upgrade-insecure-requests": "1",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36"
+        }
+      },
+      "slots": [
+        {
+          "param": "crate",
+          "at": [
+            "path:0"
+          ]
+        },
+        {
+          "param": "crate",
+          "at": [
+            "path:2"
+          ]
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://docs.rs/{crate}/latest/{crate}/"
+      },
+      "match": {
+        "method": "GET",
+        "host": "docs.rs",
+        "path": "/*/latest/*/"
+      },
+      "response": {
+        "format": "html",
+        "contentType": "text/html; charset=utf-8",
+        "html": {
+          "items": "dl.item-table dt, ul.item-table li",
+          "fields": {
+            "name": "a",
+            "url": "a@href",
+            "kind": "a@class",
+            "summary": "+ dd"
+          }
+        }
+      },
+      "params": [
+        {
+          "name": "crate",
+          "type": "string",
+          "required": true,
+          "example": "serde",
+          "description": "Crate name matching its rustdoc root identifier, such as serde or tokio."
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "checks": [
+        {
+          "args": { "crate": "rand" },
+          "expect": "result",
+          "purpose": "A different crate has a documented root."
+        },
+        {
+          "args": { "crate": "zzqqxx_no_such_crate_987654" },
+          "expect": "input",
+          "purpose": "A nonexistent crate returns an input error."
+        }
+      ]
+    },
+    {
+      "name": "getItem",
+      "description": "Read a Rust item declaration, summary and method signatures.",
+      "request": {
+        "method": "GET",
+        "url": "https://docs.rs/%7Bcrate%7D/latest/%7Bcrate%7D/%7Bpath%7D",
+        "headers": {
+          "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/jxl,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+          "accept-language": "en-US,en;q=0.9",
+          "priority": "u=0, i",
+          "sec-ch-ua": "\"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Google Chrome\";v=\"156\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\"",
+          "sec-fetch-dest": "document",
+          "sec-fetch-mode": "navigate",
+          "sec-fetch-site": "none",
+          "sec-fetch-user": "?1",
+          "upgrade-insecure-requests": "1",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36"
+        }
+      },
+      "slots": [
+        {
+          "param": "crate",
+          "at": [
+            "path:0"
+          ]
+        },
+        {
+          "param": "crate",
+          "at": [
+            "path:2"
+          ]
+        },
+        {
+          "param": "path",
+          "at": [
+            "path:3"
+          ]
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://docs.rs/{crate}/latest/{crate}/{path}"
+      },
+      "match": {
+        "method": "GET",
+        "host": "docs.rs",
+        "path": "/*/latest/*/*"
+      },
+      "response": {
+        "format": "html",
+        "contentType": "text/html; charset=utf-8",
+        "html": {
+          "items": "main:has(pre.rust.item-decl)",
+          "fields": {
+            "signature": "pre.rust.item-decl",
+            "summary": ".docblock > p",
+            "methods": "all:.impl-items h4.code-header"
+          }
+        }
+      },
+      "params": [
+        {
+          "name": "crate",
+          "type": "string",
+          "required": true,
+          "example": "tokio",
+          "description": "Crate name matching its rustdoc root identifier."
+        },
+        {
+          "name": "path",
+          "type": "string",
+          "required": true,
+          "example": "runtime/struct.Runtime.html",
+          "description": "Rustdoc item path relative to the crate root, including .html."
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "checks": [
+        {
+          "args": { "crate": "serde", "path": "de/trait.Deserialize.html" },
+          "expect": "result",
+          "purpose": "A different crate and nested item returns a declaration."
+        }
+      ]
+    },
+    {
+      "name": "getCrateInfo",
+      "description": "Read a crate release overview on docs.rs.",
+      "request": {
+        "method": "GET",
+        "url": "https://docs.rs/crate/%7Bcrate%7D/latest",
+        "headers": {
+          "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/jxl,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+          "accept-language": "en-US,en;q=0.9",
+          "priority": "u=0, i",
+          "sec-ch-ua": "\"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Google Chrome\";v=\"156\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\"",
+          "sec-fetch-dest": "document",
+          "sec-fetch-mode": "navigate",
+          "sec-fetch-site": "none",
+          "sec-fetch-user": "?1",
+          "upgrade-insecure-requests": "1",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36"
+        }
+      },
+      "slots": [
+        {
+          "param": "crate",
+          "at": [
+            "path:1"
+          ]
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://docs.rs/crate/{crate}/latest"
+      },
+      "match": {
+        "method": "GET",
+        "host": "docs.rs",
+        "path": "/crate/*/latest"
+      },
+      "response": {
+        "format": "html",
+        "contentType": "text/html; charset=utf-8",
+        "html": {
+          "items": "html:has(#crate-title)",
+          "fields": {
+            "title": "#crate-title",
+            "documentation": "a.doc-link@href",
+            "repository": "a[href*=github.com]@href",
+            "platforms": "all:#platforms a"
+          }
+        }
+      },
+      "params": [
+        {
+          "name": "crate",
+          "type": "string",
+          "required": true,
+          "example": "serde",
+          "description": "Crate name as listed on docs.rs."
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "checks": [
+        {
+          "args": { "crate": "rand" },
+          "expect": "result",
+          "purpose": "A different crate returns a release overview."
+        }
+      ]
+    }
+  ]
+}

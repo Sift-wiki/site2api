@@ -54,7 +54,7 @@
     },
     {
       "name": "search",
-      "description": "Search Hacker News stories via the Algolia index behind hn.algolia.com; returns up to 30 hits with title, url, points, num_comments, objectID, author, created_at.",
+      "description": "Search Hacker News by popularity, with an optional item type and zero-based page; returns up to 30 hits.",
       "request": {
         "method": "POST",
         "url": "https://uj5wyc0l7x-dsn.algolia.net/1/indexes/Item_dev/query?x-algolia-agent=Algolia%20for%20JavaScript%20(4.13.1)%3B%20Browser%20(lite)&x-algolia-api-key=28f0e1ec37a5e792e6845e67da5f20dd&x-algolia-application-id=UJ5WYC0L7X",
@@ -81,11 +81,19 @@
             "body",
             "json:/query"
           ]
+        },
+        {
+          "param": "type",
+          "at": ["body", "json:/tagFilters/0/0"]
+        },
+        {
+          "param": "page",
+          "at": ["body", "json:/page"]
         }
       ],
       "volatile": [],
       "trigger": {
-        "url": "https://hn.algolia.com/?q={query}"
+        "url": "https://hn.algolia.com/?query={query}&sort=byPopularity&type={type}&page={page}"
       },
       "match": {
         "host": "uj5wyc0l7x-dsn.algolia.net"
@@ -192,7 +200,25 @@
           "type": "string",
           "required": true,
           "example": "sqlite",
-          "description": "Search text, as typed into hn.algolia.com (stories only, sorted by popularity)."
+          "description": "Search text, as typed into hn.algolia.com."
+        },
+        {
+          "name": "type",
+          "type": "string",
+          "required": false,
+          "default": "story",
+          "example": "story",
+          "enum": ["story", "comment", "ask_hn", "show_hn", "poll", "job"],
+          "description": "Item type to search; defaults to stories."
+        },
+        {
+          "name": "page",
+          "type": "number",
+          "required": false,
+          "default": 0,
+          "example": "0",
+          "min": 0,
+          "description": "Zero-based results page."
         }
       ],
       "readOnly": true,
@@ -201,7 +227,381 @@
       ],
       "minTier": 1,
       "learnedLoggedIn": false,
-      "learnedAt": "2026-09-27T11:02:04.098Z"
+      "learnedAt": "2026-09-27T11:02:04.098Z",
+      "checks": [
+        {
+          "args": {"query": "sqlite", "type": "comment", "page": 1},
+          "expect": "result",
+          "purpose": "Comments on a later page"
+        }
+      ]
+    },
+    {
+      "name": "getItem",
+      "description": "A Hacker News story or Ask/Show HN post: title, link, points, author, age, comment count, text",
+      "request": {
+        "method": "GET",
+        "url": "https://news.ycombinator.com/item?id=8863",
+        "headers": {
+          "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/jxl,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+          "accept-language": "en-US,en;q=0.9",
+          "priority": "u=0, i",
+          "sec-ch-ua": "\"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Google Chrome\";v=\"156\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\"",
+          "sec-fetch-dest": "document",
+          "sec-fetch-mode": "navigate",
+          "sec-fetch-site": "none",
+          "sec-fetch-user": "?1",
+          "upgrade-insecure-requests": "1",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36"
+        }
+      },
+      "slots": [
+        {
+          "param": "id",
+          "at": [
+            "query:id"
+          ]
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://news.ycombinator.com/item?id={id}"
+      },
+      "match": {
+        "path": "/item"
+      },
+      "response": {
+        "format": "html",
+        "contentType": "text/html; charset=utf-8",
+        "html": {
+          "items": "tr.athing.submission",
+          "fields": {
+            "id": "@id",
+            "title": ".titleline > a",
+            "url": ".titleline > a@href",
+            "points": "+ tr .score",
+            "author": "+ tr .hnuser",
+            "age": "+ tr .age",
+            "comments": "+ tr .subline > a:last-child",
+            "text": "~ tr .toptext"
+          }
+        }
+      },
+      "params": [
+        {
+          "name": "id",
+          "type": "string",
+          "required": true,
+          "example": "8863",
+          "description": "Item id from a news.ycombinator.com/item?id= link"
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "learnedAt": "2026-11-02T01:18:58.003Z",
+      "checks": [
+        {
+          "args": {
+            "id": "10000000"
+          },
+          "expect": "result",
+          "purpose": "Held-out story"
+        }
+      ]
+    },
+    {
+      "name": "getComments",
+      "description": "The comments on a Hacker News item, in thread order, with indentation depth",
+      "request": {
+        "method": "GET",
+        "url": "https://news.ycombinator.com/item?id=8863",
+        "headers": {
+          "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/jxl,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+          "accept-language": "en-US,en;q=0.9",
+          "priority": "u=0, i",
+          "sec-ch-ua": "\"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Google Chrome\";v=\"156\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\"",
+          "sec-fetch-dest": "document",
+          "sec-fetch-mode": "navigate",
+          "sec-fetch-site": "none",
+          "sec-fetch-user": "?1",
+          "upgrade-insecure-requests": "1",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36"
+        }
+      },
+      "slots": [
+        {
+          "param": "id",
+          "at": [
+            "query:id"
+          ]
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://news.ycombinator.com/item?id={id}"
+      },
+      "match": {
+        "path": "/item"
+      },
+      "response": {
+        "format": "html",
+        "contentType": "text/html; charset=utf-8",
+        "html": {
+          "items": "tr.comtr",
+          "fields": {
+            "id": "@id",
+            "author": ".hnuser",
+            "age": ".age",
+            "depth": "td.ind@indent",
+            "text": ".commtext"
+          }
+        }
+      },
+      "params": [
+        {
+          "name": "id",
+          "type": "string",
+          "required": true,
+          "example": "8863",
+          "description": "Item id from a news.ycombinator.com/item?id= link"
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "learnedAt": "2026-11-02T01:19:09.012Z",
+      "checks": [
+        {
+          "args": {
+            "id": "10000000"
+          },
+          "expect": "result",
+          "purpose": "Held-out thread"
+        }
+      ]
+    },
+    {
+      "name": "listStories",
+      "description": "A Hacker News story list (front page, newest, best, Ask HN, Show HN, jobs), one page",
+      "request": {
+        "method": "GET",
+        "url": "https://news.ycombinator.com/newest?p=1",
+        "headers": {
+          "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/jxl,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+          "accept-language": "en-US,en;q=0.9",
+          "priority": "u=0, i",
+          "sec-ch-ua": "\"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Google Chrome\";v=\"156\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\"",
+          "sec-fetch-dest": "document",
+          "sec-fetch-mode": "navigate",
+          "sec-fetch-site": "none",
+          "sec-fetch-user": "?1",
+          "upgrade-insecure-requests": "1",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36"
+        }
+      },
+      "slots": [
+        {
+          "param": "list",
+          "at": [
+            "path:0"
+          ]
+        },
+        {
+          "param": "page",
+          "at": [
+            "query:p"
+          ]
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://news.ycombinator.com/{list}?p={page}"
+      },
+      "match": {
+        "method": "GET",
+        "host": "news.ycombinator.com",
+        "path": "/*"
+      },
+      "response": {
+        "format": "html",
+        "contentType": "text/html; charset=utf-8",
+        "html": {
+          "items": "tr.athing.submission",
+          "fields": {
+            "id": "@id",
+            "title": ".titleline > a",
+            "url": ".titleline > a@href",
+            "points": "+ tr .score",
+            "author": "+ tr .hnuser",
+            "age": "+ tr .age",
+            "comments": "+ tr .subline > a:last-child"
+          }
+        }
+      },
+      "params": [
+        {
+          "name": "list",
+          "type": "string",
+          "required": false,
+          "example": "newest",
+          "enum": [
+            "news",
+            "newest",
+            "best",
+            "ask",
+            "show",
+            "jobs",
+            "front"
+          ],
+          "description": "Which list: news (front page), newest, best, ask, show, jobs, front (past front pages)",
+          "default": "news"
+        },
+        {
+          "name": "page",
+          "type": "string",
+          "required": false,
+          "example": "1",
+          "min": 1,
+          "description": "Page number, starting at 1",
+          "default": "1"
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "learnedAt": "2026-11-02T01:19:35.636Z",
+      "checks": [
+        {
+          "args": {
+            "list": "ask",
+            "page": "1"
+          },
+          "expect": "result",
+          "purpose": "Ask HN list"
+        }
+      ]
+    },
+    {
+      "name": "getUser",
+      "description": "A Hacker News user's public profile: created date, karma, about",
+      "request": {
+        "method": "GET",
+        "url": "https://news.ycombinator.com/user?id=pg",
+        "headers": {
+          "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/jxl,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+          "accept-language": "en-US,en;q=0.9",
+          "priority": "u=0, i",
+          "sec-ch-ua": "\"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Google Chrome\";v=\"156\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\"",
+          "sec-fetch-dest": "document",
+          "sec-fetch-mode": "navigate",
+          "sec-fetch-site": "none",
+          "sec-fetch-user": "?1",
+          "upgrade-insecure-requests": "1",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36"
+        }
+      },
+      "slots": [
+        {
+          "param": "username",
+          "at": [
+            "query:id"
+          ]
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://news.ycombinator.com/user?id={username}"
+      },
+      "match": {
+        "path": "/user"
+      },
+      "response": {
+        "format": "html",
+        "contentType": "text/html; charset=utf-8",
+        "html": {
+          "items": "tr.athing",
+          "fields": {
+            "username": ".hnuser",
+            "created": "+ tr .age",
+            "karma": "+ tr + tr > td:nth-child(2)",
+            "about": "+ tr + tr + tr > td[style]"
+          }
+        }
+      },
+      "params": [
+        {
+          "name": "username",
+          "type": "string",
+          "required": true,
+          "example": "pg",
+          "description": "Hacker News username"
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "learnedAt": "2026-11-02T01:20:48.544Z",
+      "checks": [
+        {
+          "args": {
+            "username": "dang"
+          },
+          "expect": "result",
+          "purpose": "Well-known moderator account"
+        }
+      ]
+    },
+    {
+      "name": "searchByDate",
+      "description": "Search Hacker News by newest first, with an optional item type and zero-based page.",
+      "request": {
+        "method": "POST",
+        "url": "https://uj5wyc0l7x-dsn.algolia.net/1/indexes/Item_dev_sort_date/query?x-algolia-agent=Algolia%20for%20JavaScript%20(4.13.1)%3B%20Browser%20(lite)&x-algolia-api-key=28f0e1ec37a5e792e6845e67da5f20dd&x-algolia-application-id=UJ5WYC0L7X",
+        "headers": {
+          "accept": "*/*",
+          "accept-language": "en-US,en;q=0.9",
+          "origin": "https://hn.algolia.com",
+          "referer": "https://hn.algolia.com/",
+          "content-type": "application/x-www-form-urlencoded"
+        },
+        "body": "{\"query\":\"sqlite\",\"analyticsTags\":[\"web\"],\"page\":1,\"hitsPerPage\":30,\"minWordSizefor1Typo\":4,\"minWordSizefor2Typos\":8,\"advancedSyntax\":true,\"ignorePlurals\":false,\"clickAnalytics\":true,\"minProximity\":1,\"numericFilters\":[],\"tagFilters\":[[\"comment\"],[]],\"typoTolerance\":\"min\",\"queryType\":\"prefixNone\",\"restrictSearchableAttributes\":[\"title\",\"comment_text\",\"url\",\"story_text\",\"author\"],\"getRankingInfo\":true}"
+      },
+      "slots": [
+        {"param": "query", "at": ["body", "json:/query"]},
+        {"param": "type", "at": ["body", "json:/tagFilters/0/0"]},
+        {"param": "page", "at": ["body", "json:/page"]}
+      ],
+      "volatile": [],
+      "trigger": {"url": "https://hn.algolia.com/?dateRange=all&page={page}&prefix=false&query={query}&sort=byDate&type={type}"},
+      "match": {"host": "uj5wyc0l7x-dsn.algolia.net", "path": "/1/indexes/Item_dev_sort_date/query"},
+      "response": {
+        "format": "json",
+        "contentType": "application/json; charset=UTF-8",
+        "extract": "hits",
+        "pick": ["title", "url", "points", "num_comments", "objectID", "author", "created_at", "comment_text", "story_id", "story_title", "story_url"]
+      },
+      "params": [
+        {"name": "query", "type": "string", "required": true, "example": "sqlite", "description": "Search text as typed into hn.algolia.com."},
+        {"name": "type", "type": "string", "required": false, "example": "comment", "default": "story", "enum": ["story", "comment", "ask_hn", "show_hn", "poll", "job"], "description": "Item type to search; defaults to stories."},
+        {"name": "page", "type": "number", "required": false, "example": "1", "default": 0, "min": 0, "description": "Zero-based results page."}
+      ],
+      "readOnly": true,
+      "public": ["x-algolia-api-key"],
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "learnedAt": "2026-11-02T04:17:48.127Z",
+      "checks": [
+        {"args": {"query": "database", "type": "ask_hn", "page": 1}, "expect": "result", "purpose": "Held-out Ask HN results on a later page"}
+      ]
     }
   ]
 }

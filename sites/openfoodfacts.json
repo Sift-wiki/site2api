@@ -1,0 +1,95 @@
+{
+  "name": "openfoodfacts",
+  "displayName": "Open Food Facts",
+  "baseUrl": "https://world.openfoodfacts.org",
+  "description": "Look up public food product information by barcode.",
+  "operations": [
+    {
+      "name": "getProduct",
+      "description": "Read a product's displayed ingredients, allergens, nutrition and scores by barcode.",
+      "request": {
+        "method": "GET",
+        "url": "https://world.openfoodfacts.org/product/%7Bbarcode%7D/nutella",
+        "headers": {
+          "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/jxl,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+          "accept-language": "en-US,en;q=0.9",
+          "priority": "u=0, i",
+          "sec-ch-ua": "\"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Google Chrome\";v=\"156\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\"",
+          "sec-fetch-dest": "document",
+          "sec-fetch-mode": "navigate",
+          "sec-fetch-site": "none",
+          "sec-fetch-user": "?1",
+          "upgrade-insecure-requests": "1",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36"
+        }
+      },
+      "slots": [
+        {
+          "param": "barcode",
+          "at": [
+            "path:1"
+          ]
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://world.openfoodfacts.org/product/{barcode}"
+      },
+      "match": {
+        "method": "GET",
+        "host": "world.openfoodfacts.org",
+        "path": "/product/*/*"
+      },
+      "response": {
+        "format": "html",
+        "contentType": "text/html; charset=UTF-8",
+        "html": {
+          "items": "html",
+          "fields": {
+            "name": "h1[itemprop=name]",
+            "brands": "#field_brands_value",
+            "quantity": "#field_quantity_value",
+            "categories": "#field_categories_value",
+            "ingredients": "#panel_ingredients_content .panel_text:not(:has(strong))",
+            "allergens": "#panel_ingredients_content .panel_text:has(strong:contains(Allergens:))",
+            "nutriScore": "#panel_nutriscore_2023 .panel_title img@src",
+            "nova": "#panel_nova .panel_title img@src",
+            "ecoScore": "#panel_environmental_score .panel_title img@src",
+            "energy": "table[aria-label=\"Nutrition facts\"] tr:has(td:first-child:contains(Energy)) td:nth-child(2)",
+            "fat": "table[aria-label=\"Nutrition facts\"] tr:has(td:first-child:contains(Fat)) td:nth-child(2)",
+            "saturatedFat": "table[aria-label=\"Nutrition facts\"] tr:has(td:first-child:contains(Saturated fat)) td:nth-child(2)",
+            "carbohydrates": "table[aria-label=\"Nutrition facts\"] tr:has(td:first-child:contains(Carbohydrates)) td:nth-child(2)",
+            "sugars": "table[aria-label=\"Nutrition facts\"] tr:has(td:first-child:contains(Sugars)) td:nth-child(2)",
+            "fiber": "table[aria-label=\"Nutrition facts\"] tr:has(td:first-child:contains(Fiber)) td:nth-child(2)",
+            "protein": "table[aria-label=\"Nutrition facts\"] tr:has(td:first-child:contains(Proteins)) td:nth-child(2)",
+            "salt": "table[aria-label=\"Nutrition facts\"] tr:has(td:first-child:contains(Salt)) td:nth-child(2)",
+            "image": "#og_image@src"
+          }
+        }
+      },
+      "params": [
+        {
+          "name": "barcode",
+          "type": "string",
+          "required": true,
+          "example": "3017620422003",
+          "description": "Product barcode as a string, including any leading zeroes."
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "checks": [
+        {
+          "args": {
+            "barcode": "0000000000000"
+          },
+          "expect": "input",
+          "purpose": "An unknown barcode returns 404."
+        }
+      ]
+    }
+  ]
+}

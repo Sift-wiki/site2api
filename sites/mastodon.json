@@ -1,0 +1,545 @@
+{
+  "name": "mastodon",
+  "displayName": "Mastodon",
+  "baseUrl": "https://mastodon.social",
+  "description": "Read public accounts and recent posts on mastodon.social without signing in.",
+  "operations": [
+    {
+      "name": "getAccount",
+      "description": "Read a public account's profile and counts.",
+      "request": {
+        "method": "GET",
+        "url": "https://mastodon.social/api/v1/accounts/lookup?acct=%7Bacct%7D",
+        "headers": {
+          "accept": "application/json"
+        }
+      },
+      "slots": [
+        {
+          "param": "acct",
+          "at": [
+            "query:acct"
+          ]
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://mastodon.social/api/v1/accounts/lookup?acct={acct}"
+      },
+      "match": {
+        "path": "/api/v1/accounts/lookup"
+      },
+      "response": {
+        "format": "json",
+        "contentType": "application/json; charset=utf-8",
+        "pick": [
+          "id",
+          "username",
+          "display_name",
+          "note",
+          "followers_count",
+          "following_count",
+          "statuses_count",
+          "created_at"
+        ]
+      },
+      "params": [
+        {
+          "name": "acct",
+          "type": "string",
+          "required": true,
+          "description": "Account name without a leading @, optionally followed by @domain.",
+          "example": "Mastodon"
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "checks": [
+        {
+          "args": {
+            "acct": "Gargron"
+          },
+          "expect": "result",
+          "purpose": "Another public account is available."
+        },
+        {
+          "args": {},
+          "expect": "input",
+          "purpose": "An account is required."
+        }
+      ]
+    },
+    {
+      "name": "getStatuses",
+      "description": "Read the first page of public posts and boosts on an account profile.",
+      "request": {
+        "method": "GET",
+        "url": "https://mastodon.social/api/v1/accounts/0/statuses?exclude_replies=true&exclude_direct=true",
+        "headers": {
+          "accept": "application/json"
+        }
+      },
+      "slots": [
+        {
+          "at": [
+            "path:3"
+          ],
+          "from": {
+            "request": {
+              "method": "GET",
+              "url": "https://mastodon.social/api/v1/accounts/lookup?acct=%7Bacct%7D",
+              "headers": {
+                "accept": "application/json"
+              }
+            },
+            "slots": [
+              {
+                "param": "acct",
+                "at": [
+                  "query:acct"
+                ]
+              }
+            ]
+          },
+          "path": "id"
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://mastodon.social/@{acct}"
+      },
+      "match": {
+        "method": "GET",
+        "host": "mastodon.social",
+        "path": "/api/v1/accounts/*/statuses"
+      },
+      "response": {
+        "format": "json",
+        "pick": [
+          "id",
+          "url",
+          "created_at",
+          "content",
+          "replies_count",
+          "reblogs_count",
+          "favourites_count",
+          "media_types=media_attachments[*].type",
+          "boosted_id=reblog.id",
+          "boosted_url=reblog.url",
+          "boosted_account=reblog.account.acct",
+          "boosted_content=reblog.content"
+        ]
+      },
+      "params": [
+        {
+          "name": "acct",
+          "type": "string",
+          "required": true,
+          "description": "Account name without a leading @, optionally followed by @domain.",
+          "example": "Mastodon"
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "checks": [
+        {
+          "args": {
+            "acct": "Gargron"
+          },
+          "expect": "result",
+          "purpose": "Another public account has posts."
+        },
+        {
+          "args": {},
+          "expect": "input",
+          "purpose": "An account is required."
+        }
+      ]
+    },
+    {
+      "name": "getStatus",
+      "description": "Read a public post by its mastodon.social status ID.",
+      "request": {
+        "method": "GET",
+        "url": "https://mastodon.social/api/v1/statuses/%7Bid%7D",
+        "headers": {
+          "sec-ch-ua-platform": "\"macOS\"",
+          "referer": "https://mastodon.social/statuses/{id}",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36",
+          "accept": "application/json, text/plain, */*",
+          "sec-ch-ua": "\"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Google Chrome\";v=\"156\"",
+          "sec-ch-ua-mobile": "?0"
+        }
+      },
+      "slots": [
+        {
+          "param": "id",
+          "at": [
+            "path:3"
+          ]
+        },
+        {
+          "param": "id",
+          "at": [
+            "header:referer"
+          ],
+          "template": "https://mastodon.social/statuses/{id}"
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://mastodon.social/statuses/{id}"
+      },
+      "match": {
+        "path": "/api/v1/statuses/*"
+      },
+      "response": {
+        "format": "json",
+        "contentType": "application/json; charset=utf-8",
+        "pick": [
+          "id",
+          "url",
+          "account=account.acct",
+          "created_at",
+          "content",
+          "replies_count",
+          "reblogs_count",
+          "favourites_count",
+          "media_types=media_attachments[*].type",
+          "in_reply_to_id"
+        ],
+        "shape": {
+          "id": "string",
+          "created_at": "string",
+          "in_reply_to_id": "string",
+          "url": "string",
+          "replies_count": "number",
+          "reblogs_count": "number",
+          "favourites_count": "number",
+          "content": "string",
+          "account.acct": "string"
+        }
+      },
+      "params": [
+        {
+          "name": "id",
+          "type": "string",
+          "required": true,
+          "description": "Status ID as known to mastodon.social.",
+          "example": "117466985005297414"
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "checks": [
+        {
+          "args": {
+            "id": "117466983307949301"
+          },
+          "expect": "result",
+          "purpose": "Another public post is available."
+        },
+        {
+          "args": {},
+          "expect": "input",
+          "purpose": "A status ID is required."
+        }
+      ]
+    },
+    {
+      "name": "getReplies",
+      "description": "Read the available descendants of a public post.",
+      "request": {
+        "method": "GET",
+        "url": "https://mastodon.social/api/v1/statuses/%7Bid%7D/context",
+        "headers": {
+          "accept": "application/json, text/plain, */*",
+          "accept-language": "en-US,en;q=0.9",
+          "priority": "u=1, i",
+          "referer": "https://mastodon.social/statuses/{id}",
+          "sec-ch-ua": "\"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Google Chrome\";v=\"156\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\"",
+          "sec-fetch-dest": "empty",
+          "sec-fetch-mode": "cors",
+          "sec-fetch-site": "same-origin",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36"
+        }
+      },
+      "slots": [
+        {
+          "param": "id",
+          "at": [
+            "path:3"
+          ]
+        },
+        {
+          "param": "id",
+          "at": [
+            "header:referer"
+          ],
+          "template": "https://mastodon.social/statuses/{id}"
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://mastodon.social/statuses/{id}"
+      },
+      "match": {
+        "path": "/api/v1/statuses/*/context"
+      },
+      "response": {
+        "format": "json",
+        "contentType": "",
+        "extract": "descendants",
+        "pick": [
+          "id",
+          "account=account.acct",
+          "created_at",
+          "content",
+          "in_reply_to_id"
+        ],
+        "shape": {
+          "descendants[].id": "string",
+          "descendants[].created_at": "string",
+          "descendants[].in_reply_to_id": "string",
+          "descendants[].content": "string",
+          "descendants[].account.acct": "string"
+        }
+      },
+      "params": [
+        {
+          "name": "id",
+          "type": "string",
+          "required": true,
+          "description": "Status ID as known to mastodon.social.",
+          "example": "117466985005297414"
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "checks": [
+        {
+          "args": {
+            "id": "117466983307949301"
+          },
+          "expect": "result",
+          "purpose": "Another public thread has available replies."
+        },
+        {
+          "args": {},
+          "expect": "input",
+          "purpose": "A status ID is required."
+        }
+      ]
+    },
+    {
+      "name": "trendingStatuses",
+      "description": "Read the first page of public trending posts.",
+      "request": {
+        "method": "GET",
+        "url": "https://mastodon.social/api/v1/trends/statuses",
+        "headers": {
+          "accept": "application/json, text/plain, */*",
+          "accept-language": "en-US,en;q=0.9",
+          "priority": "u=1, i",
+          "referer": "https://mastodon.social/explore",
+          "sec-ch-ua": "\"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Google Chrome\";v=\"156\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\"",
+          "sec-fetch-dest": "empty",
+          "sec-fetch-mode": "cors",
+          "sec-fetch-site": "same-origin",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36"
+        }
+      },
+      "slots": [],
+      "volatile": [],
+      "trigger": {
+        "url": "https://mastodon.social/explore"
+      },
+      "match": {
+        "method": "GET",
+        "host": "mastodon.social",
+        "path": "/api/v1/trends/statuses"
+      },
+      "response": {
+        "format": "json",
+        "contentType": "application/json; charset=utf-8",
+        "pick": [
+          "id",
+          "url",
+          "account=account.acct",
+          "created_at",
+          "content",
+          "replies_count",
+          "reblogs_count",
+          "favourites_count",
+          "media_types=media_attachments[*].type"
+        ],
+        "shape": {
+          "[].id": "string",
+          "[].created_at": "string",
+          "[].url": "string",
+          "[].replies_count": "number",
+          "[].reblogs_count": "number",
+          "[].favourites_count": "number",
+          "[].content": "string",
+          "[].account.acct": "string",
+          "[].media_attachments[].type": "null"
+        }
+      },
+      "params": [],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false
+    },
+    {
+      "name": "trendingTags",
+      "description": "Read public trending hashtags and their daily activity history.",
+      "request": {
+        "method": "GET",
+        "url": "https://mastodon.social/api/v1/trends/tags",
+        "headers": {
+          "accept": "application/json, text/plain, */*",
+          "accept-language": "en-US,en;q=0.9",
+          "priority": "u=1, i",
+          "referer": "https://mastodon.social/explore/tags",
+          "sec-ch-ua": "\"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Google Chrome\";v=\"156\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\"",
+          "sec-fetch-dest": "empty",
+          "sec-fetch-mode": "cors",
+          "sec-fetch-site": "same-origin",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36"
+        }
+      },
+      "slots": [],
+      "volatile": [],
+      "trigger": {
+        "url": "https://mastodon.social/explore/tags"
+      },
+      "match": {
+        "method": "GET",
+        "host": "mastodon.social",
+        "path": "/api/v1/trends/tags"
+      },
+      "response": {
+        "format": "json",
+        "contentType": "application/json; charset=utf-8",
+        "pick": [
+          "name",
+          "url",
+          "history"
+        ],
+        "shape": {
+          "[].name": "string",
+          "[].url": "string",
+          "[].history": "array"
+        }
+      },
+      "params": [],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false
+    },
+    {
+      "name": "tagTimeline",
+      "description": "Read the first page of recent public posts for a hashtag.",
+      "request": {
+        "method": "GET",
+        "url": "https://mastodon.social/api/v1/timelines/tag/%7Btag%7D?local=false",
+        "headers": {
+          "accept": "application/json, text/plain, */*",
+          "accept-language": "en-US,en;q=0.9",
+          "priority": "u=1, i",
+          "referer": "https://mastodon.social/tags/{tag}",
+          "sec-ch-ua": "\"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Google Chrome\";v=\"156\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\"",
+          "sec-fetch-dest": "empty",
+          "sec-fetch-mode": "cors",
+          "sec-fetch-site": "same-origin",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36"
+        }
+      },
+      "slots": [
+        {
+          "param": "tag",
+          "at": [
+            "path:4"
+          ]
+        },
+        {
+          "param": "tag",
+          "at": [
+            "header:referer"
+          ],
+          "template": "https://mastodon.social/tags/{tag}"
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://mastodon.social/tags/{tag}"
+      },
+      "match": {
+        "path": "/api/v1/timelines/tag/*"
+      },
+      "response": {
+        "format": "json",
+        "contentType": "application/json; charset=utf-8",
+        "pick": [
+          "id",
+          "url",
+          "account=account.acct",
+          "created_at",
+          "content",
+          "replies_count",
+          "reblogs_count",
+          "favourites_count",
+          "media_types=media_attachments[*].type"
+        ],
+        "shape": {
+          "[].id": "string",
+          "[].created_at": "string",
+          "[].url": "string",
+          "[].replies_count": "number",
+          "[].reblogs_count": "number",
+          "[].favourites_count": "number",
+          "[].content": "string",
+          "[].account.acct": "string"
+        }
+      },
+      "params": [
+        {
+          "name": "tag",
+          "type": "string",
+          "required": true,
+          "description": "Hashtag without the leading #.",
+          "example": "rust"
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "checks": [
+        {
+          "args": {
+            "tag": "photography"
+          },
+          "expect": "result",
+          "purpose": "Another public hashtag has posts."
+        },
+        {
+          "args": {},
+          "expect": "input",
+          "purpose": "A hashtag is required."
+        }
+      ]
+    }
+  ]
+}

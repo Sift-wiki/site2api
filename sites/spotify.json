@@ -1,0 +1,372 @@
+{
+  "name": "spotify",
+  "displayName": "Spotify",
+  "baseUrl": "https://open.spotify.com",
+  "description": "Public track, album, playlist, artist and podcast episode metadata from Spotify embed documents.",
+  "operations": [
+    {
+      "name": "getTrack",
+      "description": "Read public track metadata from the Spotify embed document",
+      "request": {
+        "method": "GET",
+        "url": "https://open.spotify.com/embed/track/%7BtrackId%7D",
+        "headers": {
+          "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/jxl,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+          "upgrade-insecure-requests": "1",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36",
+          "sec-ch-ua": "\"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Google Chrome\";v=\"156\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\""
+        }
+      },
+      "slots": [
+        {
+          "param": "trackId",
+          "at": [
+            "path:2"
+          ]
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://open.spotify.com/embed/track/{trackId}"
+      },
+      "match": {
+        "method": "GET",
+        "host": "open.spotify.com",
+        "path": "/embed/track/*"
+      },
+      "response": {
+        "format": "embedded",
+        "contentType": "text/html; charset=utf-8",
+        "extract": "props.pageProps.state.data.entity",
+        "pick": [
+          "id",
+          "name",
+          "artists",
+          "durationMs=duration",
+          "releaseDate=releaseDate.isoString",
+          "explicit=isExplicit",
+          "previewUrl=audioPreview.url"
+        ],
+        "embedded": {
+          "regex": "id=\"__NEXT_DATA__\"[^>]*>\\s*([[{])"
+        }
+      },
+      "params": [
+        {
+          "name": "trackId",
+          "type": "string",
+          "required": true,
+          "description": "Spotify track ID from a public track URL or URI.",
+          "example": "4cOdK2wGLETKBW3PvgPWqT"
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "checks": [
+        {
+          "args": {
+            "trackId": "11dFghVXANMlKmJXsNCbNl"
+          },
+          "expect": "result",
+          "purpose": "Public Cut To The Feeling track"
+        }
+      ]
+    },
+    {
+      "name": "getAlbum",
+      "description": "Read public album and track metadata from the Spotify embed document",
+      "request": {
+        "method": "GET",
+        "url": "https://open.spotify.com/embed/album/%7BalbumId%7D",
+        "headers": {
+          "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/jxl,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+          "upgrade-insecure-requests": "1",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36",
+          "sec-ch-ua": "\"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Google Chrome\";v=\"156\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\""
+        }
+      },
+      "slots": [
+        {
+          "param": "albumId",
+          "at": [
+            "path:2"
+          ]
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://open.spotify.com/embed/album/{albumId}"
+      },
+      "match": {
+        "method": "GET",
+        "host": "open.spotify.com",
+        "path": "/embed/album/*"
+      },
+      "response": {
+        "format": "embedded",
+        "contentType": "text/html; charset=utf-8",
+        "extract": "props.pageProps.state.data.entity",
+        "pick": [
+          "id",
+          "name",
+          "artists=subtitle",
+          "tracks=trackList"
+        ],
+        "embedded": {
+          "regex": "id=\"__NEXT_DATA__\"[^>]*>\\s*([[{])"
+        }
+      },
+      "params": [
+        {
+          "name": "albumId",
+          "type": "string",
+          "required": true,
+          "description": "Spotify album ID from a public album URL or URI.",
+          "example": "5Z9iiGl2FcIfa3BMiv6OIw"
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "checks": [
+        {
+          "args": {
+            "albumId": "1ATL5GLyefJaxhQzSPVrLX"
+          },
+          "expect": "result",
+          "purpose": "Public Scorpion album"
+        }
+      ]
+    },
+    {
+      "name": "getPlaylist",
+      "description": "Read public playlist metadata and tracks from the Spotify embed document",
+      "request": {
+        "method": "GET",
+        "url": "https://open.spotify.com/embed/playlist/%7BplaylistId%7D",
+        "headers": {
+          "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/jxl,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+          "accept-language": "en-US,en;q=0.9",
+          "priority": "u=0, i",
+          "sec-ch-ua": "\"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Google Chrome\";v=\"156\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\"",
+          "sec-fetch-dest": "document",
+          "sec-fetch-mode": "navigate",
+          "sec-fetch-site": "none",
+          "sec-fetch-user": "?1",
+          "upgrade-insecure-requests": "1",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36"
+        }
+      },
+      "slots": [
+        {
+          "param": "playlistId",
+          "at": [
+            "path:2"
+          ]
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://open.spotify.com/embed/playlist/{playlistId}"
+      },
+      "match": {
+        "method": "GET",
+        "host": "open.spotify.com",
+        "path": "/embed/playlist/*"
+      },
+      "response": {
+        "format": "embedded",
+        "contentType": "text/html; charset=utf-8",
+        "extract": "props.pageProps.state.data.entity",
+        "pick": [
+          "id",
+          "name",
+          "owner=subtitle",
+          "description",
+          "tracks=trackList"
+        ],
+        "embedded": {
+          "regex": "id=\"__NEXT_DATA__\"[^>]*>\\s*([[{])"
+        }
+      },
+      "params": [
+        {
+          "name": "playlistId",
+          "type": "string",
+          "required": true,
+          "description": "Spotify playlist ID from a public playlist URL or URI.",
+          "example": "37i9dQZF1DXcBWIGoYBM5M"
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "checks": [
+        {
+          "args": {
+            "playlistId": "37i9dQZF1DX4JAvHpjipBk"
+          },
+          "expect": "result",
+          "purpose": "Public New Music Friday playlist"
+        }
+      ]
+    },
+    {
+      "name": "getArtist",
+      "description": "Read public artist metadata and top tracks from the Spotify embed document",
+      "request": {
+        "method": "GET",
+        "url": "https://open.spotify.com/embed/artist/%7BartistId%7D",
+        "headers": {
+          "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/jxl,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+          "accept-language": "en-US,en;q=0.9",
+          "priority": "u=0, i",
+          "sec-ch-ua": "\"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Google Chrome\";v=\"156\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\"",
+          "sec-fetch-dest": "document",
+          "sec-fetch-mode": "navigate",
+          "sec-fetch-site": "none",
+          "sec-fetch-user": "?1",
+          "upgrade-insecure-requests": "1",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36"
+        }
+      },
+      "slots": [
+        {
+          "param": "artistId",
+          "at": [
+            "path:2"
+          ]
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://open.spotify.com/embed/artist/{artistId}"
+      },
+      "match": {
+        "method": "GET",
+        "host": "open.spotify.com",
+        "path": "/embed/artist/*"
+      },
+      "response": {
+        "format": "embedded",
+        "contentType": "text/html; charset=utf-8",
+        "extract": "props.pageProps.state.data.entity",
+        "pick": [
+          "id",
+          "name",
+          "tracks=trackList"
+        ],
+        "embedded": {
+          "regex": "id=\"__NEXT_DATA__\"[^>]*>\\s*([[{])"
+        }
+      },
+      "params": [
+        {
+          "name": "artistId",
+          "type": "string",
+          "required": true,
+          "description": "Spotify artist ID from a public artist URL or URI.",
+          "example": "06HL4z0CvFAxyc27GXpf02"
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "checks": [
+        {
+          "args": {
+            "artistId": "6eUKZXaKkcviH0Ku9w2n3V"
+          },
+          "expect": "result",
+          "purpose": "Public Ed Sheeran artist"
+        }
+      ]
+    },
+    {
+      "name": "getEpisode",
+      "description": "Read public podcast episode metadata from the Spotify embed document",
+      "request": {
+        "method": "GET",
+        "url": "https://open.spotify.com/embed/episode/%7BepisodeId%7D",
+        "headers": {
+          "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/jxl,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+          "accept-language": "en-US,en;q=0.9",
+          "priority": "u=0, i",
+          "sec-ch-ua": "\"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Google Chrome\";v=\"156\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\"",
+          "sec-fetch-dest": "document",
+          "sec-fetch-mode": "navigate",
+          "sec-fetch-site": "none",
+          "sec-fetch-user": "?1",
+          "upgrade-insecure-requests": "1",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36"
+        }
+      },
+      "slots": [
+        {
+          "param": "episodeId",
+          "at": [
+            "path:2"
+          ]
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://open.spotify.com/embed/episode/{episodeId}"
+      },
+      "match": {
+        "method": "GET",
+        "host": "open.spotify.com",
+        "path": "/embed/episode/*"
+      },
+      "response": {
+        "format": "embedded",
+        "contentType": "text/html; charset=utf-8",
+        "extract": "props.pageProps.state.data.entity",
+        "pick": [
+          "id",
+          "title",
+          "show=subtitle",
+          "durationMs=duration",
+          "releaseDate=releaseDate.isoString",
+          "explicit=isExplicit",
+          "previewUrl=audioPreview.url"
+        ],
+        "embedded": {
+          "regex": "id=\"__NEXT_DATA__\"[^>]*>\\s*([[{])"
+        }
+      },
+      "params": [
+        {
+          "name": "episodeId",
+          "type": "string",
+          "required": true,
+          "description": "Spotify episode ID from a public episode URL or URI.",
+          "example": "3Lz9d1PXPIJA7yisUsrF6p"
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "checks": [
+        {
+          "args": {
+            "episodeId": "3GFauMoprjqiBpq4TrQkuG"
+          },
+          "expect": "result",
+          "purpose": "Public Without Fail podcast episode"
+        }
+      ]
+    }
+  ]
+}

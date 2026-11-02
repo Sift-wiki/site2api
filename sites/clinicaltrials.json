@@ -1,0 +1,233 @@
+{
+  "name": "clinicaltrials",
+  "displayName": "ClinicalTrials.gov",
+  "baseUrl": "https://clinicaltrials.gov",
+  "description": "Search public clinical studies and read their registry records.",
+  "operations": [
+    {
+      "name": "searchStudies",
+      "description": "Search the first ten studies by condition and optional additional search terms, ordered by relevance.",
+      "request": {
+        "method": "GET",
+        "url": "https://clinicaltrials.gov/api/int/studies?cond=%7Bcondition%7D&term=%7Bterm%7D&aggFilters=&checkSpell=true&from=0&limit=10&fields=OverallStatus%2CLastKnownStatus%2CStatusVerifiedDate%2CHasResults%2CBriefTitle%2CCondition%2CInterventionType%2CInterventionName%2CLocationFacility%2CLocationCity%2CLocationState%2CLocationCountry%2CLocationStatus%2CLocationZip%2CLocationGeoPoint%2CLocationContactName%2CLocationContactRole%2CLocationContactPhone%2CLocationContactPhoneExt%2CLocationContactEMail%2CCentralContactName%2CCentralContactRole%2CCentralContactPhone%2CCentralContactPhoneExt%2CCentralContactEMail%2CGender%2CMinimumAge%2CMaximumAge%2CStdAge%2CNCTId%2CStudyType%2CLeadSponsorName%2CAcronym%2CEnrollmentCount%2CStartDate%2CPrimaryCompletionDate%2CCompletionDate%2CStudyFirstPostDate%2CResultsFirstPostDate%2CLastUpdatePostDate%2COrgStudyId%2CSecondaryId%2CPhase%2CLargeDocLabel%2CLargeDocFilename%2CPrimaryOutcomeMeasure%2CSecondaryOutcomeMeasure%2CDesignAllocation%2CDesignInterventionModel%2CDesignMasking%2CDesignWhoMasked%2CDesignPrimaryPurpose%2CDesignObservationalModel%2CDesignTimePerspective%2CLeadSponsorClass%2CCollaboratorClass&columns=conditions%2Cinterventions%2Ccollaborators&highlight=true&sort=%40relevance",
+        "headers": {
+          "accept": "application/json, text/plain, */*",
+          "accept-language": "en-US,en;q=0.9",
+          "priority": "u=1, i",
+          "referer": "https://clinicaltrials.gov/search?cond={condition}&term={term}&viewType=Card",
+          "sec-ch-ua": "\"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Google Chrome\";v=\"156\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\"",
+          "sec-fetch-dest": "empty",
+          "sec-fetch-mode": "cors",
+          "sec-fetch-site": "same-origin",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36"
+        }
+      },
+      "slots": [
+        {
+          "param": "condition",
+          "at": [
+            "query:cond"
+          ]
+        },
+        {
+          "param": "term",
+          "at": [
+            "query:term"
+          ]
+        },
+        {
+          "param": "condition",
+          "at": [
+            "header:referer"
+          ],
+          "template": "https://clinicaltrials.gov/search?cond={condition}&term={term}&viewType=Card"
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://clinicaltrials.gov/search?cond={condition}&term={term}"
+      },
+      "match": {
+        "path": "/api/int/studies"
+      },
+      "response": {
+        "format": "json",
+        "contentType": "application/json",
+        "extract": "hits",
+        "pick": [
+          "nctId=id",
+          "title=study.protocolSection.identificationModule.briefTitle",
+          "status=study.protocolSection.statusModule.overallStatus",
+          "phases=study.protocolSection.designModule.phases",
+          "studyType=study.protocolSection.designModule.studyType",
+          "conditions=study.protocolSection.conditionsModule.conditions",
+          "interventions=columns.interventions.items",
+          "sponsor=study.protocolSection.sponsorCollaboratorsModule.leadSponsor.name",
+          "enrollment=study.protocolSection.designModule.enrollmentInfo.count",
+          "startDate=study.protocolSection.statusModule.startDateStruct.date"
+        ],
+        "shape": {
+          "hits[].id": "string",
+          "hits[].study.protocolSection.identificationModule.briefTitle": "string",
+          "hits[].study.protocolSection.statusModule.overallStatus": "string",
+          "hits[].study.protocolSection.conditionsModule.conditions": "array",
+          "hits[].study.protocolSection.designModule.studyType": "string",
+          "hits[].study.protocolSection.designModule.phases": "null",
+          "hits[].columns.interventions.items": "array"
+        }
+      },
+      "params": [
+        {
+          "name": "condition",
+          "type": "string",
+          "required": true,
+          "description": "Condition or disease to search for.",
+          "example": "breast cancer"
+        },
+        {
+          "name": "term",
+          "type": "string",
+          "required": false,
+          "description": "Additional search terms, or empty for no additional term.",
+          "example": "surgery",
+          "default": ""
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "checks": [
+        {
+          "args": {
+            "condition": "type 2 diabetes",
+            "term": "metformin"
+          },
+          "expect": "result",
+          "purpose": "an additional term returns matching studies"
+        },
+        {
+          "args": {
+            "condition": "zzqqxxwvnothingmatch"
+          },
+          "expect": "empty",
+          "purpose": "an unmatched condition has no results"
+        }
+      ]
+    },
+    {
+      "name": "getStudy",
+      "description": "Read a study's registry record, eligibility, outcomes and location fields by NCT identifier.",
+      "request": {
+        "method": "GET",
+        "url": "https://clinicaltrials.gov/api/int/studies/%7BnctId%7D?history=true",
+        "headers": {
+          "accept": "application/json, text/plain, */*",
+          "accept-language": "en-US,en;q=0.9",
+          "priority": "u=1, i",
+          "referer": "https://clinicaltrials.gov/study/{nctId}",
+          "sec-ch-ua": "\"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Google Chrome\";v=\"156\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\"",
+          "sec-fetch-dest": "empty",
+          "sec-fetch-mode": "cors",
+          "sec-fetch-site": "same-origin",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36"
+        }
+      },
+      "slots": [
+        {
+          "param": "nctId",
+          "at": [
+            "path:3"
+          ]
+        },
+        {
+          "param": "nctId",
+          "at": [
+            "header:referer"
+          ],
+          "template": "https://clinicaltrials.gov/study/{nctId}"
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://clinicaltrials.gov/study/{nctId}"
+      },
+      "match": {
+        "path": "/api/int/studies/*"
+      },
+      "response": {
+        "format": "json",
+        "contentType": "",
+        "extract": "study.protocolSection",
+        "pick": [
+          "nctId=identificationModule.nctId",
+          "title=identificationModule.briefTitle",
+          "officialTitle=identificationModule.officialTitle",
+          "status=statusModule.overallStatus",
+          "phases=designModule.phases",
+          "studyType=designModule.studyType",
+          "conditions=conditionsModule.conditions",
+          "interventions=armsInterventionsModule.interventions[*].name",
+          "eligibility=eligibilityModule.eligibilityCriteria",
+          "sex=eligibilityModule.sex",
+          "minimumAge=eligibilityModule.minimumAge",
+          "maximumAge=eligibilityModule.maximumAge",
+          "enrollment=designModule.enrollmentInfo.count",
+          "sponsor=sponsorCollaboratorsModule.leadSponsor.name",
+          "startDate=statusModule.startDateStruct.date",
+          "completionDate=statusModule.completionDateStruct.date",
+          "primaryOutcomes=outcomesModule.primaryOutcomes",
+          "facilities=contactsLocationsModule.locations[*].facility",
+          "cities=contactsLocationsModule.locations[*].city",
+          "countries=contactsLocationsModule.locations[*].country",
+          "briefSummary=descriptionModule.briefSummary"
+        ],
+        "shape": {
+          "study.protocolSection.identificationModule.nctId": "string",
+          "study.protocolSection.identificationModule.briefTitle": "string",
+          "study.protocolSection.identificationModule.officialTitle": "string",
+          "study.protocolSection.statusModule.overallStatus": "string",
+          "study.protocolSection.statusModule.startDateStruct.date": "string",
+          "study.protocolSection.statusModule.completionDateStruct.date": "string",
+          "study.protocolSection.sponsorCollaboratorsModule.leadSponsor.name": "string",
+          "study.protocolSection.descriptionModule.briefSummary": "string",
+          "study.protocolSection.conditionsModule.conditions": "array",
+          "study.protocolSection.designModule.studyType": "string",
+          "study.protocolSection.designModule.phases": "array",
+          "study.protocolSection.designModule.enrollmentInfo.count": "number",
+          "study.protocolSection.armsInterventionsModule.interventions[].name": "string",
+          "study.protocolSection.outcomesModule.primaryOutcomes": "array",
+          "study.protocolSection.eligibilityModule.eligibilityCriteria": "string",
+          "study.protocolSection.eligibilityModule.sex": "string",
+          "study.protocolSection.eligibilityModule.minimumAge": "string",
+          "study.protocolSection.contactsLocationsModule.locations[].city": "string",
+          "study.protocolSection.contactsLocationsModule.locations[].country": "string"
+        }
+      },
+      "params": [
+        {
+          "name": "nctId",
+          "type": "string",
+          "required": true,
+          "description": "ClinicalTrials.gov NCT identifier, such as NCT01110954.",
+          "example": "NCT01110954"
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "checks": [
+        {
+          "args": {
+            "nctId": "NCT99999999"
+          },
+          "expect": "input",
+          "purpose": "a nonexistent study identifier is an input error"
+        }
+      ]
+    }
+  ]
+}

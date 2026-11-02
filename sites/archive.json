@@ -1,0 +1,171 @@
+{
+  "name": "archive",
+  "displayName": "Internet Archive",
+  "baseUrl": "https://archive.org",
+  "description": "Search Internet Archive items and inspect Wayback Machine capture summaries without an account.",
+  "operations": [
+    {
+      "name": "searchItems",
+      "description": "Search the first page of Internet Archive items.",
+      "request": {
+        "method": "GET",
+        "url": "https://archive.org/services/search/beta/page_production/?user_query=%7Bq%7D&hits_per_page=100&page=1&aggregations=false&client_url=https%3A%2F%2Farchive.org%2Fsearch%3Fquery%3D%7Bq%7D",
+        "headers": {
+          "accept": "*/*",
+          "accept-language": "en-US,en;q=0.9",
+          "priority": "u=1, i",
+          "referer": "https://archive.org/search?query={q}",
+          "sec-ch-ua": "\"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Google Chrome\";v=\"156\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\"",
+          "sec-fetch-dest": "empty",
+          "sec-fetch-mode": "cors",
+          "sec-fetch-site": "same-origin",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36"
+        }
+      },
+      "slots": [
+        {
+          "param": "q",
+          "at": [
+            "query:user_query"
+          ]
+        },
+        {
+          "param": "q",
+          "at": [
+            "query:client_url"
+          ],
+          "template": "https://archive.org/search?query={q}",
+          "escape": "url"
+        },
+        {
+          "param": "q",
+          "at": [
+            "header:referer"
+          ],
+          "template": "https://archive.org/search?query={q}"
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://archive.org/search?query={q}"
+      },
+      "match": {
+        "method": "GET",
+        "host": "archive.org",
+        "path": "/services/search/beta/page_production/*"
+      },
+      "response": {
+        "format": "json",
+        "contentType": "application/json",
+        "extract": "response.body.hits.hits",
+        "pick": [
+          "identifier=fields.identifier",
+          "title=fields.title",
+          "mediatype=fields.mediatype",
+          "creator=fields.creator",
+          "date=fields.date",
+          "downloads=fields.downloads"
+        ]
+      },
+      "params": [
+        {
+          "name": "q",
+          "type": "string",
+          "required": true,
+          "example": "nasa",
+          "description": "Search terms or Internet Archive search expression."
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "checks": [
+        {
+          "args": {
+            "q": "zzqqxxwvnouniquearchivematch"
+          },
+          "expect": "empty",
+          "purpose": "A nonsense query has no matching items"
+        }
+      ]
+    },
+    {
+      "name": "waybackSummary",
+      "description": "Get the first and last capture timestamps and monthly capture counts by year for a URL.",
+      "request": {
+        "method": "GET",
+        "url": "https://web.archive.org/__wb/sparkline?output=json&url=%7Burl%7D&collection=web",
+        "headers": {
+          "accept": "*/*",
+          "accept-language": "en-US,en;q=0.9",
+          "priority": "u=1, i",
+          "referer": "https://web.archive.org/web/20260000000000*/{url}",
+          "sec-ch-ua": "\"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Google Chrome\";v=\"156\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\"",
+          "sec-fetch-dest": "empty",
+          "sec-fetch-mode": "cors",
+          "sec-fetch-site": "same-origin",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36"
+        }
+      },
+      "slots": [
+        {
+          "param": "url",
+          "at": [
+            "query:url"
+          ]
+        },
+        {
+          "param": "url",
+          "at": [
+            "header:referer"
+          ],
+          "template": "https://web.archive.org/web/20260000000000*/{url}"
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://web.archive.org/web/*/{url}"
+      },
+      "match": {
+        "method": "GET",
+        "host": "web.archive.org",
+        "path": "/__wb/sparkline"
+      },
+      "response": {
+        "format": "json",
+        "contentType": "application/json",
+        "extract": ".",
+        "pick": [
+          "first=first_ts",
+          "last=last_ts",
+          "years"
+        ]
+      },
+      "params": [
+        {
+          "name": "url",
+          "type": "string",
+          "required": true,
+          "example": "https://example.com/",
+          "description": "Absolute URL to look up, including its scheme."
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "checks": [
+        {
+          "args": {
+            "url": "https://wikipedia.org/"
+          },
+          "expect": "result",
+          "purpose": "A well-known site has archived captures"
+        }
+      ]
+    }
+  ]
+}

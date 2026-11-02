@@ -1,0 +1,231 @@
+{
+  "name": "pkggodev",
+  "displayName": "Go Packages",
+  "baseUrl": "https://pkg.go.dev",
+  "description": "Search and inspect public Go packages and their documentation indexes.",
+  "operations": [
+    {
+      "name": "searchPackages",
+      "description": "Search Go packages on pkg.go.dev.",
+      "request": {
+        "method": "GET",
+        "url": "https://pkg.go.dev/search?q=%7Bq%7D&m=package",
+        "headers": {
+          "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/jxl,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+          "accept-language": "en-US,en;q=0.9",
+          "priority": "u=0, i",
+          "sec-ch-ua": "\"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Google Chrome\";v=\"156\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\"",
+          "sec-fetch-dest": "document",
+          "sec-fetch-mode": "navigate",
+          "sec-fetch-site": "none",
+          "sec-fetch-user": "?1",
+          "upgrade-insecure-requests": "1",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36"
+        }
+      },
+      "slots": [
+        {
+          "param": "q",
+          "at": [
+            "query:q"
+          ]
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://pkg.go.dev/search?q={q}&m=package"
+      },
+      "match": {
+        "method": "GET",
+        "host": "pkg.go.dev",
+        "path": "/search"
+      },
+      "response": {
+        "format": "html",
+        "contentType": "text/html; charset=utf-8",
+        "html": {
+          "items": "div.SearchSnippet",
+          "fields": {
+            "path": ".SearchSnippet-headerContainer a@href",
+            "synopsis": ".SearchSnippet-synopsis",
+            "importedBy": ".SearchSnippet-infoLabel a strong",
+            "version": ".SearchSnippet-infoLabel span strong",
+            "published": "[data-test-id=snippet-published]",
+            "license": "[data-test-id=snippet-license]"
+          }
+        }
+      },
+      "params": [
+        {
+          "name": "q",
+          "type": "string",
+          "required": true,
+          "description": "Package search terms.",
+          "example": "websocket"
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "checks": [
+        {
+          "args": { "q": "yaml" },
+          "expect": "result",
+          "purpose": "A different query returns packages."
+        }
+      ]
+    },
+    {
+      "name": "getPackage",
+      "description": "Read public package overview and metadata.",
+      "request": {
+        "method": "GET",
+        "url": "https://pkg.go.dev/%7Bpath%7D",
+        "headers": {
+          "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/jxl,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+          "accept-language": "en-US,en;q=0.9",
+          "priority": "u=0, i",
+          "sec-ch-ua": "\"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Google Chrome\";v=\"156\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\"",
+          "sec-fetch-dest": "document",
+          "sec-fetch-mode": "navigate",
+          "sec-fetch-site": "none",
+          "sec-fetch-user": "?1",
+          "upgrade-insecure-requests": "1",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36"
+        }
+      },
+      "slots": [
+        {
+          "param": "path",
+          "at": [
+            "path:0"
+          ]
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://pkg.go.dev/{path}"
+      },
+      "match": {
+        "method": "GET",
+        "host": "pkg.go.dev",
+        "path": "/*"
+      },
+      "response": {
+        "format": "html",
+        "contentType": "text/html; charset=utf-8",
+        "html": {
+          "items": "html:has(.UnitHeader-titleHeading)",
+          "fields": {
+            "path": "button[data-to-copy]@data-to-copy",
+            "kind": "all:.go-Main-header .go-Chip--inverted",
+            "version": "[data-test-id=UnitHeader-version] a@aria-label",
+            "published": "[data-test-id=UnitHeader-commitTime]",
+            "license": "[data-test-id=UnitHeader-license]",
+            "imports": "[data-test-id=UnitHeader-imports] a@aria-label",
+            "importedBy": "[data-test-id=UnitHeader-importedby] a@aria-label",
+            "synopsis": ".Documentation-overview p",
+            "repository": ".UnitMeta-repo a@href"
+          }
+        }
+      },
+      "params": [
+        {
+          "name": "path",
+          "type": "string",
+          "required": true,
+          "description": "Go import path, such as net/http or github.com/gin-gonic/gin.",
+          "example": "net/http"
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "checks": [
+        {
+          "args": { "path": "github.com/stretchr/testify" },
+          "expect": "result",
+          "purpose": "A third-party package returns its metadata."
+        },
+        {
+          "args": { "path": "example.com/zzqqxx-nonexistent-package-987654321" },
+          "expect": "input",
+          "purpose": "A nonexistent package is an input error."
+        }
+      ]
+    },
+    {
+      "name": "getIndex",
+      "description": "List the documentation index signatures for a Go package.",
+      "request": {
+        "method": "GET",
+        "url": "https://pkg.go.dev/%7Bpath%7D",
+        "headers": {
+          "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/jxl,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+          "accept-language": "en-US,en;q=0.9",
+          "priority": "u=0, i",
+          "sec-ch-ua": "\"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Google Chrome\";v=\"156\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\"",
+          "sec-fetch-dest": "document",
+          "sec-fetch-mode": "navigate",
+          "sec-fetch-site": "none",
+          "sec-fetch-user": "?1",
+          "upgrade-insecure-requests": "1",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36"
+        }
+      },
+      "slots": [
+        {
+          "param": "path",
+          "at": [
+            "path:0"
+          ]
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://pkg.go.dev/{path}"
+      },
+      "match": {
+        "method": "GET",
+        "host": "pkg.go.dev",
+        "path": "/*"
+      },
+      "response": {
+        "format": "html",
+        "contentType": "text/html; charset=utf-8",
+        "html": {
+          "items": ".Documentation-indexList li:has(> a)",
+          "fields": {
+            "signature": "a",
+            "identifier": "a@href"
+          }
+        }
+      },
+      "params": [
+        {
+          "name": "path",
+          "type": "string",
+          "required": true,
+          "description": "Go import path, such as net/http or golang.org/x/sync/errgroup.",
+          "example": "net/http"
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "checks": [
+        {
+          "args": { "path": "golang.org/x/sync/errgroup" },
+          "expect": "result",
+          "purpose": "A third-party package returns its index."
+        }
+      ]
+    }
+  ]
+}

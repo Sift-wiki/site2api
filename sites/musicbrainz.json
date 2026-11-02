@@ -1,0 +1,547 @@
+{
+  "name": "musicbrainz",
+  "displayName": "MusicBrainz",
+  "baseUrl": "https://musicbrainz.org",
+  "description": "Search public artists, releases and recordings, and inspect artist and release pages.",
+  "operations": [
+    {
+      "name": "searchArtists",
+      "description": "Search the first page of artists by name or indexed search terms.",
+      "request": {
+        "method": "GET",
+        "url": "https://musicbrainz.org/search?query=%7Bq%7D&type=artist&method=indexed",
+        "headers": {
+          "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/jxl,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+          "accept-language": "en-US,en;q=0.9",
+          "priority": "u=0, i",
+          "sec-ch-ua": "\"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Google Chrome\";v=\"156\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\"",
+          "sec-fetch-dest": "document",
+          "sec-fetch-mode": "navigate",
+          "sec-fetch-site": "none",
+          "sec-fetch-user": "?1",
+          "upgrade-insecure-requests": "1",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36"
+        }
+      },
+      "slots": [
+        {
+          "param": "q",
+          "at": [
+            "query:query"
+          ]
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://musicbrainz.org/search?query={q}&type=artist&method=indexed"
+      },
+      "match": {
+        "method": "GET",
+        "host": "musicbrainz.org",
+        "path": "/search"
+      },
+      "response": {
+        "format": "html",
+        "contentType": "text/html; charset=utf-8",
+        "html": {
+          "items": "table.tbl tbody tr",
+          "fields": {
+            "artistUrl": "td:nth-child(1) a@href",
+            "name": "td:nth-child(1) a",
+            "disambiguation": "td:nth-child(1) span.comment",
+            "sortName": "td:nth-child(2)",
+            "type": "td:nth-child(3)",
+            "area": "td:nth-child(5)",
+            "begin": "td:nth-child(6)",
+            "end": "td:nth-child(8)"
+          }
+        }
+      },
+      "params": [
+        {
+          "name": "q",
+          "type": "string",
+          "required": true,
+          "description": "Artist name or indexed search query.",
+          "example": "Radiohead"
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "checks": [
+        {
+          "args": {
+            "q": "Daft Punk"
+          },
+          "expect": "result",
+          "purpose": "A different public artist query returns results"
+        }
+      ]
+    },
+    {
+      "name": "searchReleases",
+      "description": "Search the first page of releases by title or indexed search terms.",
+      "request": {
+        "method": "GET",
+        "url": "https://musicbrainz.org/search?query=%7Bq%7D&type=release&method=indexed",
+        "headers": {
+          "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/jxl,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+          "accept-language": "en-US,en;q=0.9",
+          "priority": "u=0, i",
+          "sec-ch-ua": "\"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Google Chrome\";v=\"156\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\"",
+          "sec-fetch-dest": "document",
+          "sec-fetch-mode": "navigate",
+          "sec-fetch-site": "none",
+          "sec-fetch-user": "?1",
+          "upgrade-insecure-requests": "1",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36"
+        }
+      },
+      "slots": [
+        {
+          "param": "q",
+          "at": [
+            "query:query"
+          ]
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://musicbrainz.org/search?query={q}&type=release&method=indexed"
+      },
+      "match": {
+        "method": "GET",
+        "host": "musicbrainz.org",
+        "path": "/search"
+      },
+      "response": {
+        "format": "html",
+        "contentType": "text/html; charset=utf-8",
+        "html": {
+          "items": "table.tbl tbody tr",
+          "fields": {
+            "releaseUrl": "td:nth-child(1) a[href^=\"/release/\"]:not([href$=\"/cover-art\"])@href",
+            "title": "td:nth-child(1) a[href^=\"/release/\"]:not([href$=\"/cover-art\"])",
+            "artistCredit": "td:nth-child(2)",
+            "format": "td:nth-child(3)",
+            "tracks": "td:nth-child(4)",
+            "country": "td:nth-child(5) span.flag abbr",
+            "date": "td:nth-child(5) span.release-date",
+            "label": "td:nth-child(6)",
+            "catalogNumber": "td:nth-child(7)"
+          }
+        }
+      },
+      "params": [
+        {
+          "name": "q",
+          "type": "string",
+          "required": true,
+          "description": "Release title or indexed search query.",
+          "example": "OK Computer"
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "checks": [
+        {
+          "args": {
+            "q": "Abbey Road"
+          },
+          "expect": "result",
+          "purpose": "A different public release query returns results"
+        }
+      ]
+    },
+    {
+      "name": "getReleaseTracks",
+      "description": "Read the tracklist from a release page's structured data.",
+      "request": {
+        "method": "GET",
+        "url": "https://musicbrainz.org/release/%7Bmbid%7D",
+        "headers": {
+          "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/jxl,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+          "accept-language": "en-US,en;q=0.9",
+          "priority": "u=0, i",
+          "sec-ch-ua": "\"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Google Chrome\";v=\"156\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\"",
+          "sec-fetch-dest": "document",
+          "sec-fetch-mode": "navigate",
+          "sec-fetch-site": "none",
+          "sec-fetch-user": "?1",
+          "upgrade-insecure-requests": "1",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36"
+        }
+      },
+      "slots": [
+        {
+          "param": "mbid",
+          "at": [
+            "path:1"
+          ]
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://musicbrainz.org/release/{mbid}"
+      },
+      "match": {
+        "method": "GET",
+        "host": "musicbrainz.org",
+        "path": "/release/*"
+      },
+      "response": {
+        "format": "embedded",
+        "contentType": "text/html; charset=utf-8",
+        "extract": "track",
+        "pick": [
+          "position=trackNumber",
+          "title=name",
+          "length=duration",
+          "recordingUrl=[\"@id\"]"
+        ],
+        "embedded": {
+          "regex": "application/ld\\+json[^>]*>\\s*(\\{)(?=[^<]*?\"@type\"\\s*:\\s*\"MusicRelease\")"
+        }
+      },
+      "params": [
+        {
+          "name": "mbid",
+          "type": "string",
+          "required": true,
+          "description": "MusicBrainz release MBID, the UUID in a release URL.",
+          "example": "fba5f8fe-c6c8-4511-8562-c9febf482674"
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "checks": [
+        {
+          "args": {},
+          "expect": "input",
+          "purpose": "A release MBID is required"
+        }
+      ]
+    },
+    {
+      "name": "getRelease",
+      "description": "Read a release's title, artist credit, label and catalog number.",
+      "request": {
+        "method": "GET",
+        "url": "https://musicbrainz.org/release/%7Bmbid%7D",
+        "headers": {
+          "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/jxl,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+          "accept-language": "en-US,en;q=0.9",
+          "priority": "u=0, i",
+          "sec-ch-ua": "\"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Google Chrome\";v=\"156\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\"",
+          "sec-fetch-dest": "document",
+          "sec-fetch-mode": "navigate",
+          "sec-fetch-site": "none",
+          "sec-fetch-user": "?1",
+          "upgrade-insecure-requests": "1",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36"
+        }
+      },
+      "slots": [
+        {
+          "param": "mbid",
+          "at": [
+            "path:1"
+          ]
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://musicbrainz.org/release/{mbid}"
+      },
+      "match": {
+        "method": "GET",
+        "host": "musicbrainz.org",
+        "path": "/release/*"
+      },
+      "response": {
+        "format": "embedded",
+        "contentType": "text/html; charset=utf-8",
+        "pick": [
+          "title=name",
+          "artistCredit=releaseOf.creditedTo",
+          "label=recordLabel.name",
+          "catalogNumber"
+        ],
+        "embedded": {
+          "regex": "application/ld\\+json[^>]*>\\s*(\\{)(?=[^<]*?\"@type\"\\s*:\\s*\"MusicRelease\")"
+        }
+      },
+      "params": [
+        {
+          "name": "mbid",
+          "type": "string",
+          "required": true,
+          "description": "MusicBrainz release MBID, the UUID in a release URL.",
+          "example": "fba5f8fe-c6c8-4511-8562-c9febf482674"
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "checks": [
+        {
+          "args": {},
+          "expect": "input",
+          "purpose": "A release MBID is required"
+        }
+      ]
+    },
+    {
+      "name": "getArtist",
+      "description": "Read public artist details from the artist page.",
+      "request": {
+        "method": "GET",
+        "url": "https://musicbrainz.org/artist/%7Bmbid%7D",
+        "headers": {
+          "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/jxl,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+          "accept-language": "en-US,en;q=0.9",
+          "cache-control": "max-age=0",
+          "priority": "u=0, i",
+          "referer": "https://musicbrainz.org/artist/{mbid}",
+          "sec-ch-ua": "\"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Google Chrome\";v=\"156\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\"",
+          "sec-fetch-dest": "document",
+          "sec-fetch-mode": "navigate",
+          "sec-fetch-site": "same-origin",
+          "upgrade-insecure-requests": "1",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36"
+        }
+      },
+      "slots": [
+        {
+          "param": "mbid",
+          "at": [
+            "path:1"
+          ]
+        },
+        {
+          "param": "mbid",
+          "at": [
+            "header:referer"
+          ],
+          "template": "https://musicbrainz.org/artist/{mbid}"
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://musicbrainz.org/artist/{mbid}"
+      },
+      "match": {
+        "method": "GET",
+        "host": "musicbrainz.org",
+        "path": "/artist/*"
+      },
+      "response": {
+        "format": "html",
+        "contentType": "text/html; charset=utf-8",
+        "html": {
+          "items": "body",
+          "fields": {
+            "name": "h1 a",
+            "disambiguation": "h1 span.comment",
+            "type": "#sidebar dd.type",
+            "gender": "#sidebar dd.gender",
+            "area": "#sidebar dd.area",
+            "begin": "#sidebar dd.begin-date",
+            "end": "#sidebar dd.end-date"
+          }
+        }
+      },
+      "params": [
+        {
+          "name": "mbid",
+          "type": "string",
+          "required": true,
+          "description": "MusicBrainz artist MBID, the UUID in an artist URL.",
+          "example": "a74b1b7f-71a5-4011-9441-d0b5e4122711"
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "checks": [
+        {
+          "args": {
+            "mbid": "b10bbbfc-cf9e-42e0-be17-e2c3e1d2600d"
+          },
+          "expect": "result",
+          "purpose": "Another public artist has details"
+        }
+      ]
+    },
+    {
+      "name": "getArtistReleaseGroups",
+      "description": "List release groups shown on an artist page.",
+      "request": {
+        "method": "GET",
+        "url": "https://musicbrainz.org/artist/%7Bmbid%7D",
+        "headers": {
+          "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/jxl,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+          "accept-language": "en-US,en;q=0.9",
+          "cache-control": "max-age=0",
+          "priority": "u=0, i",
+          "referer": "https://musicbrainz.org/artist/{mbid}",
+          "sec-ch-ua": "\"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Google Chrome\";v=\"156\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\"",
+          "sec-fetch-dest": "document",
+          "sec-fetch-mode": "navigate",
+          "sec-fetch-site": "same-origin",
+          "upgrade-insecure-requests": "1",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36"
+        }
+      },
+      "slots": [
+        {
+          "param": "mbid",
+          "at": [
+            "path:1"
+          ]
+        },
+        {
+          "param": "mbid",
+          "at": [
+            "header:referer"
+          ],
+          "template": "https://musicbrainz.org/artist/{mbid}"
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://musicbrainz.org/artist/{mbid}"
+      },
+      "match": {
+        "method": "GET",
+        "host": "musicbrainz.org",
+        "path": "/artist/*"
+      },
+      "response": {
+        "format": "html",
+        "contentType": "text/html; charset=utf-8",
+        "html": {
+          "items": "table.release-group-list tbody tr",
+          "fields": {
+            "year": "td:nth-child(1)",
+            "title": "td:nth-child(2) a[href^=\"/release-group/\"]",
+            "releaseGroupUrl": "td:nth-child(2) a[href^=\"/release-group/\"]@href",
+            "artistCredit": "td:nth-child(3)",
+            "rating": "td:nth-child(4) .current-rating"
+          }
+        }
+      },
+      "params": [
+        {
+          "name": "mbid",
+          "type": "string",
+          "required": true,
+          "description": "MusicBrainz artist MBID, the UUID in an artist URL.",
+          "example": "a74b1b7f-71a5-4011-9441-d0b5e4122711"
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "checks": [
+        {
+          "args": {
+            "mbid": "b10bbbfc-cf9e-42e0-be17-e2c3e1d2600d"
+          },
+          "expect": "result",
+          "purpose": "Another public artist has release groups"
+        }
+      ]
+    },
+    {
+      "name": "searchRecordings",
+      "description": "Search the first page of recordings by title or indexed search terms.",
+      "request": {
+        "method": "GET",
+        "url": "https://musicbrainz.org/search?query=%7Bq%7D&type=recording&method=indexed",
+        "headers": {
+          "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/jxl,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+          "accept-language": "en-US,en;q=0.9",
+          "priority": "u=0, i",
+          "sec-ch-ua": "\"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Google Chrome\";v=\"156\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\"",
+          "sec-fetch-dest": "document",
+          "sec-fetch-mode": "navigate",
+          "sec-fetch-site": "none",
+          "sec-fetch-user": "?1",
+          "upgrade-insecure-requests": "1",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36"
+        }
+      },
+      "slots": [
+        {
+          "param": "q",
+          "at": [
+            "query:query"
+          ]
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://musicbrainz.org/search?query={q}&type=recording&method=indexed"
+      },
+      "match": {
+        "method": "GET",
+        "host": "musicbrainz.org",
+        "path": "/search"
+      },
+      "response": {
+        "format": "html",
+        "contentType": "text/html; charset=utf-8",
+        "html": {
+          "items": "table.tbl tbody tr:has(td a[href^=\"/recording/\"])",
+          "fields": {
+            "recordingUrl": "td:nth-child(1) a@href",
+            "title": "td:nth-child(1) a",
+            "length": "td:nth-child(2)",
+            "artistCredit": "td:nth-child(3)",
+            "release": "td:nth-child(5) a",
+            "releaseUrl": "td:nth-child(5) a@href"
+          }
+        }
+      },
+      "params": [
+        {
+          "name": "q",
+          "type": "string",
+          "required": true,
+          "description": "Recording title or indexed search query.",
+          "example": "Karma Police"
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "checks": [
+        {
+          "args": {
+            "q": "Hey Jude"
+          },
+          "expect": "result",
+          "purpose": "Another public recording query returns results"
+        }
+      ]
+    }
+  ]
+}

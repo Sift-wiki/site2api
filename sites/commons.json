@@ -1,0 +1,230 @@
+{
+  "name": "commons",
+  "displayName": "Wikimedia Commons",
+  "baseUrl": "https://commons.wikimedia.org",
+  "description": "Public Wikimedia Commons image search, file pages and category galleries.",
+  "operations": [
+    {
+      "name": "searchMedia",
+      "description": "First page of MediaSearch image results, with filenames, file page links and thumbnails.",
+      "request": {
+        "method": "GET",
+        "url": "https://commons.wikimedia.org/w/index.php?search=%7Bq%7D&title=Special:MediaSearch&type=image",
+        "headers": {
+          "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/jxl,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+          "accept-language": "en-US,en;q=0.9",
+          "priority": "u=0, i",
+          "sec-ch-ua": "\"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Google Chrome\";v=\"156\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\"",
+          "sec-fetch-dest": "document",
+          "sec-fetch-mode": "navigate",
+          "sec-fetch-site": "none",
+          "sec-fetch-user": "?1",
+          "upgrade-insecure-requests": "1",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36"
+        }
+      },
+      "slots": [
+        {
+          "param": "q",
+          "at": [
+            "query:search"
+          ]
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://commons.wikimedia.org/w/index.php?search={q}&title=Special:MediaSearch&type=image"
+      },
+      "match": {
+        "method": "GET",
+        "host": "commons.wikimedia.org",
+        "path": "/w/index.php"
+      },
+      "response": {
+        "format": "html",
+        "contentType": "text/html; charset=UTF-8",
+        "html": {
+          "items": ".sdms-image-result",
+          "fields": {
+            "title": "img@alt",
+            "url": "@href",
+            "thumbnail": "img@src"
+          }
+        }
+      },
+      "params": [
+        {
+          "name": "q",
+          "type": "string",
+          "required": true,
+          "description": "Words to search for in images.",
+          "example": "golden gate bridge"
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "checks": [
+        {
+          "args": { "q": "red panda" },
+          "expect": "result",
+          "purpose": "A different public query returns images."
+        }
+      ]
+    },
+    {
+      "name": "getFile",
+      "description": "Read displayed file-page information, visible license templates, original file link and visible categories.",
+      "request": {
+        "method": "GET",
+        "url": "https://commons.wikimedia.org/wiki/%7Btitle%7D",
+        "headers": {
+          "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/jxl,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+          "accept-language": "en-US,en;q=0.9",
+          "priority": "u=0, i",
+          "sec-ch-ua": "\"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Google Chrome\";v=\"156\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\"",
+          "sec-fetch-dest": "document",
+          "sec-fetch-mode": "navigate",
+          "sec-fetch-site": "none",
+          "sec-fetch-user": "?1",
+          "upgrade-insecure-requests": "1",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36"
+        }
+      },
+      "slots": [
+        {
+          "param": "title",
+          "at": [
+            "path:1"
+          ]
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://commons.wikimedia.org/wiki/{title}"
+      },
+      "match": {
+        "method": "GET",
+        "host": "commons.wikimedia.org",
+        "path": "/wiki/*"
+      },
+      "response": {
+        "format": "html",
+        "contentType": "text/html; charset=UTF-8",
+        "html": {
+          "items": "#content",
+          "fields": {
+            "description": "#fileinfotpl_desc + td",
+            "date": "#fileinfotpl_date + td",
+            "source": "#fileinfotpl_src + td",
+            "author": "#fileinfotpl_aut + td",
+            "licenses": "all:.licensetpl",
+            "licenseLinks": "all:.licensetpl a@href",
+            "original": ".fullMedia a@href",
+            "fileInfo": ".fullMedia",
+            "categories": "all:#mw-normal-catlinks li"
+          }
+        }
+      },
+      "params": [
+        {
+          "name": "title",
+          "type": "string",
+          "required": true,
+          "description": "Full file page title including File:, with spaces or underscores.",
+          "example": "File:Mona_Lisa,_by_Leonardo_da_Vinci,_from_C2RMF_retouched.jpg"
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "checks": [
+        {
+          "args": { "title": "File:Golden_Gate_Bridge_by_night.jpg" },
+          "expect": "result",
+          "purpose": "Another public file has a file page."
+        },
+        {
+          "args": { "title": "File:Zzqqxx_no_such_file_123456789.jpg" },
+          "expect": "input",
+          "purpose": "A missing file is input, not drift."
+        }
+      ]
+    },
+    {
+      "name": "listCategory",
+      "description": "Files in the first category gallery page, with filenames, file page links and thumbnails.",
+      "request": {
+        "method": "GET",
+        "url": "https://commons.wikimedia.org/wiki/Category:%7Bcategory%7D",
+        "headers": {
+          "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/jxl,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+          "accept-language": "en-US,en;q=0.9",
+          "priority": "u=0, i",
+          "sec-ch-ua": "\"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Google Chrome\";v=\"156\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\"",
+          "sec-fetch-dest": "document",
+          "sec-fetch-mode": "navigate",
+          "sec-fetch-site": "none",
+          "sec-fetch-user": "?1",
+          "upgrade-insecure-requests": "1",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36"
+        }
+      },
+      "slots": [
+        {
+          "param": "category",
+          "at": [
+            "path:1"
+          ],
+          "template": "Category:{category}"
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://commons.wikimedia.org/wiki/Category:{category}"
+      },
+      "match": {
+        "method": "GET",
+        "host": "commons.wikimedia.org",
+        "path": "/wiki/*"
+      },
+      "response": {
+        "format": "html",
+        "contentType": "text/html; charset=UTF-8",
+        "html": {
+          "items": "#mw-category-media li.gallerybox",
+          "fields": {
+            "title": ".gallerytext a",
+            "url": ".gallerytext a@href",
+            "thumbnail": "img@src"
+          }
+        }
+      },
+      "params": [
+        {
+          "name": "category",
+          "type": "string",
+          "required": true,
+          "description": "Category name without the Category: prefix, with spaces or underscores.",
+          "example": "Featured_pictures_of_animals"
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "checks": [
+        {
+          "args": { "category": "Featured_pictures_of_birds" },
+          "expect": "result",
+          "purpose": "Another public category has files."
+        }
+      ]
+    }
+  ]
+}

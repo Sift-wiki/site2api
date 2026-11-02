@@ -1,0 +1,388 @@
+{
+  "name": "arxiv",
+  "displayName": "arXiv",
+  "baseUrl": "https://arxiv.org",
+  "description": "Public arXiv paper abstracts, search results and category submissions from arxiv.org HTML pages.",
+  "operations": [
+    {
+      "name": "getPaper",
+      "description": "Read a paper abstract page and its bibliographic metadata.",
+      "request": {
+        "method": "GET",
+        "url": "https://arxiv.org/abs/%7Bid%7D",
+        "headers": {
+          "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/jxl,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+          "accept-language": "en-US,en;q=0.9",
+          "priority": "u=0, i",
+          "sec-ch-ua": "\"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Google Chrome\";v=\"156\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\"",
+          "sec-fetch-dest": "document",
+          "sec-fetch-mode": "navigate",
+          "sec-fetch-site": "none",
+          "sec-fetch-user": "?1",
+          "upgrade-insecure-requests": "1",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36"
+        }
+      },
+      "slots": [
+        {
+          "param": "id",
+          "at": [
+            "path:1"
+          ]
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://arxiv.org/abs/{id}"
+      },
+      "match": {
+        "method": "GET",
+        "host": "arxiv.org",
+        "path": "/abs/*"
+      },
+      "response": {
+        "format": "html",
+        "contentType": "text/html; charset=utf-8",
+        "html": {
+          "items": "html",
+          "fields": {
+            "id": "meta[name=citation_arxiv_id]@content",
+            "title": "meta[name=citation_title]@content",
+            "authors": "all:meta[name=citation_author]@content",
+            "abstract": "meta[name=citation_abstract]@content",
+            "submitted": "meta[name=citation_date]@content",
+            "pdfUrl": "meta[name=citation_pdf_url]@content",
+            "versionUrl": "meta[property=og:url]@content",
+            "primarySubject": ".primary-subject",
+            "subjects": "td.subjects",
+            "comments": "td.comments",
+            "journalRef": "td.journal-ref",
+            "doi": "td.doi a@href"
+          }
+        }
+      },
+      "params": [
+        {
+          "name": "id",
+          "type": "string",
+          "required": true,
+          "description": "arXiv identifier, for example 1706.03762 or hep-th/9711200.",
+          "example": "1706.03762"
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "checks": [
+        {
+          "args": {
+            "id": "9912.99999"
+          },
+          "expect": "input",
+          "purpose": "A nonexistent paper answers 404."
+        }
+      ]
+    },
+    {
+      "name": "listNew",
+      "description": "List the latest new submissions in an arXiv category.",
+      "request": {
+        "method": "GET",
+        "url": "https://arxiv.org/list/%7Bcategory%7D/new",
+        "headers": {
+          "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/jxl,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+          "accept-language": "en-US,en;q=0.9",
+          "priority": "u=0, i",
+          "sec-ch-ua": "\"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Google Chrome\";v=\"156\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\"",
+          "sec-fetch-dest": "document",
+          "sec-fetch-mode": "navigate",
+          "sec-fetch-site": "none",
+          "sec-fetch-user": "?1",
+          "upgrade-insecure-requests": "1",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36"
+        }
+      },
+      "slots": [
+        {
+          "param": "category",
+          "at": [
+            "path:1"
+          ]
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://arxiv.org/list/{category}/new"
+      },
+      "match": {
+        "method": "GET",
+        "host": "arxiv.org",
+        "path": "/list/*/new"
+      },
+      "response": {
+        "format": "html",
+        "contentType": "text/html; charset=utf-8",
+        "pick": [
+          "id=url~/abs/(.+)",
+          "title",
+          "authors",
+          "subjects"
+        ],
+        "html": {
+          "items": "dl:has(h3:contains(New submissions)) dt",
+          "fields": {
+            "url": "a[title=Abstract]@href",
+            "title": "+ dd div.list-title",
+            "authors": "all:+ dd div.list-authors a",
+            "subjects": "+ dd div.list-subjects"
+          }
+        }
+      },
+      "params": [
+        {
+          "name": "category",
+          "type": "string",
+          "required": true,
+          "description": "arXiv category, such as cs.LG, cs.CL or math.CO.",
+          "example": "cs.LG"
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false
+    },
+    {
+      "name": "listRecent",
+      "description": "List recent submissions in an arXiv category.",
+      "request": {
+        "method": "GET",
+        "url": "https://arxiv.org/list/%7Bcategory%7D/recent",
+        "headers": {
+          "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/jxl,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+          "accept-language": "en-US,en;q=0.9",
+          "priority": "u=0, i",
+          "sec-ch-ua": "\"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Google Chrome\";v=\"156\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\"",
+          "sec-fetch-dest": "document",
+          "sec-fetch-mode": "navigate",
+          "sec-fetch-site": "none",
+          "sec-fetch-user": "?1",
+          "upgrade-insecure-requests": "1",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36"
+        }
+      },
+      "slots": [
+        {
+          "param": "category",
+          "at": [
+            "path:1"
+          ]
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://arxiv.org/list/{category}/recent"
+      },
+      "match": {
+        "method": "GET",
+        "host": "arxiv.org",
+        "path": "/list/*/recent"
+      },
+      "response": {
+        "format": "html",
+        "contentType": "text/html; charset=utf-8",
+        "pick": [
+          "id=url~/abs/(.+)",
+          "title",
+          "authors",
+          "subjects"
+        ],
+        "html": {
+          "items": "dl dt",
+          "fields": {
+            "url": "a[title=Abstract]@href",
+            "title": "+ dd div.list-title",
+            "authors": "all:+ dd div.list-authors a",
+            "subjects": "+ dd div.list-subjects"
+          }
+        }
+      },
+      "params": [
+        {
+          "name": "category",
+          "type": "string",
+          "required": true,
+          "description": "arXiv category, such as cs.LG, cs.CL or math.CO.",
+          "example": "cs.LG"
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false
+    },
+    {
+      "name": "searchPapers",
+      "description": "Search public papers by field, sort order and result offset.",
+      "request": {
+        "method": "GET",
+        "url": "https://arxiv.org/search/?query=%7Bq%7D&searchtype=%7Bsearchtype%7D&order=%7Border%7D&start=%7Bstart%7D&size=50",
+        "headers": {
+          "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/jxl,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+          "accept-language": "en-US,en;q=0.9",
+          "priority": "u=0, i",
+          "sec-ch-ua": "\"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Google Chrome\";v=\"156\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\"",
+          "sec-fetch-dest": "document",
+          "sec-fetch-mode": "navigate",
+          "sec-fetch-site": "none",
+          "sec-fetch-user": "?1",
+          "upgrade-insecure-requests": "1",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36"
+        }
+      },
+      "slots": [
+        {
+          "param": "q",
+          "at": [
+            "query:query"
+          ]
+        },
+        {
+          "param": "searchtype",
+          "at": [
+            "query:searchtype"
+          ]
+        },
+        {
+          "param": "order",
+          "at": [
+            "query:order"
+          ]
+        },
+        {
+          "param": "start",
+          "at": [
+            "query:start"
+          ]
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://arxiv.org/search/?query={q}&searchtype={searchtype}&order={order}&start={start}&size=50"
+      },
+      "match": {
+        "method": "GET",
+        "host": "arxiv.org",
+        "path": "/search/"
+      },
+      "response": {
+        "format": "html",
+        "contentType": "text/html; charset=utf-8",
+        "pick": [
+          "id=url~/abs/(.+)",
+          "title",
+          "authors",
+          "abstract",
+          "submitted",
+          "subjects"
+        ],
+        "html": {
+          "items": "li.arxiv-result",
+          "fields": {
+            "url": "p.list-title a@href",
+            "title": "p.title",
+            "authors": "all:p.authors a",
+            "abstract": "span.abstract-short",
+            "submitted": "p.is-size-7",
+            "subjects": "all:span.tag"
+          },
+          "empty": "p.has-text-warning"
+        }
+      },
+      "params": [
+        {
+          "name": "q",
+          "type": "string",
+          "required": true,
+          "description": "Search terms interpreted according to searchtype.",
+          "example": "transformer"
+        },
+        {
+          "name": "searchtype",
+          "type": "string",
+          "required": false,
+          "description": "Search field, such as all, title or author.",
+          "default": "all",
+          "enum": [
+            "all",
+            "title",
+            "author",
+            "abstract",
+            "comments",
+            "journal_ref",
+            "acm_class",
+            "msc_class",
+            "report_num",
+            "paper_id",
+            "doi",
+            "orcid",
+            "license",
+            "author_id",
+            "help",
+            "full_text"
+          ]
+        },
+        {
+          "name": "order",
+          "type": "string",
+          "required": false,
+          "description": "Sort order; the empty string selects relevance.",
+          "default": "-announced_date_first",
+          "enum": [
+            "-announced_date_first",
+            "announced_date_first",
+            "-submitted_date",
+            "submitted_date",
+            ""
+          ]
+        },
+        {
+          "name": "start",
+          "type": "string",
+          "required": false,
+          "description": "Zero-based result offset; use multiples of 50 for subsequent pages.",
+          "default": "0",
+          "pattern": "[0-9]+"
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "checks": [
+        {
+          "args": {
+            "q": "Lee",
+            "searchtype": "author",
+            "order": "submitted_date",
+            "start": "50"
+          },
+          "expect": "result",
+          "purpose": "Author search, oldest submission first, on the second page."
+        },
+        {
+          "args": {
+            "q": "zzqqxxwvnothingmatch"
+          },
+          "expect": "empty",
+          "purpose": "A query with no matches returns an empty list."
+        }
+      ]
+    }
+  ]
+}

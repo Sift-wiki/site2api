@@ -1,0 +1,90 @@
+{
+  "name": "courtlistener",
+  "displayName": "CourtListener",
+  "baseUrl": "https://www.courtlistener.com",
+  "description": "Search public US court opinions on CourtListener, a Free Law Project service.",
+  "operations": [
+    {
+      "name": "searchOpinions",
+      "description": "Search the first page of public judicial opinions by relevance.",
+      "request": {
+        "method": "GET",
+        "url": "https://www.courtlistener.com/?q=%7Bq%7D&type=o&order_by=score%20desc",
+        "headers": {
+          "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/jxl,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+          "accept-language": "en-US,en;q=0.9",
+          "priority": "u=0, i",
+          "sec-ch-ua": "\"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Google Chrome\";v=\"156\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\"",
+          "sec-fetch-dest": "document",
+          "sec-fetch-mode": "navigate",
+          "sec-fetch-site": "none",
+          "sec-fetch-user": "?1",
+          "upgrade-insecure-requests": "1",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36"
+        }
+      },
+      "slots": [
+        {
+          "param": "q",
+          "at": [
+            "query:q"
+          ]
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://www.courtlistener.com/?q={q}&type=o&order_by=score%20desc"
+      },
+      "match": {
+        "method": "GET",
+        "host": "www.courtlistener.com",
+        "path": "/"
+      },
+      "response": {
+        "format": "html",
+        "contentType": "text/html; charset=utf-8",
+        "pick": [
+          "id=url~/opinion/([0-9]+)/",
+          "caseName",
+          "url",
+          "dateFiled",
+          "citations",
+          "snippet"
+        ],
+        "html": {
+          "items": "article",
+          "fields": {
+            "caseName": "a.visitable",
+            "url": "a.visitable@href",
+            "dateFiled": "time.meta-data-value@datetime",
+            "citations": "span.meta-data-header:contains(Citations) + span.meta-data-value",
+            "snippet": "p.representation"
+          }
+        }
+      },
+      "params": [
+        {
+          "name": "q",
+          "type": "string",
+          "required": true,
+          "description": "Search terms or a CourtListener opinion search expression.",
+          "example": "miranda warning"
+        }
+      ],
+      "readOnly": true,
+      "minTier": 2,
+      "learnedLoggedIn": false,
+      "checks": [
+        {
+          "args": {
+            "q": "fair use software"
+          },
+          "expect": "result",
+          "purpose": "A second public search returns opinions."
+        }
+      ]
+    }
+  ]
+}

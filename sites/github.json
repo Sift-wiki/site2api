@@ -2,7 +2,7 @@
   "name": "github",
   "displayName": "GitHub",
   "baseUrl": "https://github.com",
-  "description": "GitHub repositories from github.com's own pages: repository search, a repository's About box (stars, forks, topics, license) and its issues list. Public, logged out.",
+  "description": "Public GitHub repository search, repository details, files, directories, releases, user profiles, issues and pull request lists, from github.com's own pages.",
   "loginCookies": [
     "user_session"
   ],
@@ -10,36 +10,6 @@
     {
       "name": "searchRepos",
       "description": "Search public repositories, from github.com/search (type: repositories, best match, page 1, up to 10): owner, name, description, stars, language, topics, updatedAt and archived.",
-      "links": [
-        {
-          "from": "owner",
-          "to": {
-            "op": "getRepo",
-            "arg": "owner"
-          }
-        },
-        {
-          "from": "name",
-          "to": {
-            "op": "getRepo",
-            "arg": "repo"
-          }
-        },
-        {
-          "from": "owner",
-          "to": {
-            "op": "listIssues",
-            "arg": "owner"
-          }
-        },
-        {
-          "from": "name",
-          "to": {
-            "op": "listIssues",
-            "arg": "repo"
-          }
-        }
-      ],
       "request": {
         "method": "GET",
         "url": "https://github.com/search?q=%7Bq%7D&type=repositories",
@@ -98,8 +68,8 @@
           "name": "q",
           "type": "string",
           "required": true,
-          "example": "vector database",
-          "description": "search words; GitHub search qualifiers work too (language:rust, stars:>1000)"
+          "description": "search words; GitHub search qualifiers work too (language:rust, stars:>1000)",
+          "example": "vector database"
         }
       ],
       "readOnly": true,
@@ -112,6 +82,36 @@
           },
           "expect": "empty",
           "purpose": "a query nothing matches reads as an empty list"
+        }
+      ],
+      "links": [
+        {
+          "from": "owner",
+          "to": {
+            "op": "getRepo",
+            "arg": "owner"
+          }
+        },
+        {
+          "from": "name",
+          "to": {
+            "op": "getRepo",
+            "arg": "repo"
+          }
+        },
+        {
+          "from": "owner",
+          "to": {
+            "op": "listIssues",
+            "arg": "owner"
+          }
+        },
+        {
+          "from": "name",
+          "to": {
+            "op": "listIssues",
+            "arg": "repo"
+          }
         }
       ]
     },
@@ -187,15 +187,15 @@
           "name": "owner",
           "type": "string",
           "required": true,
-          "example": "milvus-io",
-          "description": "the repository owner's user or organization name"
+          "description": "the repository owner's user or organization name",
+          "example": "milvus-io"
         },
         {
           "name": "repo",
           "type": "string",
           "required": true,
-          "example": "milvus",
-          "description": "the repository name"
+          "description": "the repository name",
+          "example": "milvus"
         }
       ],
       "readOnly": true,
@@ -286,23 +286,23 @@
           "name": "owner",
           "type": "string",
           "required": true,
-          "example": "sveltejs",
-          "description": "the repository owner's user or organization name"
+          "description": "the repository owner's user or organization name",
+          "example": "sveltejs"
         },
         {
           "name": "repo",
           "type": "string",
           "required": true,
-          "example": "svelte",
-          "description": "the repository name"
+          "description": "the repository name",
+          "example": "svelte"
         },
         {
           "name": "query",
           "type": "string",
           "required": false,
+          "description": "GitHub issue search, as in the page's filter box: qualifiers (state:closed, label:bug, author:...) and words",
           "example": "is:issue state:open",
-          "default": "is:issue state:open",
-          "description": "GitHub issue search, as in the page's filter box: qualifiers (state:closed, label:bug, author:...) and words"
+          "default": "is:issue state:open"
         }
       ],
       "readOnly": true,
@@ -317,6 +317,934 @@
           },
           "expect": "result",
           "purpose": "state:closed and label:bug leave out the open, unlabeled issues of the example"
+        }
+      ]
+    },
+    {
+      "name": "listPullRequests",
+      "description": "A repository's pull requests from GitHub's issue search, page 1: number, title, state, author, labels, createdAt and url.",
+      "request": {
+        "method": "GET",
+        "url": "https://github.com/%7Bowner%7D/%7Brepo%7D/issues?q=%7Bquery%7D",
+        "headers": {
+          "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/jxl,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+          "accept-language": "en-US,en;q=0.9",
+          "priority": "u=0, i",
+          "sec-ch-ua": "\"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Google Chrome\";v=\"156\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\"",
+          "sec-fetch-dest": "document",
+          "sec-fetch-mode": "navigate",
+          "sec-fetch-site": "none",
+          "sec-fetch-user": "?1",
+          "upgrade-insecure-requests": "1",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36"
+        }
+      },
+      "slots": [
+        {
+          "param": "owner",
+          "at": [
+            "path:0"
+          ]
+        },
+        {
+          "param": "repo",
+          "at": [
+            "path:1"
+          ]
+        },
+        {
+          "param": "query",
+          "at": [
+            "query:q"
+          ]
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://github.com/{owner}/{repo}/issues?q={query}"
+      },
+      "match": {
+        "method": "GET",
+        "host": "github.com",
+        "path": "/*/*/issues"
+      },
+      "response": {
+        "format": "embedded",
+        "contentType": "text/html; charset=utf-8",
+        "extract": "payload.issuesIndexContentRoute.results",
+        "pick": [
+          "number=pullRequest.number",
+          "title=pullRequest.title",
+          "state=pullRequest.state",
+          "author=pullRequest.author.displayLogin",
+          "labels=pullRequest.labels[*].name",
+          "createdAt=pullRequest.createdAt",
+          "url=pullRequest.permalink"
+        ],
+        "embedded": {
+          "regex": "data-target=\"react-app\\.embeddedData\">(\\{)"
+        }
+      },
+      "params": [
+        {
+          "name": "owner",
+          "type": "string",
+          "required": true,
+          "description": "the repository owner's user or organization name",
+          "example": "sveltejs"
+        },
+        {
+          "name": "repo",
+          "type": "string",
+          "required": true,
+          "description": "the repository name",
+          "example": "svelte"
+        },
+        {
+          "name": "query",
+          "type": "string",
+          "required": false,
+          "description": "GitHub issue search filter, including is:pr",
+          "example": "is:pr is:open",
+          "default": "is:pr is:open"
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "checks": [
+        {
+          "args": {
+            "owner": "sveltejs",
+            "repo": "svelte",
+            "query": "is:pr is:closed"
+          },
+          "expect": "result",
+          "purpose": "closed pull requests differ from the default open filter"
+        }
+      ]
+    },
+    {
+      "name": "listDirectory",
+      "description": "List entries in a public repository directory at a Git ref: name, path and type.",
+      "request": {
+        "method": "GET",
+        "url": "https://github.com/%7Bowner%7D/%7Brepo%7D/tree/%7Bref%7D/%7Bpath%7D",
+        "headers": {
+          "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/jxl,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+          "accept-language": "en-US,en;q=0.9",
+          "priority": "u=0, i",
+          "sec-ch-ua": "\"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Google Chrome\";v=\"156\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\"",
+          "sec-fetch-dest": "document",
+          "sec-fetch-mode": "navigate",
+          "sec-fetch-site": "none",
+          "sec-fetch-user": "?1",
+          "upgrade-insecure-requests": "1",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36"
+        }
+      },
+      "slots": [
+        {
+          "param": "owner",
+          "at": [
+            "path:0"
+          ]
+        },
+        {
+          "param": "repo",
+          "at": [
+            "path:1"
+          ]
+        },
+        {
+          "param": "ref",
+          "at": [
+            "path:3"
+          ]
+        },
+        {
+          "param": "path",
+          "at": [
+            "path:4"
+          ]
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://github.com/{owner}/{repo}/tree/{ref}/{path}"
+      },
+      "match": {
+        "method": "GET",
+        "host": "github.com",
+        "path": "/*/*/tree/*/*"
+      },
+      "response": {
+        "format": "embedded",
+        "contentType": "text/html; charset=utf-8",
+        "extract": "payload.codeViewTreeRoute.tree.items",
+        "pick": [
+          "name",
+          "path",
+          "type=contentType"
+        ],
+        "embedded": {
+          "regex": "data-target=\"react-app\\.embeddedData\">(\\{)"
+        }
+      },
+      "params": [
+        {
+          "name": "owner",
+          "type": "string",
+          "required": true,
+          "description": "the repository owner's user or organization name",
+          "example": "nodejs"
+        },
+        {
+          "name": "repo",
+          "type": "string",
+          "required": true,
+          "description": "the repository name",
+          "example": "node"
+        },
+        {
+          "name": "ref",
+          "type": "string",
+          "required": false,
+          "description": "branch, tag or commit; HEAD selects the default branch",
+          "example": "HEAD",
+          "default": "HEAD"
+        },
+        {
+          "name": "path",
+          "type": "string",
+          "required": true,
+          "description": "directory path relative to the repository root",
+          "example": "lib"
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "checks": [
+        {
+          "args": {
+            "owner": "nodejs",
+            "repo": "node",
+            "ref": "v18.0.0",
+            "path": "lib"
+          },
+          "expect": "result",
+          "purpose": "a historical tag selects a different directory listing"
+        },
+        {
+          "args": {
+            "owner": "nodejs",
+            "repo": "node",
+            "path": "zzqqxx-no-such-directory"
+          },
+          "expect": "input",
+          "purpose": "a missing directory is an input error"
+        }
+      ]
+    },
+    {
+      "name": "getFile",
+      "description": "Read a public text file at a Git ref, returned as an array of lines.",
+      "request": {
+        "method": "GET",
+        "url": "https://github.com/%7Bowner%7D/%7Brepo%7D/blob/%7Bref%7D/%7Bpath%7D",
+        "headers": {
+          "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/jxl,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+          "accept-language": "en-US,en;q=0.9",
+          "priority": "u=0, i",
+          "sec-ch-ua": "\"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Google Chrome\";v=\"156\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\"",
+          "sec-fetch-dest": "document",
+          "sec-fetch-mode": "navigate",
+          "sec-fetch-site": "none",
+          "sec-fetch-user": "?1",
+          "upgrade-insecure-requests": "1",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36"
+        }
+      },
+      "slots": [
+        {
+          "param": "owner",
+          "at": [
+            "path:0"
+          ]
+        },
+        {
+          "param": "repo",
+          "at": [
+            "path:1"
+          ]
+        },
+        {
+          "param": "ref",
+          "at": [
+            "path:3"
+          ]
+        },
+        {
+          "param": "path",
+          "at": [
+            "path:4"
+          ]
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://github.com/{owner}/{repo}/blob/{ref}/{path}"
+      },
+      "match": {
+        "method": "GET",
+        "host": "github.com",
+        "path": "/*/*/blob/*/*"
+      },
+      "response": {
+        "format": "embedded",
+        "contentType": "text/html; charset=utf-8",
+        "extract": "payload[\"codeViewBlobLayoutRoute.StyledBlob\"].rawLines",
+        "embedded": {
+          "regex": "data-target=\"react-app\\.embeddedData\">(\\{)"
+        }
+      },
+      "params": [
+        {
+          "name": "owner",
+          "type": "string",
+          "required": true,
+          "description": "the repository owner's user or organization name",
+          "example": "nodejs"
+        },
+        {
+          "name": "repo",
+          "type": "string",
+          "required": true,
+          "description": "the repository name",
+          "example": "node"
+        },
+        {
+          "name": "ref",
+          "type": "string",
+          "required": false,
+          "description": "branch, tag or commit; HEAD selects the default branch",
+          "example": "HEAD",
+          "default": "HEAD"
+        },
+        {
+          "name": "path",
+          "type": "string",
+          "required": true,
+          "description": "file path relative to the repository root",
+          "example": "README.md"
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "checks": [
+        {
+          "args": {
+            "owner": "nodejs",
+            "repo": "node",
+            "ref": "v18.0.0",
+            "path": "README.md"
+          },
+          "expect": "result",
+          "purpose": "a historical tag selects a different version of the file"
+        },
+        {
+          "args": {
+            "owner": "nodejs",
+            "repo": "node",
+            "path": "zzqqxx-no-such-file"
+          },
+          "expect": "input",
+          "purpose": "a missing file is an input error"
+        }
+      ]
+    },
+    {
+      "name": "listReleases",
+      "description": "List page 1 of public repository releases with tag, name, publication date, status and a short body summary.",
+      "request": {
+        "method": "GET",
+        "url": "https://github.com/%7Bowner%7D/%7Brepo%7D/releases",
+        "headers": {
+          "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/jxl,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+          "accept-language": "en-US,en;q=0.9",
+          "priority": "u=0, i",
+          "sec-ch-ua": "\"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Google Chrome\";v=\"156\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\"",
+          "sec-fetch-dest": "document",
+          "sec-fetch-mode": "navigate",
+          "sec-fetch-site": "none",
+          "sec-fetch-user": "?1",
+          "upgrade-insecure-requests": "1",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36"
+        }
+      },
+      "slots": [
+        {
+          "param": "owner",
+          "at": [
+            "path:0"
+          ]
+        },
+        {
+          "param": "repo",
+          "at": [
+            "path:1"
+          ]
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://github.com/{owner}/{repo}/releases"
+      },
+      "match": {
+        "method": "GET",
+        "host": "github.com",
+        "path": "/*/*/releases"
+      },
+      "response": {
+        "format": "html",
+        "contentType": "text/html; charset=utf-8",
+        "html": {
+          "items": "section",
+          "fields": {
+            "tag": "a.Link--muted",
+            "name": "a.Link--primary",
+            "publishedAt": "relative-time@datetime",
+            "status": "span.Label",
+            "summary": ".markdown-body p"
+          }
+        }
+      },
+      "params": [
+        {
+          "name": "owner",
+          "type": "string",
+          "required": true,
+          "description": "the repository owner's user or organization name",
+          "example": "nodejs"
+        },
+        {
+          "name": "repo",
+          "type": "string",
+          "required": true,
+          "description": "the repository name",
+          "example": "node"
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "checks": [
+        {
+          "args": {
+            "owner": "rust-lang",
+            "repo": "rust"
+          },
+          "expect": "result",
+          "purpose": "another repository has different releases"
+        }
+      ]
+    },
+    {
+      "name": "getUser",
+      "description": "Read a public GitHub profile as shown on its overview page.",
+      "request": {
+        "method": "GET",
+        "url": "https://github.com/%7Busername%7D",
+        "headers": {
+          "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/jxl,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+          "accept-language": "en-US,en;q=0.9",
+          "priority": "u=0, i",
+          "sec-ch-ua": "\"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Google Chrome\";v=\"156\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\"",
+          "sec-fetch-dest": "document",
+          "sec-fetch-mode": "navigate",
+          "sec-fetch-site": "none",
+          "sec-fetch-user": "?1",
+          "upgrade-insecure-requests": "1",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36"
+        }
+      },
+      "slots": [
+        {
+          "param": "username",
+          "at": [
+            "path:0"
+          ]
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://github.com/{username}"
+      },
+      "match": {
+        "method": "GET",
+        "host": "github.com",
+        "path": "/*"
+      },
+      "response": {
+        "format": "html",
+        "contentType": "text/html; charset=utf-8",
+        "html": {
+          "items": ".application-main:has(.vcard-names)",
+          "fields": {
+            "name": "[itemprop=name]",
+            "bio": ".p-note",
+            "company": "[itemprop=worksFor]",
+            "location": "[itemprop=homeLocation]",
+            "website": "li[itemprop=url] a@href",
+            "followers": "a[href$=\"?tab=followers\"]",
+            "following": "a[href$=\"?tab=following\"]",
+            "publicRepos": "a[href$=\"?tab=repositories\"] span.Counter",
+            "pinnedRepos": "all:.pinned-item-list-item .repo"
+          }
+        }
+      },
+      "params": [
+        {
+          "name": "username",
+          "type": "string",
+          "required": true,
+          "description": "a public GitHub user login, not an organization",
+          "example": "torvalds"
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "checks": [
+        {
+          "args": {
+            "username": "gaearon"
+          },
+          "expect": "result",
+          "purpose": "another public user has a different profile"
+        },
+        {
+          "args": {
+            "username": "zzqqxx-no-such-user-xyz"
+          },
+          "expect": "input",
+          "purpose": "a missing user is an input error"
+        }
+      ]
+    },
+    {
+      "name": "getIssue",
+      "description": "Read the main post of a public issue, without its comment thread.",
+      "request": {
+        "method": "GET",
+        "url": "https://github.com/%7Bowner%7D/%7Brepo%7D/issues/%7Bnumber%7D",
+        "headers": {
+          "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/jxl,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+          "accept-language": "en-US,en;q=0.9",
+          "priority": "u=0, i",
+          "sec-ch-ua": "\"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Google Chrome\";v=\"156\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\"",
+          "sec-fetch-dest": "document",
+          "sec-fetch-mode": "navigate",
+          "sec-fetch-site": "none",
+          "sec-fetch-user": "?1",
+          "upgrade-insecure-requests": "1",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36"
+        }
+      },
+      "slots": [
+        {
+          "param": "owner",
+          "at": [
+            "path:0"
+          ]
+        },
+        {
+          "param": "repo",
+          "at": [
+            "path:1"
+          ]
+        },
+        {
+          "param": "number",
+          "at": [
+            "path:3"
+          ]
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://github.com/{owner}/{repo}/issues/{number}"
+      },
+      "match": {
+        "method": "GET",
+        "host": "github.com",
+        "path": "/*/*/issues/*"
+      },
+      "response": {
+        "format": "embedded",
+        "contentType": "text/html; charset=utf-8",
+        "extract": "payload.issueViewerRoute.data.repository.issue",
+        "pick": [
+          "number",
+          "title",
+          "state",
+          "author=author.login",
+          "createdAt",
+          "body",
+          "labels=labels.edges[*].node.name",
+          "comments=totalCommentsCount"
+        ],
+        "embedded": {
+          "regex": "data-target=\"react-app\\.embeddedData\">(\\{)"
+        }
+      },
+      "params": [
+        {
+          "name": "owner",
+          "type": "string",
+          "required": true,
+          "description": "the repository owner's user or organization name",
+          "example": "nodejs"
+        },
+        {
+          "name": "repo",
+          "type": "string",
+          "required": true,
+          "description": "the repository name",
+          "example": "node"
+        },
+        {
+          "name": "number",
+          "type": "string",
+          "required": true,
+          "description": "the issue number",
+          "example": "418"
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "checks": [
+        {
+          "args": {
+            "owner": "nodejs",
+            "repo": "node",
+            "number": "1086"
+          },
+          "expect": "result",
+          "purpose": "another issue has a different main post"
+        },
+        {
+          "args": {
+            "owner": "nodejs",
+            "repo": "node",
+            "number": "999999999"
+          },
+          "expect": "input",
+          "purpose": "a missing issue is an input error"
+        }
+      ]
+    },
+    {
+      "name": "trendingRepos",
+      "description": "List trending repositories for a period and language.",
+      "request": {
+        "method": "GET",
+        "url": "https://github.com/trending/%7Blanguage%7D?since=%7Bsince%7D",
+        "headers": {
+          "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/jxl,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+          "accept-language": "en-US,en;q=0.9",
+          "priority": "u=0, i",
+          "sec-ch-ua": "\"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Google Chrome\";v=\"156\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\"",
+          "sec-fetch-dest": "document",
+          "sec-fetch-mode": "navigate",
+          "sec-fetch-site": "none",
+          "sec-fetch-user": "?1",
+          "upgrade-insecure-requests": "1",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36"
+        }
+      },
+      "slots": [
+        {
+          "param": "language",
+          "at": [
+            "path:1"
+          ]
+        },
+        {
+          "param": "since",
+          "at": [
+            "query:since"
+          ]
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://github.com/trending/{language}?since={since}"
+      },
+      "match": {
+        "method": "GET",
+        "host": "github.com",
+        "path": "/trending/*"
+      },
+      "response": {
+        "format": "html",
+        "contentType": "text/html; charset=utf-8",
+        "html": {
+          "items": "article.Box-row",
+          "fields": {
+            "repo": "h2 a@href",
+            "description": "p",
+            "language": "[itemprop=programmingLanguage]",
+            "stars": "a[href$=\"/stargazers\"]",
+            "forks": "a[href$=\"/forks\"]",
+            "gained": "span.d-inline-block.float-sm-right"
+          }
+        }
+      },
+      "params": [
+        {
+          "name": "language",
+          "type": "string",
+          "required": false,
+          "description": "GitHub language slug, or empty for all languages",
+          "example": "rust",
+          "default": ""
+        },
+        {
+          "name": "since",
+          "type": "string",
+          "required": false,
+          "description": "time period for trending stars",
+          "example": "weekly",
+          "default": "daily",
+          "enum": [
+            "daily",
+            "weekly",
+            "monthly"
+          ]
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "checks": [
+        {
+          "args": {
+            "language": "python",
+            "since": "monthly"
+          },
+          "expect": "result",
+          "purpose": "the Python monthly list has results"
+        }
+      ]
+    },
+    {
+      "name": "trendingDevelopers",
+      "description": "List trending developers and their popular repository for a period.",
+      "request": {
+        "method": "GET",
+        "url": "https://github.com/trending/developers?since=%7Bsince%7D",
+        "headers": {
+          "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/jxl,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+          "accept-language": "en-US,en;q=0.9",
+          "priority": "u=0, i",
+          "sec-ch-ua": "\"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Google Chrome\";v=\"156\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\"",
+          "sec-fetch-dest": "document",
+          "sec-fetch-mode": "navigate",
+          "sec-fetch-site": "none",
+          "sec-fetch-user": "?1",
+          "upgrade-insecure-requests": "1",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36"
+        }
+      },
+      "slots": [
+        {
+          "param": "since",
+          "at": [
+            "query:since"
+          ]
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://github.com/trending/developers?since={since}"
+      },
+      "match": {
+        "method": "GET",
+        "host": "github.com",
+        "path": "/trending/developers"
+      },
+      "response": {
+        "format": "html",
+        "contentType": "text/html; charset=utf-8",
+        "pick": [
+          "name",
+          "username=profile~github.com/([^/]+)$",
+          "popularRepo"
+        ],
+        "html": {
+          "items": "article.Box-row",
+          "fields": {
+            "name": "h1 a",
+            "profile": "h1 a@href",
+            "popularRepo": "h1.h4 a@href"
+          }
+        }
+      },
+      "params": [
+        {
+          "name": "since",
+          "type": "string",
+          "required": false,
+          "description": "time period for developer trends",
+          "example": "weekly",
+          "default": "daily",
+          "enum": [
+            "daily",
+            "weekly",
+            "monthly"
+          ]
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "checks": [
+        {
+          "args": {
+            "since": "monthly"
+          },
+          "expect": "result",
+          "purpose": "the monthly developer list has results"
+        }
+      ]
+    },
+    {
+      "name": "getLanguages",
+      "description": "List the languages and percentages displayed in a public repository sidebar.",
+      "request": {
+        "method": "GET",
+        "url": "https://github.com/%7Bowner%7D/%7Brepo%7D/_sidebar",
+        "headers": {
+          "accept": "application/json",
+          "accept-language": "en-US,en;q=0.9",
+          "content-type": "application/json",
+          "github-verified-fetch": "true",
+          "priority": "u=1, i",
+          "referer": "https://github.com/{owner}/{repo}",
+          "sec-ch-ua": "\"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Google Chrome\";v=\"156\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\"",
+          "sec-fetch-dest": "empty",
+          "sec-fetch-mode": "cors",
+          "sec-fetch-site": "same-origin",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36",
+          "x-fetch-nonce": "",
+          "x-github-client-version": "",
+          "x-requested-with": "XMLHttpRequest"
+        }
+      },
+      "slots": [
+        {
+          "param": "owner",
+          "at": [
+            "path:0"
+          ]
+        },
+        {
+          "param": "repo",
+          "at": [
+            "path:1"
+          ]
+        },
+        {
+          "param": "owner",
+          "at": [
+            "header:referer"
+          ],
+          "template": "https://github.com/{owner}/{repo}"
+        },
+        {
+          "ref": "session:getLanguages/x-fetch-nonce@%5B%22header%3Ax-fetch-nonce%22%5D",
+          "at": [
+            "header:x-fetch-nonce"
+          ]
+        },
+        {
+          "ref": "session:getLanguages/x-github-client-version@%5B%22header%3Ax-github-client-version%22%5D",
+          "at": [
+            "header:x-github-client-version"
+          ]
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://github.com/{owner}/{repo}"
+      },
+      "match": {
+        "method": "GET",
+        "host": "github.com",
+        "path": "/*/*/_sidebar"
+      },
+      "response": {
+        "format": "json",
+        "contentType": "application/json; charset=utf-8",
+        "extract": "languages.languages",
+        "pick": [
+          "name",
+          "percentage"
+        ],
+        "shape": {
+          "languages.languages[].name": "string",
+          "languages.languages[].percentage": "number"
+        }
+      },
+      "params": [
+        {
+          "name": "owner",
+          "type": "string",
+          "required": true,
+          "description": "the repository owner's user or organization name",
+          "example": "nodejs"
+        },
+        {
+          "name": "repo",
+          "type": "string",
+          "required": true,
+          "description": "the repository name",
+          "example": "node"
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "checks": [
+        {
+          "args": {
+            "owner": "rust-lang",
+            "repo": "rust"
+          },
+          "expect": "result",
+          "purpose": "another repository has a different language breakdown"
         }
       ]
     }

@@ -1,0 +1,101 @@
+{
+  "name": "substack",
+  "displayName": "Substack",
+  "baseUrl": "https://substack.com",
+  "description": "Find public Substack profiles and their primary publications.",
+  "operations": [
+    {
+      "name": "searchPublications",
+      "description": "Search public profiles and their primary publications.",
+      "request": {
+        "method": "GET",
+        "url": "https://substack.com/api/v1/profile/search?query=%7Bq%7D&page=0",
+        "headers": {
+          "accept": "*/*",
+          "accept-language": "en-US,en;q=0.9",
+          "cache-control": "max-age=0",
+          "priority": "u=1, i",
+          "referer": "https://substack.com/search/{q}?searching=profile",
+          "sec-ch-ua": "\"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Google Chrome\";v=\"156\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\"",
+          "sec-fetch-dest": "empty",
+          "sec-fetch-mode": "cors",
+          "sec-fetch-site": "same-origin",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36"
+        }
+      },
+      "slots": [
+        {
+          "param": "q",
+          "at": [
+            "query:query"
+          ]
+        },
+        {
+          "param": "q",
+          "at": [
+            "header:referer"
+          ],
+          "template": "https://substack.com/search/{q}?searching=profile"
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://substack.com/search/{q}?searching=profile"
+      },
+      "match": {
+        "method": "GET",
+        "host": "substack.com",
+        "path": "/api/v1/profile/search"
+      },
+      "response": {
+        "format": "json",
+        "contentType": "",
+        "extract": "results",
+        "pick": [
+          "name=primaryPublication.name",
+          "subdomain=primaryPublication.subdomain",
+          "handle",
+          "bio",
+          "subscribers=subscriberCountString"
+        ],
+        "shape": {
+          "results[].handle": "string",
+          "results[].bio": "string",
+          "results[].primaryPublication.subdomain": "null",
+          "results[].primaryPublication.name": "null",
+          "results[].subscriberCountString": "null"
+        }
+      },
+      "params": [
+        {
+          "name": "q",
+          "type": "string",
+          "required": true,
+          "example": "rust",
+          "description": "Words to search for in public profiles."
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "checks": [
+        {
+          "args": {
+            "q": "astronomy"
+          },
+          "expect": "result",
+          "purpose": "Held-out profile search"
+        },
+        {
+          "args": {
+            "q": "zzzxqvnonexistent314159"
+          },
+          "expect": "empty",
+          "purpose": "No matching profiles"
+        }
+      ]
+    }
+  ]
+}

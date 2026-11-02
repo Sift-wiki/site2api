@@ -1,0 +1,295 @@
+{
+  "name": "guardian",
+  "displayName": "The Guardian",
+  "baseUrl": "https://www.theguardian.com",
+  "description": "Read Guardian news fronts, articles and topic pages.",
+  "operations": [
+    {
+      "name": "getFront",
+      "description": "Read story cards from a Guardian front.",
+      "request": {
+        "method": "GET",
+        "url": "https://www.theguardian.com/%7Bfront%7D",
+        "headers": {
+          "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/jxl,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+          "accept-language": "en-US,en;q=0.9",
+          "priority": "u=0, i",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\"",
+          "sec-fetch-dest": "document",
+          "sec-fetch-mode": "navigate",
+          "sec-fetch-site": "none",
+          "sec-fetch-user": "?1",
+          "upgrade-insecure-requests": "1",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36"
+        }
+      },
+      "slots": [
+        {
+          "param": "front",
+          "at": [
+            "path:0"
+          ]
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://www.theguardian.com/{front}"
+      },
+      "match": {
+        "method": "GET",
+        "host": "www.theguardian.com",
+        "path": "/*"
+      },
+      "response": {
+        "format": "html",
+        "contentType": "text/html; charset=UTF-8",
+        "html": {
+          "items": "div[data-format-theme]:has(h3.card-headline):has(a[href])",
+          "fields": {
+            "title": ".headline-text",
+            "url": "a@href",
+            "kicker": "h3 div",
+            "standfirst": "span:has(> div > div)",
+            "date": "time@datetime"
+          }
+        }
+      },
+      "params": [
+        {
+          "name": "front",
+          "type": "string",
+          "required": false,
+          "description": "Single front path segment, such as international, world or business.",
+          "example": "international",
+          "default": "international"
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "checks": [
+        {
+          "args": { "front": "technology" },
+          "expect": "result",
+          "purpose": "Held-out public front"
+        }
+      ]
+    },
+    {
+      "name": "getArticle",
+      "description": "Read the metadata and paragraphs of a standard Guardian article.",
+      "request": {
+        "method": "GET",
+        "url": "https://www.theguardian.com/%7Bsection%7D/%7Byear%7D/%7Bmonth%7D/%7Bday%7D/%7Bslug%7D",
+        "headers": {
+          "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/jxl,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+          "accept-language": "en-US,en;q=0.9",
+          "priority": "u=0, i",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\"",
+          "sec-fetch-dest": "document",
+          "sec-fetch-mode": "navigate",
+          "sec-fetch-site": "none",
+          "sec-fetch-user": "?1",
+          "upgrade-insecure-requests": "1",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36"
+        }
+      },
+      "slots": [
+        {
+          "param": "section",
+          "at": [
+            "path:0"
+          ]
+        },
+        {
+          "param": "year",
+          "at": [
+            "path:1"
+          ]
+        },
+        {
+          "param": "month",
+          "at": [
+            "path:2"
+          ]
+        },
+        {
+          "param": "day",
+          "at": [
+            "path:3"
+          ]
+        },
+        {
+          "param": "slug",
+          "at": [
+            "path:4"
+          ]
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://www.theguardian.com/{section}/{year}/{month}/{day}/{slug}"
+      },
+      "match": {
+        "method": "GET",
+        "host": "www.theguardian.com",
+        "path": "/*/*/*/*/*"
+      },
+      "response": {
+        "format": "html",
+        "contentType": "text/html; charset=UTF-8",
+        "html": {
+          "items": "html",
+          "fields": {
+            "headline": "h1",
+            "standfirst": "[data-gu-name=standfirst]",
+            "byline": "[rel=author]",
+            "published": "meta[property=article:published_time]@content",
+            "updated": "meta[property=article:modified_time]@content",
+            "section": "meta[property=article:section]@content",
+            "keywords": "meta[property=article:tag]@content",
+            "paragraphs": "all:#maincontent > div > p"
+          }
+        }
+      },
+      "params": [
+        {
+          "name": "section",
+          "type": "string",
+          "required": true,
+          "description": "First path segment of the article URL.",
+          "example": "world"
+        },
+        {
+          "name": "year",
+          "type": "string",
+          "required": true,
+          "description": "Four-digit year in the article URL.",
+          "example": "2026"
+        },
+        {
+          "name": "month",
+          "type": "string",
+          "required": true,
+          "description": "Three-letter lowercase month in the article URL.",
+          "example": "nov"
+        },
+        {
+          "name": "day",
+          "type": "string",
+          "required": true,
+          "description": "Two-digit day in the article URL.",
+          "example": "01"
+        },
+        {
+          "name": "slug",
+          "type": "string",
+          "required": true,
+          "description": "Final slug segment of the article URL.",
+          "example": "ukraine-defies-trump-resumes-attacks-russian-oil"
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "checks": [
+        {
+          "args": {
+            "section": "business",
+            "year": "2026",
+            "month": "oct",
+            "day": "29",
+            "slug": "binance-crypto-exchange-hack"
+          },
+          "expect": "result",
+          "purpose": "Held-out public article"
+        }
+      ]
+    },
+    {
+      "name": "getTag",
+      "description": "Read recent story cards from a two-segment Guardian topic page.",
+      "request": {
+        "method": "GET",
+        "url": "https://www.theguardian.com/%7Bsection%7D/%7Btag%7D",
+        "headers": {
+          "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/jxl,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+          "accept-language": "en-US,en;q=0.9",
+          "priority": "u=0, i",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\"",
+          "sec-fetch-dest": "document",
+          "sec-fetch-mode": "navigate",
+          "sec-fetch-site": "none",
+          "sec-fetch-user": "?1",
+          "upgrade-insecure-requests": "1",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36"
+        }
+      },
+      "slots": [
+        {
+          "param": "section",
+          "at": [
+            "path:0"
+          ]
+        },
+        {
+          "param": "tag",
+          "at": [
+            "path:1"
+          ]
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://www.theguardian.com/{section}/{tag}"
+      },
+      "match": {
+        "method": "GET",
+        "host": "www.theguardian.com",
+        "path": "/*/*"
+      },
+      "response": {
+        "format": "html",
+        "contentType": "text/html; charset=UTF-8",
+        "html": {
+          "items": "div[data-format-theme]:has(h3.card-headline):has(a[href])",
+          "fields": {
+            "title": ".headline-text",
+            "url": "a@href",
+            "date": "time@datetime",
+            "kicker": "h3 div"
+          }
+        }
+      },
+      "params": [
+        {
+          "name": "section",
+          "type": "string",
+          "required": true,
+          "description": "First segment of the topic path, such as technology or world.",
+          "example": "technology"
+        },
+        {
+          "name": "tag",
+          "type": "string",
+          "required": true,
+          "description": "Second segment of the topic path, such as artificialintelligenceai.",
+          "example": "artificialintelligenceai"
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "checks": [
+        {
+          "args": { "section": "world", "tag": "russia" },
+          "expect": "result",
+          "purpose": "Held-out public topic"
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,292 @@
+{
+  "name": "weathergov",
+  "displayName": "National Weather Service",
+  "baseUrl": "https://forecast.weather.gov",
+  "description": "Get public US National Weather Service point forecasts, hourly tables, and current weather observations.",
+  "operations": [
+    {
+      "name": "getForecast",
+      "description": "Get the National Weather Service forecast for a US location, in aligned period arrays.",
+      "request": {
+        "method": "GET",
+        "url": "https://forecast.weather.gov/MapClick.php?lat=%7Blat%7D&lon=%7Blon%7D&FcstType=json",
+        "headers": {
+          "upgrade-insecure-requests": "1",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36",
+          "sec-ch-ua": "\"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Google Chrome\";v=\"156\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\""
+        }
+      },
+      "slots": [
+        {
+          "param": "lat",
+          "at": [
+            "query:lat"
+          ]
+        },
+        {
+          "param": "lon",
+          "at": [
+            "query:lon"
+          ]
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://forecast.weather.gov/MapClick.php?lat={lat}&lon={lon}&FcstType=json"
+      },
+      "match": {
+        "method": "GET",
+        "host": "forecast.weather.gov",
+        "path": "/MapClick.php"
+      },
+      "response": {
+        "format": "json",
+        "contentType": "application/json;charset=UTF-8",
+        "extract": ".",
+        "pick": [
+          "location=location.areaDescription",
+          "periods=time.startPeriodName",
+          "startTimes=time.startValidTime",
+          "temperature=data.temperature",
+          "shortForecast=data.weather",
+          "detailedForecast=data.text",
+          "precipitationProbability=data.pop"
+        ]
+      },
+      "params": [
+        {
+          "name": "lat",
+          "type": "string",
+          "required": true,
+          "description": "Latitude in decimal degrees for a US location.",
+          "example": "47.6062"
+        },
+        {
+          "name": "lon",
+          "type": "string",
+          "required": true,
+          "description": "Longitude in decimal degrees for a US location.",
+          "example": "-122.3321"
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "checks": [
+        {
+          "args": {
+            "lat": "39.7392",
+            "lon": "-104.9903"
+          },
+          "expect": "result",
+          "purpose": "Denver returns a point forecast distinct from Seattle."
+        }
+      ]
+    },
+    {
+      "name": "getCurrent",
+      "description": "Get the site's reported current conditions for a US location.",
+      "request": {
+        "method": "GET",
+        "url": "https://forecast.weather.gov/MapClick.php?lat=%7Blat%7D&lon=%7Blon%7D&FcstType=json",
+        "headers": {
+          "upgrade-insecure-requests": "1",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36",
+          "sec-ch-ua": "\"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Google Chrome\";v=\"156\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\""
+        }
+      },
+      "slots": [
+        {
+          "param": "lat",
+          "at": [
+            "query:lat"
+          ]
+        },
+        {
+          "param": "lon",
+          "at": [
+            "query:lon"
+          ]
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://forecast.weather.gov/MapClick.php?lat={lat}&lon={lon}&FcstType=json"
+      },
+      "match": {
+        "method": "GET",
+        "host": "forecast.weather.gov",
+        "path": "/MapClick.php"
+      },
+      "response": {
+        "format": "json",
+        "contentType": "application/json;charset=UTF-8",
+        "extract": "currentobservation",
+        "pick": [
+          "station=name",
+          "stationId=id",
+          "observationTime=Date",
+          "temperature=Temp",
+          "humidity=Relh",
+          "windSpeed=Winds",
+          "windDirection=Windd",
+          "windGust=Gust",
+          "visibility=Visibility",
+          "conditions=Weather"
+        ],
+        "shape": {
+          "currentobservation.id": "string",
+          "currentobservation.name": "string",
+          "currentobservation.Date": "string",
+          "currentobservation.Temp": "string",
+          "currentobservation.Relh": "string",
+          "currentobservation.Winds": "string",
+          "currentobservation.Windd": "string",
+          "currentobservation.Gust": "string",
+          "currentobservation.Weather": "string",
+          "currentobservation.Visibility": "string"
+        }
+      },
+      "params": [
+        {
+          "name": "lat",
+          "type": "string",
+          "required": true,
+          "description": "Latitude in decimal degrees for a US location.",
+          "example": "47.6062"
+        },
+        {
+          "name": "lon",
+          "type": "string",
+          "required": true,
+          "description": "Longitude in decimal degrees for a US location.",
+          "example": "-122.3321"
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "checks": [
+        {
+          "args": {
+            "lat": "39.7392",
+            "lon": "-104.9903"
+          },
+          "expect": "result",
+          "purpose": "Denver returns a current observation distinct from Seattle."
+        }
+      ]
+    },
+    {
+      "name": "getHourly",
+      "description": "Get the National Weather Service tabular hourly forecast for a US location.",
+      "request": {
+        "method": "GET",
+        "url": "https://forecast.weather.gov/MapClick.php?lat=%7Blat%7D&lon=%7Blon%7D&FcstType=digital",
+        "headers": {
+          "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/jxl,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+          "accept-language": "en-US,en;q=0.9",
+          "sec-fetch-dest": "document",
+          "sec-fetch-mode": "navigate",
+          "sec-fetch-site": "none",
+          "sec-fetch-user": "?1",
+          "upgrade-insecure-requests": "1",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36",
+          "sec-ch-ua": "\"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Google Chrome\";v=\"156\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\""
+        }
+      },
+      "slots": [
+        {
+          "param": "lat",
+          "at": [
+            "query:lat"
+          ]
+        },
+        {
+          "param": "lon",
+          "at": [
+            "query:lon"
+          ]
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://forecast.weather.gov/MapClick.php?lat={lat}&lon={lon}&FcstType=digital"
+      },
+      "match": {
+        "method": "GET",
+        "host": "forecast.weather.gov",
+        "path": "/MapClick.php"
+      },
+      "response": {
+        "format": "html",
+        "contentType": "text/html; charset=UTF-8",
+        "html": {
+          "items": "table:has(td.date) tr[align=center]",
+          "fields": {
+            "element": "td:first-child",
+            "hour01": "td:nth-child(2)",
+            "hour02": "td:nth-child(3)",
+            "hour03": "td:nth-child(4)",
+            "hour04": "td:nth-child(5)",
+            "hour05": "td:nth-child(6)",
+            "hour06": "td:nth-child(7)",
+            "hour07": "td:nth-child(8)",
+            "hour08": "td:nth-child(9)",
+            "hour09": "td:nth-child(10)",
+            "hour10": "td:nth-child(11)",
+            "hour11": "td:nth-child(12)",
+            "hour12": "td:nth-child(13)",
+            "hour13": "td:nth-child(14)",
+            "hour14": "td:nth-child(15)",
+            "hour15": "td:nth-child(16)",
+            "hour16": "td:nth-child(17)",
+            "hour17": "td:nth-child(18)",
+            "hour18": "td:nth-child(19)",
+            "hour19": "td:nth-child(20)",
+            "hour20": "td:nth-child(21)",
+            "hour21": "td:nth-child(22)",
+            "hour22": "td:nth-child(23)",
+            "hour23": "td:nth-child(24)",
+            "hour24": "td:nth-child(25)"
+          }
+        }
+      },
+      "params": [
+        {
+          "name": "lat",
+          "type": "string",
+          "required": true,
+          "description": "Latitude in decimal degrees for a US location.",
+          "example": "47.6062"
+        },
+        {
+          "name": "lon",
+          "type": "string",
+          "required": true,
+          "description": "Longitude in decimal degrees for a US location.",
+          "example": "-122.3321"
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "checks": [
+        {
+          "args": {
+            "lat": "39.7392",
+            "lon": "-104.9903"
+          },
+          "expect": "result",
+          "purpose": "Denver returns an hourly table distinct from Seattle."
+        }
+      ]
+    }
+  ]
+}

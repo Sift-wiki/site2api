@@ -1,0 +1,398 @@
+{
+  "name": "openstreetmap",
+  "displayName": "OpenStreetMap",
+  "baseUrl": "https://www.openstreetmap.org",
+  "description": "Reverse-geocode coordinates and get driving, walking, and cycling directions using OpenStreetMap's public map.",
+  "operations": [
+    {
+      "name": "reverseGeocode",
+      "description": "Reverse-geocode coordinates using the map directions panel.",
+      "request": {
+        "method": "GET",
+        "url": "https://nominatim.openstreetmap.org/reverse?lat=%7Blat%7D&lon=%7Blon%7D&format=json",
+        "headers": {
+          "accept": "*/*",
+          "accept-language": "en-US,en;q=0.9",
+          "origin": "https://www.openstreetmap.org",
+          "priority": "u=1, i",
+          "referer": "https://www.openstreetmap.org/",
+          "sec-ch-ua": "\"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Google Chrome\";v=\"156\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\"",
+          "sec-fetch-dest": "empty",
+          "sec-fetch-mode": "cors",
+          "sec-fetch-site": "same-site",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36"
+        }
+      },
+      "slots": [
+        {
+          "param": "lat",
+          "at": [
+            "query:lat"
+          ]
+        },
+        {
+          "param": "lon",
+          "at": [
+            "query:lon"
+          ]
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://www.openstreetmap.org/directions?engine=fossgis_osrm_car&route={lat}%2C{lon}%3B"
+      },
+      "match": {
+        "method": "GET",
+        "host": "nominatim.openstreetmap.org",
+        "path": "/reverse"
+      },
+      "response": {
+        "format": "json",
+        "contentType": "application/json; charset=utf-8",
+        "extract": ".",
+        "pick": [
+          "displayName=display_name",
+          "address",
+          "lat",
+          "lon",
+          "osmType=osm_type",
+          "osmId=osm_id"
+        ]
+      },
+      "params": [
+        {
+          "name": "lat",
+          "type": "string",
+          "required": true,
+          "description": "Latitude in decimal degrees.",
+          "example": "48.85826"
+        },
+        {
+          "name": "lon",
+          "type": "string",
+          "required": true,
+          "description": "Longitude in decimal degrees.",
+          "example": "2.2945"
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "checks": [
+        {
+          "args": {
+            "lat": "52.51627",
+            "lon": "13.3777"
+          },
+          "expect": "result",
+          "purpose": "A second public landmark returns a reverse-geocoded place."
+        }
+      ]
+    },
+    {
+      "name": "getCarRoute",
+      "description": "Get an OSRM car route between two coordinates.",
+      "request": {
+        "method": "GET",
+        "url": "https://routing.openstreetmap.de/routed-car/route/v1/driving/%7BfromLon%7D,%7BfromLat%7D;%7BtoLon%7D,%7BtoLat%7D?overview=false&geometries=polyline&steps=true",
+        "headers": {
+          "accept": "*/*",
+          "accept-language": "en-US,en;q=0.9",
+          "origin": "https://www.openstreetmap.org",
+          "priority": "u=1, i",
+          "referer": "https://www.openstreetmap.org/",
+          "sec-ch-ua": "\"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Google Chrome\";v=\"156\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\"",
+          "sec-fetch-dest": "empty",
+          "sec-fetch-mode": "cors",
+          "sec-fetch-site": "cross-site",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36"
+        }
+      },
+      "slots": [
+        {
+          "param": "fromLat",
+          "at": [
+            "path:4"
+          ],
+          "template": "{fromLon},{fromLat};{toLon},{toLat}"
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://www.openstreetmap.org/directions?engine=fossgis_osrm_car&route={fromLat}%2C{fromLon}%3B{toLat}%2C{toLon}"
+      },
+      "match": {
+        "method": "GET",
+        "host": "routing.openstreetmap.de",
+        "path": "/routed-car/route/v1/driving/*"
+      },
+      "response": {
+        "format": "json",
+        "contentType": "application/json; charset=UTF-8",
+        "extract": "routes[0]",
+        "pick": [
+          "distance",
+          "duration",
+          "stepNames=legs[0].steps[*].name",
+          "stepDistances=legs[0].steps[*].distance",
+          "stepManeuvers=legs[0].steps[*].maneuver"
+        ],
+        "shape": {
+          "routes[].duration": "number",
+          "routes[].distance": "number"
+        }
+      },
+      "params": [
+        {
+          "name": "fromLat",
+          "type": "string",
+          "required": true,
+          "description": "Starting latitude in decimal degrees.",
+          "example": "48.85826"
+        },
+        {
+          "name": "fromLon",
+          "type": "string",
+          "required": true,
+          "description": "Starting longitude in decimal degrees.",
+          "example": "2.2945"
+        },
+        {
+          "name": "toLat",
+          "type": "string",
+          "required": true,
+          "description": "Destination latitude in decimal degrees.",
+          "example": "48.8606"
+        },
+        {
+          "name": "toLon",
+          "type": "string",
+          "required": true,
+          "description": "Destination longitude in decimal degrees.",
+          "example": "2.3376"
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "checks": [
+        {
+          "args": {
+            "fromLat": "52.51627",
+            "fromLon": "13.3777",
+            "toLat": "52.5208",
+            "toLon": "13.4095"
+          },
+          "expect": "result",
+          "purpose": "A second public landmark route returns driving directions."
+        }
+      ]
+    },
+    {
+      "name": "getFootRoute",
+      "description": "Get an OSRM walking route between two coordinates.",
+      "request": {
+        "method": "GET",
+        "url": "https://routing.openstreetmap.de/routed-foot/route/v1/driving/%7BfromLon%7D,%7BfromLat%7D;%7BtoLon%7D,%7BtoLat%7D?overview=false&geometries=polyline&steps=true",
+        "headers": {
+          "accept": "*/*",
+          "accept-language": "en-US,en;q=0.9",
+          "origin": "https://www.openstreetmap.org",
+          "priority": "u=1, i",
+          "referer": "https://www.openstreetmap.org/",
+          "sec-ch-ua": "\"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Google Chrome\";v=\"156\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\"",
+          "sec-fetch-dest": "empty",
+          "sec-fetch-mode": "cors",
+          "sec-fetch-site": "cross-site",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36"
+        }
+      },
+      "slots": [
+        {
+          "param": "fromLat",
+          "at": [
+            "path:4"
+          ],
+          "template": "{fromLon},{fromLat};{toLon},{toLat}"
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://www.openstreetmap.org/directions?engine=fossgis_osrm_foot&route={fromLat}%2C{fromLon}%3B{toLat}%2C{toLon}"
+      },
+      "match": {
+        "method": "GET",
+        "host": "routing.openstreetmap.de",
+        "path": "/routed-foot/route/v1/driving/*"
+      },
+      "response": {
+        "format": "json",
+        "contentType": "application/json; charset=UTF-8",
+        "extract": "routes[0]",
+        "pick": [
+          "distance",
+          "duration",
+          "stepNames=legs[0].steps[*].name",
+          "stepDistances=legs[0].steps[*].distance",
+          "stepManeuvers=legs[0].steps[*].maneuver"
+        ],
+        "shape": {
+          "routes[].duration": "number",
+          "routes[].distance": "number"
+        }
+      },
+      "params": [
+        {
+          "name": "fromLat",
+          "type": "string",
+          "required": true,
+          "description": "Starting latitude in decimal degrees.",
+          "example": "48.85826"
+        },
+        {
+          "name": "fromLon",
+          "type": "string",
+          "required": true,
+          "description": "Starting longitude in decimal degrees.",
+          "example": "2.2945"
+        },
+        {
+          "name": "toLat",
+          "type": "string",
+          "required": true,
+          "description": "Destination latitude in decimal degrees.",
+          "example": "48.8606"
+        },
+        {
+          "name": "toLon",
+          "type": "string",
+          "required": true,
+          "description": "Destination longitude in decimal degrees.",
+          "example": "2.3376"
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "checks": [
+        {
+          "args": {
+            "fromLat": "52.51627",
+            "fromLon": "13.3777",
+            "toLat": "52.5208",
+            "toLon": "13.4095"
+          },
+          "expect": "result",
+          "purpose": "A second public landmark route returns walking directions."
+        }
+      ]
+    },
+    {
+      "name": "getBikeRoute",
+      "description": "Get an OSRM bicycle route between two coordinates.",
+      "request": {
+        "method": "GET",
+        "url": "https://routing.openstreetmap.de/routed-bike/route/v1/driving/%7BfromLon%7D,%7BfromLat%7D;%7BtoLon%7D,%7BtoLat%7D?overview=false&geometries=polyline&steps=true",
+        "headers": {
+          "accept": "*/*",
+          "accept-language": "en-US,en;q=0.9",
+          "origin": "https://www.openstreetmap.org",
+          "priority": "u=1, i",
+          "referer": "https://www.openstreetmap.org/",
+          "sec-ch-ua": "\"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Google Chrome\";v=\"156\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\"",
+          "sec-fetch-dest": "empty",
+          "sec-fetch-mode": "cors",
+          "sec-fetch-site": "cross-site",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36"
+        }
+      },
+      "slots": [
+        {
+          "param": "fromLat",
+          "at": [
+            "path:4"
+          ],
+          "template": "{fromLon},{fromLat};{toLon},{toLat}"
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://www.openstreetmap.org/directions?engine=fossgis_osrm_bicycle&route={fromLat}%2C{fromLon}%3B{toLat}%2C{toLon}"
+      },
+      "match": {
+        "method": "GET",
+        "host": "routing.openstreetmap.de",
+        "path": "/routed-bike/route/v1/driving/*"
+      },
+      "response": {
+        "format": "json",
+        "contentType": "application/json; charset=UTF-8",
+        "extract": "routes[0]",
+        "pick": [
+          "distance",
+          "duration",
+          "stepNames=legs[0].steps[*].name",
+          "stepDistances=legs[0].steps[*].distance",
+          "stepManeuvers=legs[0].steps[*].maneuver"
+        ],
+        "shape": {
+          "routes[].duration": "number",
+          "routes[].distance": "number"
+        }
+      },
+      "params": [
+        {
+          "name": "fromLat",
+          "type": "string",
+          "required": true,
+          "description": "Starting latitude in decimal degrees.",
+          "example": "48.85826"
+        },
+        {
+          "name": "fromLon",
+          "type": "string",
+          "required": true,
+          "description": "Starting longitude in decimal degrees.",
+          "example": "2.2945"
+        },
+        {
+          "name": "toLat",
+          "type": "string",
+          "required": true,
+          "description": "Destination latitude in decimal degrees.",
+          "example": "48.8606"
+        },
+        {
+          "name": "toLon",
+          "type": "string",
+          "required": true,
+          "description": "Destination longitude in decimal degrees.",
+          "example": "2.3376"
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "checks": [
+        {
+          "args": {
+            "fromLat": "52.51627",
+            "fromLon": "13.3777",
+            "toLat": "52.5208",
+            "toLon": "13.4095"
+          },
+          "expect": "result",
+          "purpose": "A second public landmark route returns cycling directions."
+        }
+      ]
+    }
+  ]
+}

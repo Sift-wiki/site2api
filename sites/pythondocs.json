@@ -1,0 +1,225 @@
+{
+  "name": "pythondocs",
+  "displayName": "Python Documentation",
+  "baseUrl": "https://docs.python.org",
+  "description": "Read Python 3 documentation pages and standard library API entries, and browse the module index without an account.",
+  "operations": [
+    {
+      "name": "getModule",
+      "description": "Read documented Python API entries from a standard library documentation page.",
+      "request": {
+        "method": "GET",
+        "url": "https://docs.python.org/3/library/%7Bmodule%7D.html",
+        "headers": {
+          "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/jxl,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+          "accept-language": "en-US,en;q=0.9",
+          "priority": "u=0, i",
+          "sec-ch-ua": "\"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Google Chrome\";v=\"156\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\"",
+          "sec-fetch-dest": "document",
+          "sec-fetch-mode": "navigate",
+          "sec-fetch-site": "none",
+          "sec-fetch-user": "?1",
+          "upgrade-insecure-requests": "1",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36"
+        }
+      },
+      "slots": [
+        {
+          "param": "module",
+          "at": [
+            "path:2"
+          ],
+          "template": "{module}.html"
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://docs.python.org/3/library/{module}.html"
+      },
+      "match": {
+        "method": "GET",
+        "host": "docs.python.org",
+        "path": "/3/library/*"
+      },
+      "response": {
+        "format": "html",
+        "contentType": "text/html",
+        "html": {
+          "items": "dl.py",
+          "fields": {
+            "name": ":scope > dt@id",
+            "kind": "@class",
+            "signature": ":scope > dt",
+            "description": ":scope > dd > p"
+          }
+        }
+      },
+      "params": [
+        {
+          "name": "module",
+          "type": "string",
+          "required": true,
+          "example": "json",
+          "description": "Library documentation page basename without .html, for example json or asyncio-task."
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "checks": [
+        {
+          "args": {
+            "module": "pathlib"
+          },
+          "expect": "result",
+          "purpose": "A different module has documented API entries"
+        },
+        {
+          "args": {
+            "module": "zzqqxxwv_no_such_module"
+          },
+          "expect": "input",
+          "purpose": "A nonexistent module page returns 404"
+        }
+      ]
+    },
+    {
+      "name": "listModules",
+      "description": "List linked entries in the Python module index with their descriptions and deprecation markers.",
+      "request": {
+        "method": "GET",
+        "url": "https://docs.python.org/3/py-modindex.html",
+        "headers": {
+          "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/jxl,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+          "accept-language": "en-US,en;q=0.9",
+          "priority": "u=0, i",
+          "sec-ch-ua": "\"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Google Chrome\";v=\"156\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\"",
+          "sec-fetch-dest": "document",
+          "sec-fetch-mode": "navigate",
+          "sec-fetch-site": "none",
+          "sec-fetch-user": "?1",
+          "upgrade-insecure-requests": "1",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36"
+        }
+      },
+      "slots": [],
+      "volatile": [],
+      "trigger": {
+        "url": "https://docs.python.org/3/py-modindex.html"
+      },
+      "match": {
+        "method": "GET",
+        "host": "docs.python.org",
+        "path": "/3/py-modindex.html"
+      },
+      "response": {
+        "format": "html",
+        "contentType": "text/html",
+        "html": {
+          "items": "table.indextable tr:has(td a)",
+          "fields": {
+            "name": "td:nth-child(2) a",
+            "url": "td:nth-child(2) a@href",
+            "summary": "td:nth-child(3) em",
+            "deprecated": "td:nth-child(3) strong"
+          }
+        }
+      },
+      "params": [],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "checks": [
+        {
+          "args": {},
+          "expect": "result",
+          "purpose": "The public module index lists modules"
+        }
+      ]
+    },
+    {
+      "name": "getPage",
+      "description": "Read the title, headings, and paragraphs of a Python documentation page.",
+      "request": {
+        "method": "GET",
+        "url": "https://docs.python.org/3/%7Bpath%7D.html",
+        "headers": {
+          "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/jxl,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+          "accept-language": "en-US,en;q=0.9",
+          "priority": "u=0, i",
+          "sec-ch-ua": "\"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Google Chrome\";v=\"156\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\"",
+          "sec-fetch-dest": "document",
+          "sec-fetch-mode": "navigate",
+          "sec-fetch-site": "none",
+          "sec-fetch-user": "?1",
+          "upgrade-insecure-requests": "1",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36"
+        }
+      },
+      "slots": [
+        {
+          "param": "path",
+          "at": [
+            "path:1"
+          ],
+          "template": "{path}.html"
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://docs.python.org/3/{path}.html"
+      },
+      "match": {
+        "method": "GET",
+        "host": "docs.python.org",
+        "path": "/3/*"
+      },
+      "response": {
+        "format": "html",
+        "contentType": "text/html",
+        "html": {
+          "items": "div.body",
+          "fields": {
+            "title": "h1",
+            "headings": "all:section h2, section h3",
+            "paragraphs": "all:section > p"
+          }
+        }
+      },
+      "params": [
+        {
+          "name": "path",
+          "type": "string",
+          "required": true,
+          "example": "tutorial/classes",
+          "description": "Path after /3/ without .html, for example tutorial/classes or library/json."
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "checks": [
+        {
+          "args": {
+            "path": "tutorial/datastructures"
+          },
+          "expect": "result",
+          "purpose": "A different tutorial page has content"
+        },
+        {
+          "args": {
+            "path": "tutorial/zzqqxxwv_no_such_page"
+          },
+          "expect": "input",
+          "purpose": "A nonexistent page returns 404"
+        }
+      ]
+    }
+  ]
+}

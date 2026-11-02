@@ -1,0 +1,121 @@
+{
+  "name": "workable",
+  "displayName": "Workable job boards",
+  "baseUrl": "https://apply.workable.com",
+  "description": "Public job postings on Workable-hosted company boards.",
+  "operations": [
+    {
+      "name": "getJob",
+      "description": "Read a public Workable job posting and its description, requirements and benefits.",
+      "request": {
+        "method": "GET",
+        "url": "https://apply.workable.com/api/v2/accounts/%7Bcompany%7D/jobs/%7Bshortcode%7D",
+        "headers": {
+          "accept": "application/json, text/plain, */*",
+          "accept-language": "en",
+          "priority": "u=1, i",
+          "referer": "https://apply.workable.com/{company}/j/{shortcode}/",
+          "sec-ch-ua": "\"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Google Chrome\";v=\"156\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\"",
+          "sec-fetch-dest": "empty",
+          "sec-fetch-mode": "cors",
+          "sec-fetch-site": "same-origin",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36"
+        }
+      },
+      "slots": [
+        {
+          "param": "company",
+          "at": [
+            "path:3"
+          ]
+        },
+        {
+          "param": "shortcode",
+          "at": [
+            "path:5"
+          ]
+        },
+        {
+          "param": "company",
+          "at": [
+            "header:referer"
+          ],
+          "template": "https://apply.workable.com/{company}/j/{shortcode}/"
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://apply.workable.com/{company}/j/{shortcode}/"
+      },
+      "match": {
+        "method": "GET",
+        "host": "apply.workable.com",
+        "path": "/api/v2/accounts/*/jobs/*"
+      },
+      "response": {
+        "format": "json",
+        "contentType": "application/json; charset=utf-8",
+        "pick": [
+          "shortcode",
+          "title",
+          "department",
+          "location",
+          "locations",
+          "remote",
+          "workplace",
+          "type",
+          "description",
+          "requirements",
+          "benefits",
+          "published"
+        ],
+        "shape": {
+          "shortcode": "string",
+          "title": "string",
+          "remote": "boolean",
+          "location": "object",
+          "locations": "array",
+          "published": "string",
+          "department": "array",
+          "workplace": "string",
+          "description": "string",
+          "requirements": "string",
+          "benefits": "string"
+        }
+      },
+      "params": [
+        {
+          "name": "company",
+          "type": "string",
+          "required": true,
+          "description": "The company board slug from apply.workable.com/<company>.",
+          "example": "humanintelligence",
+          "pattern": "[A-Za-z0-9_-]+"
+        },
+        {
+          "name": "shortcode",
+          "type": "string",
+          "required": true,
+          "description": "The job shortcode from the /j/<shortcode> posting URL.",
+          "example": "C8A97F7C66",
+          "pattern": "[A-Za-z0-9]+"
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "checks": [
+        {
+          "args": {
+            "company": "thrive-7",
+            "shortcode": "FCAAE7F7E9"
+          },
+          "expect": "result",
+          "purpose": "A second public company and posting."
+        }
+      ]
+    }
+  ]
+}

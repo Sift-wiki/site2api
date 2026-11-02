@@ -286,6 +286,182 @@
           "purpose": "Reject path syntax locally before sending."
         }
       ]
+    },
+    {
+      "name": "search",
+      "description": "Search public Google Play app cards in document order.",
+      "request": {
+        "method": "GET",
+        "url": "https://play.google.com/store/search?q=%7Bq%7D&c=apps",
+        "headers": {
+          "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/jxl,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+          "upgrade-insecure-requests": "1",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36",
+          "sec-ch-ua": "\"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Google Chrome\";v=\"156\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\""
+        }
+      },
+      "slots": [
+        {
+          "param": "q",
+          "at": [
+            "query:q"
+          ]
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://play.google.com/store/search?q={q}&c=apps"
+      },
+      "match": {
+        "method": "GET",
+        "host": "play.google.com",
+        "path": "/store/search"
+      },
+      "response": {
+        "format": "html",
+        "contentType": "text/html; charset=utf-8",
+        "pick": [
+          "packageId=packageId~[?&]id=([^&]+)",
+          "title",
+          "developer",
+          "ratingDisplay",
+          "priceDisplay",
+          "icon"
+        ],
+        "html": {
+          "items": "div.fUEl2e > div.ULeU3b",
+          "fields": {
+            "packageId": "a.Si6A0c@href",
+            "title": "span.DdYX5",
+            "developer": "span.wMUdtb",
+            "ratingDisplay": "div[role=\"img\"]@aria-label",
+            "priceDisplay": "span.ePXqnb",
+            "icon": "div.j2FCNc img.T75of@src"
+          }
+        }
+      },
+      "params": [
+        {
+          "name": "q",
+          "type": "string",
+          "required": true,
+          "description": "Search words for Android apps.",
+          "example": "weather"
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "checks": [
+        {
+          "args": {
+            "q": "chess"
+          },
+          "expect": "result",
+          "purpose": "A different query returns a different set of app cards."
+        },
+        {
+          "args": {
+            "q": "notes"
+          },
+          "expect": "result",
+          "purpose": "Held-out search compared against the public search page."
+        }
+      ]
+    },
+    {
+      "name": "getReviews",
+      "description": "Read reviews shown in the initial public app listing document.",
+      "request": {
+        "method": "GET",
+        "url": "https://play.google.com/store/apps/details?id=%7BpackageId%7D",
+        "headers": {
+          "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/jxl,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+          "upgrade-insecure-requests": "1",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36",
+          "sec-ch-ua": "\"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Google Chrome\";v=\"156\"",
+          "sec-ch-ua-arch": "\"x86\"",
+          "sec-ch-ua-bitness": "\"64\"",
+          "sec-ch-ua-form-factors": "\"Desktop\"",
+          "sec-ch-ua-full-version": "\"156.0.8078.74\"",
+          "sec-ch-ua-full-version-list": "\"Not:A-Brand\";v=\"8.0.0.0\", \"Chromium\";v=\"156.0.8078.74\", \"Google Chrome\";v=\"156.0.8078.74\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-model": "\"\"",
+          "sec-ch-ua-platform": "\"macOS\"",
+          "sec-ch-ua-platform-version": "\"10_15_7\"",
+          "sec-ch-ua-wow64": "?0"
+        }
+      },
+      "slots": [
+        {
+          "param": "packageId",
+          "at": [
+            "query:id"
+          ]
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://play.google.com/store/apps/details?id={packageId}"
+      },
+      "match": {
+        "method": "GET",
+        "host": "play.google.com",
+        "path": "/store/apps/details"
+      },
+      "response": {
+        "format": "html",
+        "contentType": "text/html; charset=utf-8",
+        "html": {
+          "items": "div.EGFGHd",
+          "fields": {
+            "author": ".X5PpBb",
+            "ratingDisplay": "header [role=\"img\"]@aria-label",
+            "dateDisplay": "header .bp9Aid",
+            "text": ".h3YV2d",
+            "helpfulDisplay": ".AJTPZc"
+          }
+        }
+      },
+      "params": [
+        {
+          "name": "packageId",
+          "type": "string",
+          "required": true,
+          "description": "Android package ID copied from a public Google Play app link.",
+          "example": "com.spotify.music",
+          "pattern": "[A-Za-z][A-Za-z0-9_]*\\.[A-Za-z0-9_.]+",
+          "hint": "A dotted Android package ID, without URL or query syntax."
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "checks": [
+        {
+          "args": {
+            "packageId": "com.duolingo"
+          },
+          "expect": "result",
+          "purpose": "A second public listing has different reviews."
+        },
+        {
+          "args": {
+            "packageId": "org.mozilla.firefox"
+          },
+          "expect": "result",
+          "purpose": "Held-out reviews compared against the public listing."
+        },
+        {
+          "args": {
+            "packageId": "invalid/path"
+          },
+          "expect": "input",
+          "purpose": "Reject path syntax locally before sending."
+        }
+      ]
     }
   ]
 }

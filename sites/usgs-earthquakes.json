@@ -1,0 +1,306 @@
+{
+  "name": "usgs-earthquakes",
+  "displayName": "USGS Earthquakes",
+  "baseUrl": "https://earthquake.usgs.gov",
+  "description": "Explore recent earthquakes and search the USGS earthquake catalog.",
+  "operations": [
+    {
+      "name": "recent",
+      "description": "Get recent earthquakes from a magnitude and time-window feed.",
+      "request": {
+        "method": "GET",
+        "url": "https://earthquake.usgs.gov/earthquakes/feed/v1.0/summary/%7Bmagnitude%7D_%7Bperiod%7D.geojson",
+        "headers": {
+          "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/jxl,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+          "accept-language": "en-US,en;q=0.9",
+          "priority": "u=0, i",
+          "sec-ch-ua": "\"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Google Chrome\";v=\"156\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\"",
+          "sec-fetch-dest": "document",
+          "sec-fetch-mode": "navigate",
+          "sec-fetch-site": "none",
+          "sec-fetch-user": "?1",
+          "upgrade-insecure-requests": "1",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36"
+        }
+      },
+      "slots": [
+        {
+          "param": "magnitude",
+          "at": [
+            "path:4"
+          ],
+          "template": "{magnitude}_{period}.geojson"
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://earthquake.usgs.gov/earthquakes/feed/v1.0/summary/{magnitude}_{period}.geojson"
+      },
+      "match": {
+        "method": "GET",
+        "host": "earthquake.usgs.gov",
+        "path": "/earthquakes/feed/v1.0/summary/*"
+      },
+      "response": {
+        "format": "json",
+        "contentType": "application/json; charset=utf-8",
+        "extract": "features",
+        "pick": [
+          "id",
+          "magnitude=properties.mag",
+          "place=properties.place",
+          "time=properties.time",
+          "depth=geometry.coordinates[2]",
+          "coordinates=geometry.coordinates",
+          "tsunami=properties.tsunami",
+          "alert=properties.alert",
+          "url=properties.url"
+        ],
+        "shape": {
+          "features[].properties.mag": "number",
+          "features[].properties.place": "string",
+          "features[].properties.time": "number",
+          "features[].properties.url": "string",
+          "features[].properties.alert": "null",
+          "features[].properties.tsunami": "number",
+          "features[].geometry.coordinates": "array",
+          "features[].geometry.coordinates[]": "number",
+          "features[].id": "string"
+        }
+      },
+      "params": [
+        {
+          "name": "magnitude",
+          "type": "string",
+          "required": false,
+          "default": "2.5",
+          "description": "Minimum magnitude feed, or all or significant events.",
+          "example": "2.5",
+          "enum": [
+            "all",
+            "1.0",
+            "2.5",
+            "4.5",
+            "significant"
+          ]
+        },
+        {
+          "name": "period",
+          "type": "string",
+          "required": false,
+          "default": "day",
+          "description": "Time window covered by the feed.",
+          "example": "day",
+          "enum": [
+            "hour",
+            "day",
+            "week",
+            "month"
+          ]
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "checks": [
+        {
+          "args": { "magnitude": "all", "period": "day" },
+          "expect": "result",
+          "purpose": "The worldwide all-magnitude daily feed contains events."
+        }
+      ]
+    },
+    {
+      "name": "getEvent",
+      "description": "Get details and available product types for one earthquake.",
+      "request": {
+        "method": "GET",
+        "url": "https://earthquake.usgs.gov/fdsnws/event/1/query?eventid=%7BeventId%7D&format=geojson",
+        "headers": {
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36",
+          "referer": "https://earthquake.usgs.gov/earthquakes/eventpage/{eventId}/executive"
+        }
+      },
+      "slots": [
+        {
+          "param": "eventId",
+          "at": [
+            "query:eventid"
+          ]
+        },
+        {
+          "param": "eventId",
+          "at": [
+            "header:referer"
+          ],
+          "template": "https://earthquake.usgs.gov/earthquakes/eventpage/{eventId}/executive"
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://earthquake.usgs.gov/fdsnws/event/1/query?eventid={eventId}&format=geojson"
+      },
+      "match": {
+        "method": "GET",
+        "host": "earthquake.usgs.gov",
+        "path": "/fdsnws/event/1/query"
+      },
+      "response": {
+        "format": "json",
+        "contentType": "application/json; charset=utf-8",
+        "extract": ".",
+        "pick": [
+          "id",
+          "magnitude=properties.mag",
+          "type=properties.type",
+          "place=properties.place",
+          "time=properties.time",
+          "depth=geometry.coordinates[2]",
+          "coordinates=geometry.coordinates",
+          "felt=properties.felt",
+          "alert=properties.alert",
+          "tsunami=properties.tsunami",
+          "products=properties.types",
+          "url=properties.url"
+        ]
+      },
+      "params": [
+        {
+          "name": "eventId",
+          "type": "string",
+          "required": true,
+          "description": "USGS event identifier, as returned by recent or search.",
+          "example": "official20110311054624120_30"
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "checks": [
+        {
+          "args": { "eventId": "official20110311054624120_30" },
+          "expect": "result",
+          "purpose": "The historic Tohoku earthquake has event details."
+        }
+      ]
+    },
+    {
+      "name": "search",
+      "description": "Search the worldwide earthquake catalog by time and minimum magnitude.",
+      "request": {
+        "method": "GET",
+        "url": "https://earthquake.usgs.gov/fdsnws/event/1/query?format=geojson&starttime=%7Bstarttime%7D&endtime=%7Bendtime%7D&minmagnitude=%7Bminmagnitude%7D",
+        "headers": {
+          "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/jxl,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+          "accept-language": "en-US,en;q=0.9",
+          "priority": "u=0, i",
+          "sec-ch-ua": "\"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Google Chrome\";v=\"156\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\"",
+          "sec-fetch-dest": "document",
+          "sec-fetch-mode": "navigate",
+          "sec-fetch-site": "none",
+          "sec-fetch-user": "?1",
+          "upgrade-insecure-requests": "1",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36"
+        }
+      },
+      "slots": [
+        {
+          "param": "starttime",
+          "at": [
+            "query:starttime"
+          ]
+        },
+        {
+          "param": "endtime",
+          "at": [
+            "query:endtime"
+          ]
+        },
+        {
+          "param": "minmagnitude",
+          "at": [
+            "query:minmagnitude"
+          ]
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://earthquake.usgs.gov/fdsnws/event/1/query?format=geojson&starttime={starttime}&endtime={endtime}&minmagnitude={minmagnitude}"
+      },
+      "match": {
+        "method": "GET",
+        "host": "earthquake.usgs.gov",
+        "path": "/fdsnws/event/1/query"
+      },
+      "response": {
+        "format": "json",
+        "contentType": "application/json; charset=utf-8",
+        "extract": "features",
+        "pick": [
+          "id",
+          "magnitude=properties.mag",
+          "place=properties.place",
+          "time=properties.time",
+          "depth=geometry.coordinates[2]",
+          "coordinates=geometry.coordinates",
+          "tsunami=properties.tsunami",
+          "alert=properties.alert",
+          "url=properties.url"
+        ],
+        "shape": {
+          "features[].properties.mag": "number",
+          "features[].properties.place": "string",
+          "features[].properties.time": "number",
+          "features[].properties.url": "string",
+          "features[].properties.alert": "null",
+          "features[].properties.tsunami": "number",
+          "features[].geometry.coordinates": "array",
+          "features[].geometry.coordinates[]": "number",
+          "features[].id": "string"
+        }
+      },
+      "params": [
+        {
+          "name": "starttime",
+          "type": "string",
+          "required": true,
+          "description": "Start time in ISO 8601 format, interpreted as UTC.",
+          "example": "2011-03-11"
+        },
+        {
+          "name": "endtime",
+          "type": "string",
+          "required": true,
+          "description": "End time in ISO 8601 format, interpreted as UTC.",
+          "example": "2011-03-12"
+        },
+        {
+          "name": "minmagnitude",
+          "type": "string",
+          "required": true,
+          "description": "Minimum event magnitude as a decimal number.",
+          "example": "8.0"
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "checks": [
+        {
+          "args": { "starttime": "2011-03-11", "endtime": "2011-03-12", "minmagnitude": "8.0" },
+          "expect": "result",
+          "purpose": "The Tohoku earthquake appears in its historic date and magnitude range."
+        },
+        {
+          "args": { "starttime": "1900-01-01", "endtime": "1900-01-02", "minmagnitude": "9.9" },
+          "expect": "empty",
+          "purpose": "A historic interval with an extreme magnitude threshold has no matches."
+        }
+      ]
+    }
+  ]
+}

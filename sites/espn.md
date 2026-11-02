@@ -7,6 +7,11 @@ No account is needed.
   an empty `team1Score`/`team2Score`; get the score with `getGame`.
 - College basketball scoreboards list only the games ESPN features by default (Top 25 and
   similar), not every Division I game.
+- `standings` returns the current standings for NBA, NFL or MLB. Use each header's `i` as the
+  index into a team's `stats` array; groups may contain divisions under `children`. The MLB
+  result can be truncated, in which case use the returned result handle to retrieve the rest.
+- `teamRoster` currently covers NBA teams only. Use ESPN URL abbreviations such as `lal`, `bos`
+  or `gs`; a player's jersey or other field may be absent.
 - `getGame` numbers are strings except `attendance`. `leaderStats`, `homeLeaders`,
   `homeLeaderValues`, `awayLeaders` and `awayLeaderValues` line up by index (`points`, `rebounds`,
   `assists` in the NBA; passing, rushing, receiving yards, sacks and tackles in football). Before a
@@ -40,5 +45,20 @@ examples and an offseason-day `empty` check) in the learning home and from an em
 - MLB scoreboard events carry runs in `competitors[].runs` and an empty `score`; picking `runs`
   would make every other league's call answer `drift` (the field is gone for the NBA example), so
   it is left out. The game page's `prsdTms.*.score` has MLB scores.
-- The `league` enum lists the slugs checked with this URL shape. The standings page was looked at
-  and left out: its stats are positional, with a column order that differs by league.
+- The `league` enum lists the slugs checked with this URL shape. The standings page was initially
+  left out because its stats are positional, with a column order that differs by league.
+
+### 2026-11-01, logged out
+
+Added `standings` from `page.content.standings.groups` and NBA `teamRoster` from
+`page.content.roster.athletes`, using two page captures each. The standings headers retain
+ESPN's per-league stat indices rather than assigning fixed columns. The held-out MLB standings
+included Tampa Bay and the Yankees, and the held-out Warriors roster included Stephen Curry,
+as on their respective pages. Both calls used tier 1; MLB standings exceeded the output cap.
+The NBA and NFL roster payloads differ: NFL groups players by unit, so it is not included.
+
+The team schedule page splits games into upcoming and completed lists. Its optional fields can
+make separately flattened arrays lose alignment, so no schedule operation was added. News and
+soccer were not investigated. The pages sent advertising and analytics requests during capture.
+Anonymous page storage caused the browser user agent to be learned as a session reference;
+the spec uses a generic user agent instead and was verified without login.

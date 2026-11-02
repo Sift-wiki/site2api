@@ -1,0 +1,237 @@
+{
+  "name": "ashby",
+  "displayName": "Ashby job boards",
+  "baseUrl": "https://jobs.ashbyhq.com",
+  "description": "Public Ashby-hosted company job boards and postings.",
+  "operations": [
+    {
+      "name": "listJobs",
+      "description": "List open postings on a company's Ashby board, with location, employment and workplace type.",
+      "request": {
+        "method": "POST",
+        "url": "https://jobs.ashbyhq.com/api/non-user-graphql?op=ApiJobBoardWithTeams",
+        "headers": {
+          "accept": "*/*",
+          "accept-language": "en-US,en;q=0.9",
+          "apollographql-client-name": "frontend_non_user",
+          "apollographql-client-version": "0.1.0",
+          "content-type": "application/json",
+          "origin": "https://jobs.ashbyhq.com",
+          "priority": "u=1, i",
+          "referer": "https://jobs.ashbyhq.com/{company}",
+          "sec-ch-ua": "\"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Google Chrome\";v=\"156\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\"",
+          "sec-fetch-dest": "empty",
+          "sec-fetch-mode": "cors",
+          "sec-fetch-site": "same-origin",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36",
+          "x-ashby-client-request-timestamp": "2026-11-02T05:54:03.240Z"
+        },
+        "body": "{\"operationName\":\"ApiJobBoardWithTeams\",\"variables\":{\"organizationHostedJobsPageName\":\"{company}\"},\"query\":\"query ApiJobBoardWithTeams($organizationHostedJobsPageName: String!) {\\n  jobBoard: jobBoardWithTeams(\\n    organizationHostedJobsPageName: $organizationHostedJobsPageName\\n  ) {\\n    teams {\\n      id\\n      name\\n      externalName\\n      parentTeamId\\n      __typename\\n    }\\n    jobPostings {\\n      id\\n      title\\n      teamId\\n      locationId\\n      locationName\\n      workplaceType\\n      employmentType\\n      secondaryLocations {\\n        ...JobPostingSecondaryLocationParts\\n        __typename\\n      }\\n      compensationTierSummary\\n      __typename\\n    }\\n    __typename\\n  }\\n}\\n\\nfragment JobPostingSecondaryLocationParts on JobPostingSecondaryLocation {\\n  locationId\\n  locationName\\n  __typename\\n}\"}"
+      },
+      "slots": [
+        {
+          "param": "company",
+          "at": [
+            "body",
+            "json:/variables/organizationHostedJobsPageName"
+          ]
+        },
+        {
+          "param": "company",
+          "at": [
+            "header:referer"
+          ],
+          "template": "https://jobs.ashbyhq.com/{company}"
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://jobs.ashbyhq.com/{company}"
+      },
+      "match": {
+        "method": "POST",
+        "host": "jobs.ashbyhq.com",
+        "path": "/api/non-user-graphql",
+        "operationName": "ApiJobBoardWithTeams"
+      },
+      "response": {
+        "format": "json",
+        "contentType": "application/json; charset=utf-8",
+        "extract": "data.jobBoard.jobPostings",
+        "pick": [
+          "jobId=id",
+          "title",
+          "teamId",
+          "location=locationName",
+          "workplaceType",
+          "employmentType",
+          "secondaryLocations",
+          "compensation=compensationTierSummary"
+        ],
+        "shape": {
+          "data.jobBoard.jobPostings[].id": "string",
+          "data.jobBoard.jobPostings[].title": "string",
+          "data.jobBoard.jobPostings[].teamId": "string",
+          "data.jobBoard.jobPostings[].locationName": "string",
+          "data.jobBoard.jobPostings[].workplaceType": "string",
+          "data.jobBoard.jobPostings[].employmentType": "string",
+          "data.jobBoard.jobPostings[].secondaryLocations": "array",
+          "data.jobBoard.jobPostings[].compensationTierSummary": "null"
+        }
+      },
+      "params": [
+        {
+          "name": "company",
+          "type": "string",
+          "required": true,
+          "example": "linear",
+          "description": "The company board slug from jobs.ashbyhq.com/<company>.",
+          "pattern": "[A-Za-z0-9._-]+"
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "checks": [
+        {
+          "args": {
+            "company": "notion"
+          },
+          "expect": "result",
+          "purpose": "A different public company board"
+        },
+        {
+          "args": {
+            "company": "zzqqnotacompany"
+          },
+          "expect": "input",
+          "purpose": "A nonexistent public board"
+        }
+      ]
+    },
+    {
+      "name": "getJob",
+      "description": "Read an Ashby posting's details, HTML description and public compensation information.",
+      "request": {
+        "method": "POST",
+        "url": "https://jobs.ashbyhq.com/api/non-user-graphql?op=ApiJobPosting",
+        "headers": {
+          "accept": "*/*",
+          "accept-language": "en-US,en;q=0.9",
+          "apollographql-client-name": "frontend_non_user",
+          "apollographql-client-version": "0.1.0",
+          "content-type": "application/json",
+          "origin": "https://jobs.ashbyhq.com",
+          "priority": "u=1, i",
+          "referer": "https://jobs.ashbyhq.com/{company}/{jobId}",
+          "sec-ch-ua": "\"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Google Chrome\";v=\"156\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\"",
+          "sec-fetch-dest": "empty",
+          "sec-fetch-mode": "cors",
+          "sec-fetch-site": "same-origin",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36",
+          "x-ashby-client-request-timestamp": "2026-11-02T05:55:44.451Z"
+        },
+        "body": "{\"operationName\":\"ApiJobPosting\",\"variables\":{\"organizationHostedJobsPageName\":\"{company}\",\"jobPostingId\":\"{jobId}\"},\"query\":\"query ApiJobPosting($organizationHostedJobsPageName: String!, $jobPostingId: String!) {\\n  jobPosting(\\n    organizationHostedJobsPageName: $organizationHostedJobsPageName\\n    jobPostingId: $jobPostingId\\n  ) {\\n    ...JobPostingDetailParts\\n    applicationForm {\\n      ...FormRenderParts\\n      __typename\\n    }\\n    surveyForms {\\n      ...FormRenderParts\\n      __typename\\n    }\\n    recaptchaAction\\n    __typename\\n  }\\n}\\n\\nfragment JSONBoxParts on JSONBox {\\n  value\\n  __typename\\n}\\n\\nfragment FileParts on File {\\n  id\\n  filename\\n  __typename\\n}\\n\\nfragment FormFieldEntryParts on FormFieldEntry {\\n  id\\n  field\\n  fieldValue {\\n    ... on JSONBox {\\n      ...JSONBoxParts\\n      __typename\\n    }\\n    ... on File {\\n      ...FileParts\\n      __typename\\n    }\\n    ... on FileList {\\n      files {\\n        ...FileParts\\n        __typename\\n      }\\n      __typename\\n    }\\n    __typename\\n  }\\n  isRequired\\n  descriptionHtml\\n  isHidden\\n  __typename\\n}\\n\\nfragment JobPostingDetailParts on JobPostingDetails {\\n  id\\n  title\\n  departmentName\\n  departmentExternalName\\n  locationName\\n  locationAddress\\n  workplaceType\\n  employmentType\\n  descriptionHtml\\n  isListed\\n  isConfidential\\n  teamNames\\n  secondaryLocationNames\\n  compensationTierSummary\\n  compensationTiers {\\n    id\\n    title\\n    tierSummary\\n    __typename\\n  }\\n  applicationDeadline\\n  compensationTierGuideUrl\\n  scrapeableCompensationSalarySummary\\n  compensationPhilosophyHtml\\n  applicationLimitCalloutHtml\\n  shouldAskForTextingConsent\\n  shouldAskForWhatsAppConsent\\n  candidateTextingPrivacyPolicyUrl\\n  candidateTextingTermsAndConditionsUrl\\n  legalEntityNameForTextingConsent\\n  automatedProcessingLegalNotice {\\n    automatedProcessingLegalNoticeRuleId\\n    automatedProcessingLegalNoticeHtml\\n    __typename\\n  }\\n  __typename\\n}\\n\\nfragment FormRenderParts on FormRender {\\n  id\\n  formControls {\\n    identifier\\n    title\\n    __typename\\n  }\\n  errorMessages\\n  formErrors {\\n    message\\n    fieldEntryId\\n    __typename\\n  }\\n  sections {\\n    title\\n    descriptionHtml\\n    fieldEntries {\\n      ...FormFieldEntryParts\\n      __typename\\n    }\\n    isHidden\\n    __typename\\n  }\\n  sourceFormDefinitionId\\n  __typename\\n}\"}"
+      },
+      "slots": [
+        {
+          "param": "company",
+          "at": [
+            "body",
+            "json:/variables/organizationHostedJobsPageName"
+          ]
+        },
+        {
+          "param": "jobId",
+          "at": [
+            "body",
+            "json:/variables/jobPostingId"
+          ]
+        },
+        {
+          "param": "company",
+          "at": [
+            "header:referer"
+          ],
+          "template": "https://jobs.ashbyhq.com/{company}/{jobId}"
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://jobs.ashbyhq.com/{company}/{jobId}"
+      },
+      "match": {
+        "method": "POST",
+        "host": "jobs.ashbyhq.com",
+        "path": "/api/non-user-graphql",
+        "operationName": "ApiJobPosting"
+      },
+      "response": {
+        "format": "json",
+        "contentType": "application/json; charset=utf-8",
+        "extract": "data.jobPosting",
+        "pick": [
+          "jobId=id",
+          "title",
+          "department=departmentName",
+          "teamNames",
+          "location=locationName",
+          "secondaryLocationNames",
+          "employmentType",
+          "workplaceType",
+          "descriptionHtml",
+          "compensation=compensationTierSummary",
+          "compensationTiers"
+        ],
+        "shape": {
+          "data.jobPosting.id": "string",
+          "data.jobPosting.title": "string",
+          "data.jobPosting.departmentName": "string",
+          "data.jobPosting.locationName": "string",
+          "data.jobPosting.workplaceType": "string",
+          "data.jobPosting.employmentType": "string",
+          "data.jobPosting.descriptionHtml": "string",
+          "data.jobPosting.teamNames": "array",
+          "data.jobPosting.secondaryLocationNames": "array",
+          "data.jobPosting.compensationTierSummary": "null",
+          "data.jobPosting.compensationTiers": "array"
+        }
+      },
+      "params": [
+        {
+          "name": "company",
+          "type": "string",
+          "required": true,
+          "example": "linear",
+          "description": "The company board slug from jobs.ashbyhq.com/<company>.",
+          "pattern": "[A-Za-z0-9._-]+"
+        },
+        {
+          "name": "jobId",
+          "type": "string",
+          "required": true,
+          "example": "6dd5500a-4bd4-4f57-ba09-7b07acefecf4",
+          "description": "The posting UUID from listJobs or the final segment of its Ashby URL.",
+          "pattern": "[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "checks": [
+        {
+          "args": {
+            "company": "notion",
+            "jobId": "11e56782-ee28-4025-ba0e-76222b0bfcea"
+          },
+          "expect": "result",
+          "purpose": "A second public company and posting"
+        }
+      ]
+    }
+  ]
+}
