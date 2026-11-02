@@ -4,11 +4,15 @@ Copy package IDs from app links for `getApp(packageId)`, category codes from cat
 
 Only English layouts were checked. No language or country is fixed; localeDisplay gives the detail response footer context. Results do not establish a US or global catalog. Developer names and catalog association are displayed labels, not verified legal ownership.
 
+Missing search prices do not prove free access. Reviews are initial-page samples; helpful counts may be absent.
+
 Detail headerRatingDisplay and headerReviewsDisplay are the paired app-header badges, with rounded review counts. The separate device-controlled ratings panel may differ; no exact count, common device population or global aggregate is established. contentRating is an age/content label; updatedOnDisplay retains the displayed date without timezone or installed-version inference. Missing fields can reflect another layout.
 
 Both list operations read initial document cards in response order, including repeated apps. ratingDisplay is the optional spoken rounded card rating. Editorial shelves, pagination, exhaustive membership, global ranking, compatibility, install eligibility, prices and paid rights are unqualified. Checked categories are VIDEO_PLAYERS, PRODUCTIVITY and EDUCATION; checked developer catalogs are VLC, Microsoft and Duolingo. Other valid-looking IDs may not exist. No install, purchase, login or review action is performed.
 
 ## Maintainer notes
+
+2026-11-01, logged out: search and reviews use GET documents; capture blocked analytics POSTs. More reviews use POST RPC, excluded by shared-spec rules.
 
 Verified signed out on 2026-10-26 UTC. Genuine browser GET-document captures were learned with `addOperation` from `org.videolan.vlc`, capture `cmvp6rs4966a64d`, and `com.microsoft.todos`, capture `cmvp6s2jxc934ad`. Request 1 was selected in each. Exact source/request URLs were `https://play.google.com/store/apps/details?id=org.videolan.vlc` and `https://play.google.com/store/apps/details?hl=en&id=com.microsoft.todos`. The learned request varies only `query:id`; match is GET, play.google.com, /store/apps/details. Learning reported zero warnings and tier 1.
 
