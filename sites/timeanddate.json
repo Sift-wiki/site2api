@@ -1,0 +1,185 @@
+{
+  "name": "timeanddate",
+  "displayName": "timeanddate.com",
+  "baseUrl": "https://www.timeanddate.com",
+  "description": "Local time, time zones and public holidays from timeanddate.com",
+  "operations": [
+    {
+      "name": "getTime",
+      "description": "Current local time, date, time zone, UTC offset and daylight-saving notes for a city",
+      "request": {
+        "method": "GET",
+        "url": "https://www.timeanddate.com/worldclock/%7Bcountry%7D/%7Bcity%7D",
+        "headers": {
+          "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/jxl,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+          "accept-language": "en-US,en;q=0.9",
+          "priority": "u=0, i",
+          "sec-ch-ua": "\"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Google Chrome\";v=\"156\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\"",
+          "sec-fetch-dest": "document",
+          "sec-fetch-mode": "navigate",
+          "sec-fetch-site": "none",
+          "sec-fetch-user": "?1",
+          "upgrade-insecure-requests": "1",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36"
+        }
+      },
+      "slots": [
+        {
+          "param": "country",
+          "at": [
+            "path:1"
+          ]
+        },
+        {
+          "param": "city",
+          "at": [
+            "path:2"
+          ]
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://www.timeanddate.com/worldclock/{country}/{city}"
+      },
+      "match": {
+        "method": "GET",
+        "host": "www.timeanddate.com",
+        "path": "/worldclock/*/*"
+      },
+      "response": {
+        "format": "html",
+        "contentType": "text/html; charset=UTF-8",
+        "html": {
+          "items": "body",
+          "fields": {
+            "time": "#ct",
+            "date": "#ctdat",
+            "abbreviation": "#cta",
+            "timeZone": "#tl-tz-i small",
+            "offset": "#tl-tz-i",
+            "dst": "all:#tl-ds@title"
+          }
+        }
+      },
+      "params": [
+        {
+          "name": "country",
+          "type": "string",
+          "required": true,
+          "description": "Country slug from the site's URL, such as usa, uk, japan",
+          "example": "usa"
+        },
+        {
+          "name": "city",
+          "type": "string",
+          "required": true,
+          "description": "City slug from the site's URL, such as new-york, london, tokyo",
+          "example": "new-york"
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "checks": [
+        {
+          "args": {
+            "country": "japan",
+            "city": "tokyo"
+          },
+          "expect": "result",
+          "purpose": "City without DST"
+        }
+      ]
+    },
+    {
+      "name": "getHolidays",
+      "description": "A country's public holidays and observances for a year, as the holidays table lists them",
+      "request": {
+        "method": "GET",
+        "url": "https://www.timeanddate.com/holidays/%7Bcountry%7D/%7Byear%7D",
+        "headers": {
+          "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/jxl,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+          "accept-language": "en-US,en;q=0.9",
+          "priority": "u=0, i",
+          "sec-ch-ua": "\"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Google Chrome\";v=\"156\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\"",
+          "sec-fetch-dest": "document",
+          "sec-fetch-mode": "navigate",
+          "sec-fetch-site": "none",
+          "sec-fetch-user": "?1",
+          "upgrade-insecure-requests": "1",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36"
+        }
+      },
+      "slots": [
+        {
+          "param": "country",
+          "at": [
+            "path:1"
+          ]
+        },
+        {
+          "param": "year",
+          "at": [
+            "path:2"
+          ]
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://www.timeanddate.com/holidays/{country}/{year}"
+      },
+      "match": {
+        "method": "GET",
+        "host": "www.timeanddate.com",
+        "path": "/holidays/*/*"
+      },
+      "response": {
+        "format": "html",
+        "contentType": "text/html; charset=UTF-8",
+        "html": {
+          "items": "#holidays-table tbody tr[data-mask=\"1\"], #holidays-table tbody tr[data-mask=\"2\"]",
+          "fields": {
+            "date": "th",
+            "weekday": "td:nth-child(2)",
+            "name": "td:nth-child(3)",
+            "type": "td:nth-child(4)",
+            "details": "td:nth-child(5)"
+          }
+        }
+      },
+      "params": [
+        {
+          "name": "country",
+          "type": "string",
+          "required": true,
+          "description": "Country slug from the site's URL, such as us, uk, japan, canada",
+          "example": "us"
+        },
+        {
+          "name": "year",
+          "type": "string",
+          "required": true,
+          "description": "Four-digit year",
+          "example": "2026"
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "checks": [
+        {
+          "args": {
+            "country": "japan",
+            "year": "2027"
+          },
+          "expect": "result",
+          "purpose": "Another country and year"
+        }
+      ]
+    }
+  ]
+}
