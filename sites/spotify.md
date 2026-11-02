@@ -4,7 +4,11 @@ documents. Preview URLs may be absent. Album artist names are a display string; 
 are in milliseconds and track URIs contain their IDs. Album track lists can be truncated by the
 response size limit.
 
-Search, artist and playlist lookup, playback and account actions are not provided.
+Playlist owners and track artists are display strings; descriptions may be absent. Playlist and
+artist track lists contain the embed's track objects, and long lists can be truncated by the
+response size limit. Artist tracks are the top tracks shown by the embed, not a full discography.
+
+Search, episode and show lookup, playback and account actions are not provided.
 
 ## Maintainer notes
 
@@ -24,3 +28,17 @@ track entity does not provide its album; the sampled album entities had a null r
 The regular track document loaded a reCAPTCHA resource and attempted client-token requests when
 those POSTs were blocked during capture. Search and the other operations were not qualified.
 No playback, audio download, login or write was performed.
+
+### Playlist and artist, 2026-11-01, logged out
+
+Captured Today's Top Hits and RapCaviar for playlists, and Taylor Swift and Drake for artists.
+The held-out New Music Friday embed matched the playlist name, owner, and returned track titles,
+artists and durations against the visible page; its long result was truncated by the response size limit. The held-out
+Ed Sheeran embed matched the artist and its ten visible top tracks and durations. Both operations
+replayed at tier 1 without a token or cookie. The sampled entities did not expose playlist
+descriptions or artist monthly listener counts.
+
+The picker cannot project fields within an array while retaining the parent object, so album,
+playlist and artist track objects remain untrimmed. Search, episodes and shows were not qualified.
+During the two browser captures the embed automatically sent telemetry POSTs to Sentry and Spotify
+event endpoints; no user-facing write operation, login, playback or audio download was performed.
