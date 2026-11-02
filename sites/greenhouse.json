@@ -1,0 +1,200 @@
+{
+  "name": "greenhouse",
+  "displayName": "Greenhouse job boards",
+  "baseUrl": "https://job-boards.greenhouse.io",
+  "description": "Public Greenhouse-hosted company job boards and job descriptions.",
+  "operations": [
+    {
+      "name": "getJob",
+      "description": "Read the title, location and plain-text description of a public Greenhouse posting.",
+      "request": {
+        "method": "GET",
+        "url": "https://job-boards.greenhouse.io/%7Bcompany%7D/jobs/%7BjobId%7D",
+        "headers": {
+          "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/jxl,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+          "accept-language": "en-US,en;q=0.9",
+          "priority": "u=0, i",
+          "sec-ch-ua": "\"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Google Chrome\";v=\"156\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\"",
+          "sec-fetch-dest": "document",
+          "sec-fetch-mode": "navigate",
+          "sec-fetch-site": "none",
+          "sec-fetch-user": "?1",
+          "upgrade-insecure-requests": "1",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36"
+        }
+      },
+      "slots": [
+        {
+          "param": "company",
+          "at": [
+            "path:0"
+          ]
+        },
+        {
+          "param": "jobId",
+          "at": [
+            "path:2"
+          ]
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://job-boards.greenhouse.io/{company}/jobs/{jobId}"
+      },
+      "match": {
+        "method": "GET",
+        "host": "job-boards.greenhouse.io",
+        "path": "/*/jobs/*"
+      },
+      "response": {
+        "format": "html",
+        "contentType": "text/html; charset=utf-8",
+        "html": {
+          "items": "body",
+          "fields": {
+            "title": "h1",
+            "location": ".job__location",
+            "description": ".job__description"
+          }
+        }
+      },
+      "params": [
+        {
+          "name": "company",
+          "type": "string",
+          "required": true,
+          "description": "The board slug from job-boards.greenhouse.io/<company>.",
+          "example": "discord",
+          "pattern": "[A-Za-z0-9_-]+"
+        },
+        {
+          "name": "jobId",
+          "type": "string",
+          "required": true,
+          "description": "The numeric job ID from the board's job URL or listJobs.",
+          "example": "8840756002",
+          "pattern": "[0-9]+"
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "checks": [
+        {
+          "args": {
+            "company": "gitlab",
+            "jobId": "8629019002"
+          },
+          "expect": "result",
+          "purpose": "A second public company and posting."
+        }
+      ]
+    },
+    {
+      "name": "listJobs",
+      "description": "List one page of a company’s open Greenhouse-hosted jobs.",
+      "request": {
+        "method": "GET",
+        "url": "https://job-boards.greenhouse.io/%7Bcompany%7D?page=%7Bpage%7D",
+        "headers": {
+          "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/jxl,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+          "accept-language": "en-US,en;q=0.9",
+          "priority": "u=0, i",
+          "sec-ch-ua": "\"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Google Chrome\";v=\"156\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\"",
+          "sec-fetch-dest": "document",
+          "sec-fetch-mode": "navigate",
+          "sec-fetch-site": "none",
+          "sec-fetch-user": "?1",
+          "upgrade-insecure-requests": "1",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36"
+        }
+      },
+      "slots": [
+        {
+          "param": "company",
+          "at": [
+            "path:0"
+          ]
+        },
+        {
+          "param": "page",
+          "at": [
+            "query:page"
+          ]
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://job-boards.greenhouse.io/{company}?page={page}"
+      },
+      "match": {
+        "method": "GET",
+        "host": "job-boards.greenhouse.io",
+        "path": "/*"
+      },
+      "response": {
+        "format": "embedded",
+        "contentType": "text/html; charset=utf-8",
+        "extract": "state.loaderData[\"routes/$url_token\"].jobPosts.data",
+        "pick": [
+          "jobId=id",
+          "title",
+          "department=department.name",
+          "location",
+          "url=absolute_url",
+          "updatedAt=updated_at"
+        ],
+        "embedded": {
+          "regex": "window\\.__remixContext\\s*=\\s*([[{])"
+        }
+      },
+      "params": [
+        {
+          "name": "company",
+          "type": "string",
+          "required": true,
+          "description": "The board slug from job-boards.greenhouse.io/<company>.",
+          "example": "anthropic",
+          "pattern": "[A-Za-z0-9_-]+"
+        },
+        {
+          "name": "page",
+          "type": "string",
+          "required": false,
+          "description": "One-based board page number, default 1.",
+          "example": "1",
+          "default": "1",
+          "pattern": "[1-9][0-9]*"
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "checks": [
+        {
+          "args": {
+            "company": "anthropic",
+            "page": "2"
+          },
+          "expect": "result",
+          "purpose": "A second company and later page."
+        },
+        {
+          "args": {
+            "company": "zzqqnotacompany",
+            "page": "1"
+          },
+          "expect": "input",
+          "purpose": "A nonexistent public board."
+        }
+      ],
+      "paging": {
+        "param": "page"
+      }
+    }
+  ]
+}
