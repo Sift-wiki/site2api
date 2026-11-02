@@ -8,6 +8,12 @@ No account is needed. English Wikipedia only (en.wikipedia.org).
   says little. Search again with a more specific title.
 - `searchText` returns page 1 only (20 hits). `url` is the full article link; the article `key` is
   its last path segment.
+- `getSections` reads the article's displayed table of contents. The first entry is the unnumbered
+  top of the page; numbered entries use display numbers such as `3.2`, not MediaWiki API section
+  indexes. Their depth indicates the nesting level, and the anchor is a link to that heading.
+- `getCategories` reads visible categories, not hidden maintenance categories.
+- Wikipedia article text is generally available under CC BY-SA; check the page's attribution and
+  licensing requirements before reuse.
 
 ## Maintainer notes
 
@@ -23,3 +29,15 @@ for a missing page in `getSummary`). Every call answered at tier 1 (plain HTTP).
 
 The `empty` element of the `searchText` recipe is `p.mw-search-nonefound`, the "There were no
 results" message.
+
+### 2026-11-01, logged out
+
+Captured the actual server-rendered article documents for Ada Lovelace and Python (programming
+language), and compared the held-out Moon results with its captured page. `getSections` reads the
+desktop table of contents, and `getCategories` reads the visible category list. Both answered at
+tier 1 in the learning home and in a fresh home. The final spec passed `verify wikipedia`: 9
+passed, 0 failed, 0 inconclusive.
+
+An infobox recipe was not included: on Moon, nested rows produced misleading pairs and flattening
+superscripts changed scientific notation. Full article/section text, article links, revision
+history and the featured feed were not captured or verified in this pass.

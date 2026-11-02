@@ -7,15 +7,6 @@
     {
       "name": "searchArticles",
       "description": "Article titles matching what is typed into the search box (prefix match, top 10): id (page id), key (the title as it appears in the URL), title and description (the article's short description, when it has one).",
-      "links": [
-        {
-          "from": "key",
-          "to": {
-            "op": "getSummary",
-            "arg": "title"
-          }
-        }
-      ],
       "request": {
         "method": "GET",
         "url": "https://en.wikipedia.org/w/rest.php/v1/search/title?q=%7Bq%7D&limit=10",
@@ -80,13 +71,22 @@
           "name": "q",
           "type": "string",
           "required": true,
-          "example": "octopus",
-          "description": "title words, as typed into the search box"
+          "description": "title words, as typed into the search box",
+          "example": "octopus"
         }
       ],
       "readOnly": true,
       "minTier": 1,
-      "learnedLoggedIn": false
+      "learnedLoggedIn": false,
+      "links": [
+        {
+          "from": "key",
+          "to": {
+            "op": "getSummary",
+            "arg": "title"
+          }
+        }
+      ]
     },
     {
       "name": "getSummary",
@@ -138,8 +138,8 @@
           "name": "title",
           "type": "string",
           "required": true,
-          "example": "Octopus",
-          "description": "article title as in its URL (spaces also work): the key from searchArticles"
+          "description": "article title as in its URL (spaces also work): the key from searchArticles",
+          "example": "Octopus"
         }
       ],
       "readOnly": true,
@@ -212,8 +212,8 @@
           "name": "q",
           "type": "string",
           "required": true,
-          "example": "bioluminescent squid",
-          "description": "words to find anywhere in article text"
+          "description": "words to find anywhere in article text",
+          "example": "bioluminescent squid"
         }
       ],
       "readOnly": true,
@@ -226,6 +226,149 @@
           },
           "expect": "empty",
           "purpose": "a query nothing matches reads as an empty list"
+        }
+      ]
+    },
+    {
+      "name": "getSections",
+      "description": "Article table of contents in page order: displayed heading and hierarchical number, and an anchor URL.",
+      "request": {
+        "method": "GET",
+        "url": "https://en.wikipedia.org/wiki/%7Btitle%7D",
+        "headers": {
+          "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/jxl,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+          "accept-language": "en-US,en;q=0.9",
+          "priority": "u=0, i",
+          "sec-ch-ua": "\"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Google Chrome\";v=\"156\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\"",
+          "sec-fetch-dest": "document",
+          "sec-fetch-mode": "navigate",
+          "sec-fetch-site": "none",
+          "sec-fetch-user": "?1",
+          "upgrade-insecure-requests": "1",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36"
+        }
+      },
+      "slots": [
+        {
+          "param": "title",
+          "at": [
+            "path:1"
+          ]
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://en.wikipedia.org/wiki/{title}"
+      },
+      "match": {
+        "method": "GET",
+        "host": "en.wikipedia.org",
+        "path": "/wiki/*"
+      },
+      "response": {
+        "format": "html",
+        "contentType": "text/html; charset=UTF-8",
+        "html": {
+          "items": "ul.vector-toc-contents li.vector-toc-list-item",
+          "fields": {
+            "heading": ":scope > a .vector-toc-text",
+            "number": ":scope > a .vector-toc-numb",
+            "anchor": ":scope > a@href"
+          }
+        }
+      },
+      "params": [
+        {
+          "name": "title",
+          "type": "string",
+          "required": true,
+          "description": "article title or URL key, such as Ada_Lovelace",
+          "example": "Ada_Lovelace"
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "checks": [
+        {
+          "args": {
+            "title": "Zzqqxx_no_such_page_xyz"
+          },
+          "expect": "input",
+          "purpose": "a missing article is input, not drift"
+        }
+      ]
+    },
+    {
+      "name": "getCategories",
+      "description": "Visible article categories and their links, excluding hidden maintenance categories.",
+      "request": {
+        "method": "GET",
+        "url": "https://en.wikipedia.org/wiki/%7Btitle%7D",
+        "headers": {
+          "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/jxl,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+          "accept-language": "en-US,en;q=0.9",
+          "priority": "u=0, i",
+          "sec-ch-ua": "\"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Google Chrome\";v=\"156\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\"",
+          "sec-fetch-dest": "document",
+          "sec-fetch-mode": "navigate",
+          "sec-fetch-site": "none",
+          "sec-fetch-user": "?1",
+          "upgrade-insecure-requests": "1",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36"
+        }
+      },
+      "slots": [
+        {
+          "param": "title",
+          "at": [
+            "path:1"
+          ]
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://en.wikipedia.org/wiki/{title}"
+      },
+      "match": {
+        "method": "GET",
+        "host": "en.wikipedia.org",
+        "path": "/wiki/*"
+      },
+      "response": {
+        "format": "html",
+        "contentType": "text/html; charset=UTF-8",
+        "html": {
+          "items": "#mw-normal-catlinks ul li",
+          "fields": {
+            "category": "a",
+            "url": "a@href"
+          }
+        }
+      },
+      "params": [
+        {
+          "name": "title",
+          "type": "string",
+          "required": true,
+          "description": "article title or URL key, such as Ada_Lovelace",
+          "example": "Ada_Lovelace"
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "checks": [
+        {
+          "args": {
+            "title": "Zzqqxx_no_such_page_xyz"
+          },
+          "expect": "input",
+          "purpose": "a missing article is input, not drift"
         }
       ]
     }
