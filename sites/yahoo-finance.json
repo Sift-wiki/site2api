@@ -1,0 +1,87 @@
+{
+  "name": "yahoo-finance",
+  "displayName": "Yahoo Finance",
+  "baseUrl": "https://finance.yahoo.com",
+  "description": "Public stock quotes from Yahoo Finance's summary documents.",
+  "operations": [
+    {
+      "name": "getQuote",
+      "description": "Read the displayed primary quote and summary statistics for a ticker.",
+      "request": {
+        "method": "GET",
+        "url": "https://finance.yahoo.com/quote/%7Bsymbol%7D/",
+        "headers": {
+          "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/jxl,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+          "upgrade-insecure-requests": "1",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36",
+          "sec-ch-ua": "\"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Google Chrome\";v=\"156\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\""
+        }
+      },
+      "slots": [
+        {
+          "param": "symbol",
+          "at": [
+            "path:1"
+          ]
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://finance.yahoo.com/quote/{symbol}/"
+      },
+      "match": {
+        "method": "GET",
+        "host": "finance.yahoo.com",
+        "path": "/quote/*/"
+      },
+      "response": {
+        "format": "html",
+        "contentType": "text/html; charset=utf-8",
+        "html": {
+          "items": "main",
+          "fields": {
+            "name": "[data-testid=\"quote-title\"] h1",
+            "price": "[data-testid=\"price-statistic\"].primary [data-testid=\"qsp-price\"]",
+            "change": "[data-testid=\"price-statistic\"].primary [data-testid=\"qsp-price-change\"]",
+            "changePercent": "[data-testid=\"price-statistic\"].primary [data-testid=\"qsp-price-change-percent\"]",
+            "marketNotice": "[data-testid=\"price-statistic\"].primary [slot=\"marketTimeNotice\"]",
+            "dayRange": "[data-testid=\"quote-statistics\"] [data-field=\"regularMarketDayRange\"]",
+            "yearRange": "[data-testid=\"quote-statistics\"] [data-field=\"fiftyTwoWeekRange\"]",
+            "volume": "[data-testid=\"quote-statistics\"] [data-field=\"regularMarketVolume\"]",
+            "marketCap": "[data-testid=\"quote-statistics\"] [data-field=\"marketCap\"]"
+          }
+        }
+      },
+      "params": [
+        {
+          "name": "symbol",
+          "type": "string",
+          "required": true,
+          "description": "Yahoo Finance ticker symbol, such as AAPL, MSFT or NVDA.",
+          "example": "AAPL"
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "checks": [
+        {
+          "args": {
+            "symbol": "MSFT"
+          },
+          "expect": "result",
+          "purpose": "Microsoft quote appears on its public summary page."
+        },
+        {
+          "args": {
+            "symbol": "NVDA"
+          },
+          "expect": "result",
+          "purpose": "Held-out Nvidia quote appears on its public summary page."
+        }
+      ]
+    }
+  ]
+}
