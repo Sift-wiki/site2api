@@ -1,4 +1,4 @@
-No account is needed. No tweets.
+No account is needed. Individual public posts are available; recent-post timelines are not included.
 
 - An unknown handle returns `input` from both ops.
 - `getProfile`'s `title` looks like "NASA (@NASA) on X".
@@ -6,6 +6,10 @@ No account is needed. No tweets.
   a larger one.
 - `getUser` sends X's public bearer, which X could rotate. Then X answers 400 "Bad Authentication
   data" (code 215), and the call re-learns the bearer from the page (a browser run, once).
+- `getTweet` takes the decimal ID from a post's URL, as a string. Its text and time are as displayed,
+  including shortened links; engagement counts are labels rather than numbers. Reposts can include
+  quotes; a separate quote count and quoted post ID are not returned. Image URLs are returned when
+  present, but video URLs are not.
 
 ## Maintainer notes
 
@@ -57,6 +61,22 @@ browser sends the same one) and lets `export` write it. The guest token and
   returns `input` too (HTTP 404).
 - If you query `spacex` itself, the soft-nav trigger's neutral page is the target page. This only
   matters for recapture.
-- **No tweets.** Logged out, `UserOriginalsTimeline` returns an empty 404, even when sent by X's own
+- **No timeline operation.** Logged out, `UserOriginalsTimeline` returns an empty 404, even when sent by X's own
   frontend after a soft navigation. Tweets exist only in the SSR HTML, as a JS literal.
 - Protected, suspended and logged-in-only fields were not tested.
+
+## 2026-11-01: public post, logged out
+
+| op | args | returns | tier |
+|---|---|---|---|
+| `getTweet` | `tweetId` (example `1354143047324299264`) | displayed text, author name and handle, displayed time, reply/repost/like labels, image URLs | 1, including a clean home |
+
+`getTweet` reads the server-rendered status page's article. The captured request uses the XDevelopers
+status path; X redirects it to the post's canonical author when the ID belongs to another account.
+The matcher wildcards both the author and ID. The trigger uses `/i/status/{tweetId}`. The two
+learning examples were the X Developers post above and post `20`; the held-out NASA post
+`2116263878807998722` returned its displayed text, time, engagement labels and image.
+
+The public Tweet embed loaded its HTML but did not make a tweet-result request in the capture.
+The separate embedded-timeline endpoint returned HTTP 429, so testing that endpoint stopped.
+This does not establish whether its timeline is generally available. No session values are stored.
