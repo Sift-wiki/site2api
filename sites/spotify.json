@@ -1,0 +1,147 @@
+{
+  "name": "spotify",
+  "displayName": "Spotify",
+  "baseUrl": "https://open.spotify.com",
+  "description": "Public track and album metadata from Spotify embed documents.",
+  "operations": [
+    {
+      "name": "getTrack",
+      "description": "Read public track metadata from the Spotify embed document",
+      "request": {
+        "method": "GET",
+        "url": "https://open.spotify.com/embed/track/%7BtrackId%7D",
+        "headers": {
+          "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/jxl,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+          "upgrade-insecure-requests": "1",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36",
+          "sec-ch-ua": "\"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Google Chrome\";v=\"156\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\""
+        }
+      },
+      "slots": [
+        {
+          "param": "trackId",
+          "at": [
+            "path:2"
+          ]
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://open.spotify.com/embed/track/{trackId}"
+      },
+      "match": {
+        "method": "GET",
+        "host": "open.spotify.com",
+        "path": "/embed/track/*"
+      },
+      "response": {
+        "format": "embedded",
+        "contentType": "text/html; charset=utf-8",
+        "extract": "props.pageProps.state.data.entity",
+        "pick": [
+          "id",
+          "name",
+          "artists",
+          "durationMs=duration",
+          "releaseDate=releaseDate.isoString",
+          "explicit=isExplicit",
+          "previewUrl=audioPreview.url"
+        ],
+        "embedded": {
+          "regex": "id=\"__NEXT_DATA__\"[^>]*>\\s*([[{])"
+        }
+      },
+      "params": [
+        {
+          "name": "trackId",
+          "type": "string",
+          "required": true,
+          "description": "Spotify track ID from a public track URL or URI.",
+          "example": "4cOdK2wGLETKBW3PvgPWqT"
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "checks": [
+        {
+          "args": {
+            "trackId": "11dFghVXANMlKmJXsNCbNl"
+          },
+          "expect": "result",
+          "purpose": "Public Cut To The Feeling track"
+        }
+      ]
+    },
+    {
+      "name": "getAlbum",
+      "description": "Read public album and track metadata from the Spotify embed document",
+      "request": {
+        "method": "GET",
+        "url": "https://open.spotify.com/embed/album/%7BalbumId%7D",
+        "headers": {
+          "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/jxl,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+          "upgrade-insecure-requests": "1",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36",
+          "sec-ch-ua": "\"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Google Chrome\";v=\"156\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\""
+        }
+      },
+      "slots": [
+        {
+          "param": "albumId",
+          "at": [
+            "path:2"
+          ]
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://open.spotify.com/embed/album/{albumId}"
+      },
+      "match": {
+        "method": "GET",
+        "host": "open.spotify.com",
+        "path": "/embed/album/*"
+      },
+      "response": {
+        "format": "embedded",
+        "contentType": "text/html; charset=utf-8",
+        "extract": "props.pageProps.state.data.entity",
+        "pick": [
+          "id",
+          "name",
+          "artists=subtitle",
+          "tracks=trackList"
+        ],
+        "embedded": {
+          "regex": "id=\"__NEXT_DATA__\"[^>]*>\\s*([[{])"
+        }
+      },
+      "params": [
+        {
+          "name": "albumId",
+          "type": "string",
+          "required": true,
+          "description": "Spotify album ID from a public album URL or URI.",
+          "example": "5Z9iiGl2FcIfa3BMiv6OIw"
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "checks": [
+        {
+          "args": {
+            "albumId": "1ATL5GLyefJaxhQzSPVrLX"
+          },
+          "expect": "result",
+          "purpose": "Public Scorpion album"
+        }
+      ]
+    }
+  ]
+}
