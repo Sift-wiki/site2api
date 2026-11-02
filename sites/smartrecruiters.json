@@ -1,0 +1,178 @@
+{
+  "name": "smartrecruiters",
+  "displayName": "SmartRecruiters job boards",
+  "baseUrl": "https://careers.smartrecruiters.com",
+  "description": "Public company career pages and job postings hosted by SmartRecruiters.",
+  "operations": [
+    {
+      "name": "listJobs",
+      "description": "List the postings present in the initial company career page.",
+      "request": {
+        "method": "GET",
+        "url": "https://careers.smartrecruiters.com/%7Bcompany%7D",
+        "headers": {
+          "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/jxl,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+          "accept-language": "en-US,en;q=0.9",
+          "sec-fetch-dest": "document",
+          "sec-fetch-mode": "navigate",
+          "sec-fetch-site": "none",
+          "sec-fetch-user": "?1",
+          "upgrade-insecure-requests": "1",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36",
+          "sec-ch-ua": "\"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Google Chrome\";v=\"156\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\""
+        }
+      },
+      "slots": [
+        {
+          "param": "company",
+          "at": [
+            "path:0"
+          ]
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://careers.smartrecruiters.com/{company}"
+      },
+      "match": {
+        "method": "GET",
+        "host": "careers.smartrecruiters.com",
+        "path": "/*"
+      },
+      "response": {
+        "format": "html",
+        "contentType": "text/html; charset=utf-8",
+        "html": {
+          "items": ".js-openings li.opening-job",
+          "fields": {
+            "title": "h4",
+            "location": ".job-desc",
+            "url": "a@href"
+          }
+        }
+      },
+      "params": [
+        {
+          "name": "company",
+          "type": "string",
+          "required": true,
+          "description": "The company slug from careers.smartrecruiters.com/<company>.",
+          "example": "Version1",
+          "pattern": "[A-Za-z0-9_-]+"
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "checks": [
+        {
+          "args": {
+            "company": "Xplor"
+          },
+          "expect": "result",
+          "purpose": "A second public company board."
+        },
+        {
+          "args": {
+            "company": "zzqqnotacompany"
+          },
+          "expect": "input",
+          "purpose": "A nonexistent company board."
+        }
+      ]
+    },
+    {
+      "name": "getJob",
+      "description": "Read a public SmartRecruiters posting's title, location and visible job details.",
+      "request": {
+        "method": "GET",
+        "url": "https://jobs.smartrecruiters.com/%7Bcompany%7D/%7BjobId%7D",
+        "headers": {
+          "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/jxl,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+          "accept-language": "en-US,en;q=0.9",
+          "sec-fetch-dest": "document",
+          "sec-fetch-mode": "navigate",
+          "sec-fetch-site": "none",
+          "sec-fetch-user": "?1",
+          "upgrade-insecure-requests": "1",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36",
+          "sec-ch-ua": "\"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Google Chrome\";v=\"156\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\""
+        }
+      },
+      "slots": [
+        {
+          "param": "company",
+          "at": [
+            "path:0"
+          ]
+        },
+        {
+          "param": "jobId",
+          "at": [
+            "path:1"
+          ]
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://jobs.smartrecruiters.com/{company}/{jobId}"
+      },
+      "match": {
+        "method": "GET",
+        "host": "jobs.smartrecruiters.com",
+        "path": "/*/*"
+      },
+      "response": {
+        "format": "html",
+        "contentType": "text/html; charset=utf-8",
+        "html": {
+          "items": "main.job",
+          "fields": {
+            "title": "h1",
+            "location": "spl-job-location@formattedAddress",
+            "workplace": "spl-job-location@workplaceType",
+            "employmentType": "[itemprop=employmentType]",
+            "description": "#st-jobDescription .wysiwyg",
+            "qualifications": "#st-qualifications .wysiwyg",
+            "additional": "#st-additionalInformation .wysiwyg"
+          }
+        }
+      },
+      "params": [
+        {
+          "name": "company",
+          "type": "string",
+          "required": true,
+          "description": "The company slug from the SmartRecruiters job URL.",
+          "example": "Version1",
+          "pattern": "[A-Za-z0-9_-]+"
+        },
+        {
+          "name": "jobId",
+          "type": "string",
+          "required": true,
+          "description": "The numeric posting ID at the start of the job URL's final segment.",
+          "example": "744000154491789",
+          "pattern": "[0-9]+"
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "checks": [
+        {
+          "args": {
+            "company": "Xplor",
+            "jobId": "744000155454339"
+          },
+          "expect": "result",
+          "purpose": "A second public company and posting."
+        }
+      ]
+    }
+  ]
+}
