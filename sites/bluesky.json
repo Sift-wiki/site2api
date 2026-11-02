@@ -1,0 +1,248 @@
+{
+  "name": "bluesky",
+  "displayName": "Bluesky",
+  "baseUrl": "https://bsky.app",
+  "description": "Read public Bluesky profiles, author feeds and post threads without signing in.",
+  "operations": [
+    {
+      "name": "getProfile",
+      "description": "Read a public account's profile and counts.",
+      "request": {
+        "method": "GET",
+        "url": "https://public.api.bsky.app/xrpc/app.bsky.actor.getProfile?actor=%7Bhandle%7D",
+        "headers": {
+          "accept": "application/json"
+        }
+      },
+      "slots": [
+        {
+          "param": "handle",
+          "at": [
+            "query:actor"
+          ]
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://bsky.app/profile/{handle}"
+      },
+      "match": {
+        "method": "GET",
+        "host": "public.api.bsky.app",
+        "path": "/xrpc/app.bsky.actor.getProfile"
+      },
+      "response": {
+        "format": "json",
+        "pick": [
+          "did",
+          "handle",
+          "displayName",
+          "description",
+          "followersCount",
+          "followsCount",
+          "postsCount",
+          "createdAt",
+          "avatar"
+        ]
+      },
+      "params": [
+        {
+          "name": "handle",
+          "type": "string",
+          "required": true,
+          "description": "Public account handle without @, for example bsky.app.",
+          "example": "bsky.app"
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "checks": [
+        {
+          "args": {
+            "handle": "jay.bsky.team"
+          },
+          "expect": "result",
+          "purpose": "Another public profile is available."
+        },
+        {
+          "args": {},
+          "expect": "input",
+          "purpose": "A missing handle is an input error."
+        }
+      ]
+    },
+    {
+      "name": "getPosts",
+      "description": "Read the first page of an account's public posts and reposts.",
+      "request": {
+        "method": "GET",
+        "url": "https://public.api.bsky.app/xrpc/app.bsky.feed.getAuthorFeed?actor=%7Bhandle%7D&filter=posts_and_author_threads&includePins=true&limit=30",
+        "headers": {
+          "accept": "application/json"
+        }
+      },
+      "slots": [
+        {
+          "param": "handle",
+          "at": [
+            "query:actor"
+          ]
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://bsky.app/profile/{handle}"
+      },
+      "match": {
+        "method": "GET",
+        "host": "public.api.bsky.app",
+        "path": "/xrpc/app.bsky.feed.getAuthorFeed"
+      },
+      "response": {
+        "format": "json",
+        "extract": "feed",
+        "pick": [
+          "uri=post.uri",
+          "author=post.author.handle",
+          "text=post.record.text",
+          "createdAt=post.record.createdAt",
+          "likeCount=post.likeCount",
+          "repostCount=post.repostCount",
+          "replyCount=post.replyCount",
+          "quoteCount=post.quoteCount",
+          "embedType=post.record.embed.$type",
+          "reason=reason.$type"
+        ]
+      },
+      "params": [
+        {
+          "name": "handle",
+          "type": "string",
+          "required": true,
+          "description": "Public account handle without @, for example bsky.app.",
+          "example": "bsky.app"
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "checks": [
+        {
+          "args": {
+            "handle": "jay.bsky.team"
+          },
+          "expect": "result",
+          "purpose": "Another public author's feed is available."
+        },
+        {
+          "args": {},
+          "expect": "input",
+          "purpose": "A missing handle is an input error."
+        }
+      ]
+    },
+    {
+      "name": "getThread",
+      "description": "Read a public post, its surrounding thread and replies.",
+      "request": {
+        "method": "GET",
+        "url": "https://public.api.bsky.app/xrpc/app.bsky.unspecced.getPostThreadV2?anchor=at%3A%2F%2F%7Bhandle%7D%2Fapp.bsky.feed.post%2F%7Brkey%7D&branchingFactor=1&below=10&sort=top&above=true",
+        "headers": {
+          "accept": "application/json",
+          "accept-language": "en-US,en;q=0.9",
+          "atproto-accept-labelers": "did:plc:ar7c4by46qjdydhdevvrndac;redact",
+          "origin": "https://bsky.app",
+          "priority": "u=1, i",
+          "referer": "https://bsky.app/",
+          "sec-ch-ua": "\"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Google Chrome\";v=\"156\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\"",
+          "sec-fetch-dest": "empty",
+          "sec-fetch-mode": "cors",
+          "sec-fetch-site": "same-site",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36"
+        }
+      },
+      "slots": [
+        {
+          "param": "handle",
+          "at": [
+            "query:anchor"
+          ],
+          "template": "at://{handle}/app.bsky.feed.post/{rkey}",
+          "escape": "url"
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://bsky.app/profile/{handle}/post/{rkey}"
+      },
+      "match": {
+        "method": "GET",
+        "host": "public.api.bsky.app",
+        "path": "/xrpc/app.bsky.unspecced.getPostThreadV2"
+      },
+      "response": {
+        "format": "json",
+        "contentType": "application/json; charset=utf-8",
+        "extract": "thread",
+        "pick": [
+          "uri",
+          "depth",
+          "type=value.$type",
+          "author=value.post.author.handle",
+          "text=value.post.record.text",
+          "createdAt=value.post.record.createdAt",
+          "likeCount=value.post.likeCount",
+          "repostCount=value.post.repostCount",
+          "replyCount=value.post.replyCount",
+          "quoteCount=value.post.quoteCount",
+          "moreReplies=value.moreReplies"
+        ],
+        "shape": {
+          "thread[].uri": "string",
+          "thread[].depth": "number",
+          "thread[].value.post.author.handle": "string",
+          "thread[].value.post.record.createdAt": "string",
+          "thread[].value.post.record.text": "string",
+          "thread[].value.post.replyCount": "number",
+          "thread[].value.post.repostCount": "number",
+          "thread[].value.post.likeCount": "number",
+          "thread[].value.post.quoteCount": "number",
+          "thread[].value.moreReplies": "number",
+          "thread[].value.$type": "string"
+        }
+      },
+      "params": [
+        {
+          "name": "handle",
+          "type": "string",
+          "required": true,
+          "description": "Post author's public handle without @.",
+          "example": "bsky.app"
+        },
+        {
+          "name": "rkey",
+          "type": "string",
+          "required": true,
+          "description": "Post record key from its Bluesky URL.",
+          "example": "3l6oveex3ii2l"
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "checks": [
+        {
+          "args": {
+            "handle": "jay.bsky.team",
+            "rkey": "3mxz7goeycc2f"
+          },
+          "expect": "result",
+          "purpose": "A second public thread is available."
+        }
+      ]
+    }
+  ]
+}
