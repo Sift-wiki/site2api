@@ -42,4 +42,8 @@ regexes = [
   # sites/airbnb.json (and test/edge/learner-r2.test.ts): Airbnb's public web API key, the same
   # constant every visitor's browser sends as x-airbnb-api-key; the op lists it as `public`
   '''^d306zoyjsyarp7ifhu67rjxn52tv0t20$''',
+  # sites/bluesky.json: a public post's record key (`rkey`, part of its URL
+  # bsky.app/profile/jay.bsky.team/post/3mxz7goeycc2f), not a credential; the `key` in the field
+  # name trips the generic-api-key rule
+  '''^3mxz7goeycc2f$''',
 ]
