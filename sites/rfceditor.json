@@ -1,0 +1,77 @@
+{
+  "name": "rfceditor",
+  "displayName": "RFC Editor",
+  "baseUrl": "https://www.rfc-editor.org",
+  "description": "Public RFC text from the RFC Editor.",
+  "operations": [
+    {
+      "name": "getRfcText",
+      "description": "Read an RFC as plain text.",
+      "request": {
+        "method": "GET",
+        "url": "https://www.rfc-editor.org/rfc/rfc%7Bnumber%7D.txt",
+        "headers": {
+          "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/jxl,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+          "accept-language": "en-US,en;q=0.9",
+          "priority": "u=0, i",
+          "sec-ch-ua": "\"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Google Chrome\";v=\"156\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\"",
+          "sec-fetch-dest": "document",
+          "sec-fetch-mode": "navigate",
+          "sec-fetch-site": "none",
+          "sec-fetch-user": "?1",
+          "upgrade-insecure-requests": "1",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36"
+        }
+      },
+      "slots": [
+        {
+          "param": "number",
+          "at": [
+            "path:1"
+          ],
+          "template": "rfc{number}.txt"
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://www.rfc-editor.org/rfc/rfc{number}.txt"
+      },
+      "match": {
+        "method": "GET",
+        "host": "www.rfc-editor.org",
+        "path": "/rfc/*"
+      },
+      "response": {
+        "format": "html",
+        "contentType": "text/plain;charset=utf-8"
+      },
+      "params": [
+        {
+          "name": "number",
+          "type": "string",
+          "required": true,
+          "description": "RFC number as digits, without the RFC prefix.",
+          "example": "9110",
+          "pattern": "[0-9]+"
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "checks": [
+        {
+          "args": { "number": "8446" },
+          "expect": "result",
+          "purpose": "A second public RFC returns text."
+        },
+        {
+          "args": { "number": "99999999" },
+          "expect": "input",
+          "purpose": "A nonexistent RFC is not found."
+        }
+      ]
+    }
+  ]
+}
