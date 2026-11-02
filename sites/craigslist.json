@@ -176,6 +176,148 @@
           "purpose": "Held-out actual public search link, unopened until exact candidate preflight, returns its own item details."
         }
       ]
+    },
+    {
+      "name": "searchArea",
+      "description": "Search public listings by area, category and optional price range.",
+      "request": {
+        "method": "GET",
+        "url": "https://www.craigslist.org/search/area/%7Barea%7D?cat=%7Bcategory%7D&query=%7Bquery%7D&min_price=%7BminPrice%7D&max_price=%7BmaxPrice%7D",
+        "headers": {
+          "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/jxl,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+          "upgrade-insecure-requests": "1",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36",
+          "sec-ch-ua": "\"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Google Chrome\";v=\"156\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\""
+        }
+      },
+      "slots": [
+        {
+          "param": "area",
+          "at": [
+            "path:2"
+          ]
+        },
+        {
+          "param": "category",
+          "at": [
+            "query:cat"
+          ]
+        },
+        {
+          "param": "query",
+          "at": [
+            "query:query"
+          ]
+        },
+        {
+          "param": "minPrice",
+          "at": [
+            "query:min_price"
+          ]
+        },
+        {
+          "param": "maxPrice",
+          "at": [
+            "query:max_price"
+          ]
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://www.craigslist.org/search/area/{area}?cat={category}&query={query}&min_price={minPrice}&max_price={maxPrice}"
+      },
+      "match": {
+        "method": "GET",
+        "host": "www.craigslist.org",
+        "path": "/search/area/*"
+      },
+      "response": {
+        "format": "html",
+        "contentType": "text/html; charset=utf-8",
+        "html": {
+          "items": "ol.cl-static-search-results li.cl-static-search-result",
+          "fields": {
+            "title": ".title",
+            "url": "a@href",
+            "price": ".price"
+          }
+        }
+      },
+      "params": [
+        {
+          "name": "area",
+          "type": "string",
+          "required": false,
+          "description": "Craigslist area URL segment, such as sfbay, newyork, losangeles, chicago or seattle.",
+          "default": "sfbay"
+        },
+        {
+          "name": "category",
+          "type": "string",
+          "required": false,
+          "description": "Craigslist category code, such as sss for all for sale, cta for cars and trucks, bia for bikes, or apa for apartments.",
+          "default": "sss"
+        },
+        {
+          "name": "query",
+          "type": "string",
+          "required": true,
+          "description": "Free-text search terms.",
+          "example": "honda"
+        },
+        {
+          "name": "minPrice",
+          "type": "string",
+          "required": false,
+          "description": "Minimum price in dollars; omit for no minimum.",
+          "pattern": "[0-9]+"
+        },
+        {
+          "name": "maxPrice",
+          "type": "string",
+          "required": false,
+          "description": "Maximum price in dollars; omit for no maximum.",
+          "pattern": "[0-9]+"
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "checks": [
+        {
+          "args": {
+            "query": "honda",
+            "area": "newyork",
+            "category": "cta",
+            "minPrice": "5000",
+            "maxPrice": "12000"
+          },
+          "expect": "result",
+          "purpose": "New York cars in a bounded price range differ from the default Bay Area search."
+        },
+        {
+          "args": {
+            "query": "trek",
+            "area": "seattle",
+            "category": "bia",
+            "minPrice": "100",
+            "maxPrice": "800"
+          },
+          "expect": "result",
+          "purpose": "Seattle bikes in a different bounded price range."
+        },
+        {
+          "args": {
+            "query": "zxqvunlikelyitem983247",
+            "area": "chicago",
+            "category": "fua"
+          },
+          "expect": "input",
+          "purpose": "An implausible query has no results."
+        }
+      ]
     }
   ]
 }

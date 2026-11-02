@@ -1,12 +1,18 @@
 Searches the public for-sale category in the SF Bay Area only. `query` is free-text search, such as `bicycle` or `piano`. Search can match listing descriptions, so every title need not contain the query.
 
-The returned listings are the server-rendered result set. Ranking, inventory and prices can change. Large responses are capped at 20,000 characters; inspect `truncated` and treat the result as partial. Pagination, other areas and contact information are not covered. Listing URLs are public references and can expire. No account or imported cookies are required.
+The returned listings are the server-rendered result set. Ranking, inventory and prices can change. Large responses are capped at 20,000 characters; inspect `truncated` and treat the result as partial. Pagination and contact information are not covered. Listing URLs are public references and can expire. No account or imported cookies are required.
+
+`searchArea` searches other areas and categories. Its defaults are `area=sfbay` and `category=sss`, with no price bounds, matching the original search URL. Area is the Craigslist URL segment, for example `newyork`, `losangeles`, `chicago` or `seattle`. Category is a Craigslist category code: `sss` is all for sale, `cta` cars and trucks, `bia` bikes, `fua` furniture, `apa` apartments and `jjj` jobs. Supply `minPrice` and `maxPrice` as nonnegative whole-dollar amounts, or omit either bound. Search results can match descriptions rather than titles. A job's displayed price can be `$0`, not compensation. `searchArea` omits location labels because housing labels may contain street addresses.
 
 getListing takes the two final path components from a URL returned by search: slug, then reference. The reference is an opaque public URL identifier, not the numeric post id. Keep both components from the same listing. Listings can expire; a missing listing is not an empty search result.
 
 The details are the signed-out HTML fallback. Item prose and description metadata are omitted because they can include contact text. Attributes omit serial numbers. Images are public image links present in the document; none are fetched. The location label is optional seller-supplied area text, not a verified address. No coordinates, seller identity or contact controls are included.
 
 ## Maintainer notes
+
+On 2026-11-01, logged out, an isolated home captured the real GET documents for New York cars and Seattle bikes with different queries and price bounds. `searchArea` was learned from both captures; the existing operations remain unchanged. Its default request was checked with `--dry` and leaves both price parameters absent. An unknown area returned tier-1 HTTP 404 classified as input. On Chicago furniture searches, the unfiltered, minimum-only and maximum-only calls returned different results; a held-out Chicago furniture search with both bounds matched the captured document's first title, price and URL. Los Angeles apartment and job searches returned title, price and URL. The category field is deliberately unrestricted: limiting an enum to the tested categories would prevent other Craigslist categories from being searched. Category coverage beyond these examples is not verified.
+
+The first and subsequent calls from a fresh home containing only the exported spec used tier 1. The example and two public checks exercise bounded searches; an implausible query is checked as input because the site's empty page does not contain the results selector. Housing location is not exported by the new recipe. Captures used write interception, without posting or replying.
 
 Verified signed out on 2026-10-26 UTC with an isolated api-anything home and no browser-session imports. Real frontend document captures `cmvp20czb` and `cmvp20dyk` learned `search(query)` from `bicycle` and `piano` with no warnings and minTier 1.
 
