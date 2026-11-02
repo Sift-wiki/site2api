@@ -173,98 +173,6 @@
       ]
     },
     {
-      "name": "getReviews",
-      "description": "Read the first page of publicly displayed Steam reviews for an app.",
-      "request": {
-        "method": "GET",
-        "url": "https://store.steampowered.com/ajaxappreviews/%7Bappid%7D?filter=summary&date_range_type=all&day_range=30&start_date=-1&end_date=-1&cursor=*&filter_offtopic_activity=1&playtime_filter_max=0&playtime_filter_min=0&playtime_type=all&purchase_type=all&review_type=all&hardware_os=all&hardware_cpu=all&hardware_gpu=all&hardware_device_type=all&use_review_quality=1&language=english&summary_num_positive_reviews=61140&summary_num_reviews=62791&origin=https%3A%2F%2Fstore.steampowered.com",
-        "headers": {
-          "accept": "*/*",
-          "referer": "https://store.steampowered.com/app/{appid}/Celeste/",
-          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36",
-          "sec-ch-ua": "\"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Google Chrome\";v=\"156\"",
-          "sec-ch-ua-mobile": "?0",
-          "sec-ch-ua-platform": "\"macOS\""
-        }
-      },
-      "slots": [
-        {
-          "param": "appid",
-          "at": [
-            "path:1"
-          ]
-        },
-        {
-          "param": "appid",
-          "at": [
-            "header:referer"
-          ],
-          "template": "https://store.steampowered.com/app/{appid}/Celeste/"
-        }
-      ],
-      "volatile": [],
-      "trigger": {
-        "url": "https://store.steampowered.com/app/{appid}/",
-        "steps": [
-          {
-            "action": "click",
-            "selector": "a[href=\"#app_reviews_hash\"]"
-          },
-          {
-            "action": "wait",
-            "ms": 2500
-          }
-        ]
-      },
-      "match": {
-        "method": "GET",
-        "host": "store.steampowered.com",
-        "path": "/ajaxappreviews/*"
-      },
-      "response": {
-        "format": "json",
-        "contentType": "application/json; charset=utf-8",
-        "extract": "reviews",
-        "pick": [
-          "votedUp=voted_up",
-          "text=review",
-          "playtimeMinutes=author.playtime_at_review",
-          "date=timestamp_created",
-          "language",
-          "reviewer=author.personaname"
-        ],
-        "shape": {
-          "reviews[].author.playtime_at_review": "number",
-          "reviews[].author.personaname": "string",
-          "reviews[].language": "string",
-          "reviews[].review": "string",
-          "reviews[].timestamp_created": "number",
-          "reviews[].voted_up": "boolean"
-        }
-      },
-      "params": [
-        {
-          "name": "appid",
-          "type": "string",
-          "required": true,
-          "description": "Numeric Steam application ID.",
-          "example": "504230"
-        }
-      ],
-      "readOnly": true,
-      "minTier": 1,
-      "learnedLoggedIn": false,
-      "checks": [
-        {
-          "args": {
-            "appid": "367520"
-          },
-          "expect": "result",
-          "purpose": "Hollow Knight has reviews distinct from the learning examples."
-        }
-      ]
-    },
-    {
       "name": "getReviewSummary",
       "description": "Get the public review score and counts for a Steam app.",
       "request": {
@@ -349,6 +257,270 @@
           },
           "expect": "result",
           "purpose": "Hollow Knight has a review summary distinct from the learning examples."
+        }
+      ]
+    },
+    {
+      "name": "listStore",
+      "description": "List public Steam storefront products by store category.",
+      "request": {
+        "method": "GET",
+        "url": "https://store.steampowered.com/search/?filter=%7Blist%7D",
+        "headers": {
+          "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/jxl,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+          "accept-language": "en-US,en;q=0.9",
+          "sec-fetch-dest": "document",
+          "sec-fetch-mode": "navigate",
+          "sec-fetch-site": "none",
+          "sec-fetch-user": "?1",
+          "upgrade-insecure-requests": "1",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36",
+          "sec-ch-ua": "\"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Google Chrome\";v=\"156\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\""
+        }
+      },
+      "slots": [
+        {
+          "param": "list",
+          "at": [
+            "query:filter"
+          ]
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://store.steampowered.com/search/?filter={list}"
+      },
+      "match": {
+        "method": "GET",
+        "host": "store.steampowered.com",
+        "path": "/search/"
+      },
+      "response": {
+        "format": "html",
+        "contentType": "text/html; charset=UTF-8",
+        "html": {
+          "items": "#search_result_container a.search_result_row",
+          "fields": {
+            "itemKey": "@data-ds-itemkey",
+            "title": ".title",
+            "url": "@href",
+            "price": ".discount_final_price",
+            "discount": ".discount_pct",
+            "releaseDate": ".search_released"
+          }
+        }
+      },
+      "params": [
+        {
+          "name": "list",
+          "type": "string",
+          "required": false,
+          "description": "Store category: top sellers, popular new releases, or popular upcoming releases.",
+          "example": "topsellers",
+          "default": "topsellers",
+          "enum": [
+            "topsellers",
+            "popularnew",
+            "popularcomingsoon"
+          ]
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "checks": [
+        {
+          "args": {
+            "list": "popularcomingsoon"
+          },
+          "expect": "result",
+          "purpose": "Upcoming products differ from the top sellers and popular new releases."
+        }
+      ]
+    },
+    {
+      "name": "getReviews",
+      "description": "Read publicly displayed Steam reviews for an app, optionally filtering their order, language and sentiment.",
+      "request": {
+        "method": "GET",
+        "url": "https://store.steampowered.com/ajaxappreviews/%7Bappid%7D?filter=%7Bfilter%7D&date_range_type=all&day_range=30&start_date=-1&end_date=-1&cursor=*&filter_offtopic_activity=1&playtime_filter_max=0&playtime_filter_min=0&playtime_type=all&purchase_type=all&review_type=%7BreviewType%7D&hardware_os=all&hardware_cpu=all&hardware_gpu=all&hardware_device_type=all&use_review_quality=1&language=%7Blanguage%7D&summary_num_positive_reviews=61140&summary_num_reviews=62791&origin=https%3A%2F%2Fstore.steampowered.com",
+        "headers": {
+          "accept": "*/*",
+          "referer": "https://store.steampowered.com/app/{appid}/Celeste/",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36",
+          "sec-ch-ua": "\"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Google Chrome\";v=\"156\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\""
+        }
+      },
+      "slots": [
+        {
+          "param": "appid",
+          "at": [
+            "path:1"
+          ]
+        },
+        {
+          "param": "filter",
+          "at": [
+            "query:filter"
+          ]
+        },
+        {
+          "param": "language",
+          "at": [
+            "query:language"
+          ]
+        },
+        {
+          "param": "reviewType",
+          "at": [
+            "query:review_type"
+          ]
+        },
+        {
+          "param": "appid",
+          "at": [
+            "header:referer"
+          ],
+          "template": "https://store.steampowered.com/app/{appid}/Celeste/"
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://store.steampowered.com/app/{appid}/",
+        "steps": [
+          {
+            "action": "click",
+            "selector": "a[href=\"#app_reviews_hash\"]"
+          },
+          {
+            "action": "wait",
+            "ms": 1500
+          },
+          {
+            "action": "click",
+            "selector": "button:has-text(\"Review Type\")"
+          },
+          {
+            "action": "click",
+            "selector": "label:has(input[name=review_type][value=\"{reviewType}\"])"
+          },
+          {
+            "action": "click",
+            "selector": "button:has-text(\"Language\")"
+          },
+          {
+            "action": "click",
+            "selector": "label:has(input[name=review_language][value=\"{language}\"]) >> nth=0"
+          },
+          {
+            "action": "click",
+            "selector": "button:has-text(\"Display\")"
+          },
+          {
+            "action": "click",
+            "selector": "label:has(input[name=review_context][value=\"{filter}\"])"
+          },
+          {
+            "action": "wait",
+            "ms": 2000
+          }
+        ]
+      },
+      "match": {
+        "method": "GET",
+        "host": "store.steampowered.com",
+        "path": "/ajaxappreviews/*"
+      },
+      "response": {
+        "format": "json",
+        "contentType": "application/json; charset=utf-8",
+        "extract": "reviews",
+        "pick": [
+          "votedUp=voted_up",
+          "text=review",
+          "playtimeMinutes=author.playtime_at_review",
+          "date=timestamp_created",
+          "language",
+          "reviewer=author.personaname"
+        ],
+        "shape": {
+          "reviews[].author.playtime_at_review": "number",
+          "reviews[].author.personaname": "string",
+          "reviews[].language": "string",
+          "reviews[].review": "string",
+          "reviews[].timestamp_created": "number",
+          "reviews[].voted_up": "boolean"
+        }
+      },
+      "params": [
+        {
+          "name": "appid",
+          "type": "string",
+          "required": true,
+          "description": "Numeric Steam application ID.",
+          "example": "504230"
+        },
+        {
+          "name": "filter",
+          "type": "string",
+          "required": false,
+          "description": "Display order: summary, all (most helpful), recent, or funny.",
+          "example": "recent",
+          "default": "summary",
+          "enum": [
+            "summary",
+            "all",
+            "recent",
+            "funny"
+          ]
+        },
+        {
+          "name": "language",
+          "type": "string",
+          "required": false,
+          "description": "Steam review language code, such as english, french, schinese, or all.",
+          "example": "schinese",
+          "default": "english",
+          "pattern": "[a-z_]+"
+        },
+        {
+          "name": "reviewType",
+          "type": "string",
+          "required": false,
+          "description": "Review sentiment: all, positive, or negative.",
+          "example": "negative",
+          "default": "all",
+          "enum": [
+            "all",
+            "positive",
+            "negative"
+          ]
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "checks": [
+        {
+          "args": {
+            "appid": "367520"
+          },
+          "expect": "result",
+          "purpose": "Hollow Knight has reviews distinct from the learning examples."
+        },
+        {
+          "args": {
+            "appid": "504230",
+            "filter": "summary",
+            "language": "english",
+            "reviewType": "negative"
+          },
+          "expect": "result",
+          "purpose": "Negative English reviews exclude positive Celeste example reviews."
         }
       ]
     }

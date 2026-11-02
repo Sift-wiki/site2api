@@ -6,16 +6,19 @@ include Steam's own tracking query parameters.
 Prices and release dates retain the store's displayed text. Currency, availability, language,
 ranking and content filters depend on Steam's signed-out regional defaults. A price may be
 absent for a product not currently sold. No region override, pagination, account library,
-or purchase operations are included.
+or purchase operations are included. `listStore` returns the first page of top sellers by
+default; `popularnew` and `popularcomingsoon` select popular new and upcoming releases.
+Discount is present only on discounted products. Specials are not available as a list option.
 
 `getApp` accepts a numeric app ID. The price fields describe the first purchase offer, which
 may be missing or represent an edition or bundle rather than the base game. Discount fields
 are present only when the offer is discounted. Platform values are Steam CSS class names.
 Some apps have an age gate, which can prevent detail and review retrieval.
 
-`getReviews` returns the storefront's first ten summary-ranked reviews in the page's English
-language setting; it does not paginate or offer filter or language overrides. Playtime is in
-minutes at review and dates are Unix seconds. `getReviewSummary` reports the review-section
+`getReviews` defaults to the storefront's first ten summary-ranked English reviews. It accepts
+`filter` (`summary`, `all` for most helpful, `recent`, or `funny`), `language` (Steam language
+codes or `all`), and `reviewType` (`all`, `positive`, or `negative`). It does not paginate.
+Playtime is in minutes at review and dates are Unix seconds. `getReviewSummary` reports the review-section
 counts, which can differ from the storefront's headline counts because their filters differ.
 Reviews and scores change over time.
 
@@ -66,5 +69,21 @@ The page attempted a usability-tracking POST on the review interaction. Capture 
 and the operations do not send it. The learner marked the guest session logged in; the metadata
 was corrected without importing cookies. In separate empty homes, Portal 2 620 returned
 product details, reviews and a summary at tier 1. A nonexistent app was classified as input.
-Verification passed ten cases at tier 1. No top-seller, specials or player-count operation,
-review filter options, pagination, or age-gate bypass was added.
+Verification passed ten cases at tier 1. At that point no top-seller, specials or player-count
+operation, review filter options, pagination, or age-gate bypass had been added.
+
+### 2026-11-01, logged out: store lists and review filters
+
+Learned `listStore` from the public search documents for top sellers and popular new releases.
+The held-out popular-upcoming document and tier-1 replay both began with ArcheAge Chronicles
+and Loftia. `filter=specials` returned undiscounted products; the actual specials page uses
+`specials=1`, so it was not included in this single-parameter operation.
+
+Captured review controls on Celeste with recent, Simplified Chinese, and negative selected,
+and on Stardew Valley with most helpful, Brazilian Portuguese, and positive selected. The
+learned query slots preserve the original summary, English, and all-sentiment defaults. A
+held-out Celeste summary/English/negative replay matched the captured page's first review
+timestamps and sentiment. Two attempts to capture Hollow Knight's dropdowns timed out while
+the controls moved or lost visibility, so dropdown-based healing may be sensitive to page layout.
+The page attempted usability-tracking POSTs on review interactions; capture stopped them.
+The learner's guest-login heuristic was corrected, with no cookies imported.
