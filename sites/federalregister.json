@@ -1,0 +1,248 @@
+{
+  "name": "federalregister",
+  "displayName": "Federal Register",
+  "baseUrl": "https://www.federalregister.gov",
+  "description": "Search public US federal regulations, notices and presidential documents and read their publication details.",
+  "operations": [
+    {
+      "name": "search",
+      "description": "Search published Federal Register documents by term.",
+      "request": {
+        "method": "GET",
+        "url": "https://www.federalregister.gov/documents/search?conditions%5Bsearch_type_id%5D=3&conditions%5Bterm%5D=%7Bterm%7D",
+        "headers": {
+          "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/jxl,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+          "accept-language": "en-US,en;q=0.9",
+          "priority": "u=0, i",
+          "sec-ch-ua": "\"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Google Chrome\";v=\"156\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\"",
+          "sec-fetch-dest": "document",
+          "sec-fetch-mode": "navigate",
+          "sec-fetch-site": "none",
+          "sec-fetch-user": "?1",
+          "upgrade-insecure-requests": "1",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36"
+        }
+      },
+      "slots": [
+        {
+          "param": "term",
+          "at": [
+            "query:conditions[term]"
+          ]
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://www.federalregister.gov/documents/search?conditions%5Bterm%5D={term}"
+      },
+      "match": {
+        "method": "GET",
+        "host": "www.federalregister.gov",
+        "path": "/documents/search"
+      },
+      "response": {
+        "format": "html",
+        "contentType": "text/html; charset=utf-8",
+        "html": {
+          "items": "li.search-result-document",
+          "fields": {
+            "documentNumber": ".document-clipping-actions@data-document-number",
+            "title": "h5 a",
+            "type": ".icon-doctype@data-tooltip",
+            "agencies": "all:p.metadata a[href*=\"/agencies/\"]",
+            "publicationDate": "p.metadata a[href*=\"/documents/\"]",
+            "url": "h5 a@href"
+          }
+        }
+      },
+      "params": [
+        {
+          "name": "term",
+          "type": "string",
+          "required": true,
+          "description": "Words or phrase to search for.",
+          "example": "artificial intelligence"
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "checks": [
+        {
+          "args": {
+            "term": "emissions standards"
+          },
+          "expect": "result",
+          "purpose": "A second search returns published documents."
+        }
+      ]
+    },
+    {
+      "name": "agencyDocuments",
+      "description": "List the agency page's recently published documents.",
+      "request": {
+        "method": "GET",
+        "url": "https://www.federalregister.gov/agencies/%7Bagency%7D",
+        "headers": {
+          "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/jxl,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+          "accept-language": "en-US,en;q=0.9",
+          "priority": "u=0, i",
+          "sec-ch-ua": "\"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Google Chrome\";v=\"156\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\"",
+          "sec-fetch-dest": "document",
+          "sec-fetch-mode": "navigate",
+          "sec-fetch-site": "none",
+          "sec-fetch-user": "?1",
+          "upgrade-insecure-requests": "1",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36"
+        }
+      },
+      "slots": [
+        {
+          "param": "agency",
+          "at": [
+            "path:1"
+          ]
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://www.federalregister.gov/agencies/{agency}"
+      },
+      "match": {
+        "method": "GET",
+        "host": "www.federalregister.gov",
+        "path": "/agencies/*"
+      },
+      "response": {
+        "format": "html",
+        "contentType": "text/html; charset=utf-8",
+        "html": {
+          "items": "#documents li.search-result-document",
+          "fields": {
+            "documentNumber": ".document-clipping-actions@data-document-number",
+            "title": "h5 a",
+            "type": ".icon-doctype@data-tooltip",
+            "agencies": "all:p.metadata a[href*=\"/agencies/\"]",
+            "publicationDate": "p.metadata a[href*=\"/documents/\"]",
+            "url": "h5 a@href"
+          }
+        }
+      },
+      "params": [
+        {
+          "name": "agency",
+          "type": "string",
+          "required": true,
+          "description": "Federal Register agency slug, such as environmental-protection-agency.",
+          "example": "environmental-protection-agency",
+          "pattern": "[a-z0-9-]+"
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "checks": [
+        {
+          "args": {
+            "agency": "food-and-drug-administration"
+          },
+          "expect": "result",
+          "purpose": "A second agency returns recent documents."
+        }
+      ]
+    },
+    {
+      "name": "getDocument",
+      "description": "Read a published document's metadata, summary and dates by Federal Register document number.",
+      "request": {
+        "method": "GET",
+        "url": "https://www.federalregister.gov/d/%7BdocumentNumber%7D",
+        "headers": {
+          "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/jxl,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+          "accept-language": "en-US,en;q=0.9",
+          "priority": "u=0, i",
+          "sec-ch-ua": "\"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Google Chrome\";v=\"156\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\"",
+          "sec-fetch-dest": "document",
+          "sec-fetch-mode": "navigate",
+          "sec-fetch-site": "none",
+          "sec-fetch-user": "?1",
+          "upgrade-insecure-requests": "1",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36"
+        }
+      },
+      "slots": [
+        {
+          "param": "documentNumber",
+          "at": [
+            "path:1"
+          ]
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://www.federalregister.gov/d/{documentNumber}"
+      },
+      "match": {
+        "method": "GET",
+        "host": "www.federalregister.gov",
+        "path": "/d/*"
+      },
+      "response": {
+        "format": "html",
+        "contentType": "text/html; charset=utf-8",
+        "html": {
+          "items": "html:has(meta[property=og:title])",
+          "fields": {
+            "title": "meta[property=og:title]@content",
+            "type": "#print-only-document-details dt:contains(Document Type) + dd",
+            "agencies": "all:#print-only-document-details a[href*=\"/agencies/\"]",
+            "publicationDate": "meta[property=article:published_time]@content",
+            "abstract": "#summary",
+            "dates": "#dates",
+            "cfr": "all:#print-only-document-details dt:contains(CFR) + dd, #print-only-document-details dt:contains(CFR) + dd + dd, #print-only-document-details dt:contains(CFR) + dd + dd + dd, #print-only-document-details dt:contains(CFR) + dd + dd + dd + dd",
+            "docket": "all:#print-only-document-details dt:contains(Agency/Docket) + dd, #print-only-document-details dt:contains(Agency/Docket) + dd + dd, #print-only-document-details dt:contains(Agency/Docket) + dd + dd + dd, #print-only-document-details dt:contains(Agency/Docket) + dd + dd + dd + dd",
+            "metadata": "#print-only-document-details .metadata_list",
+            "rin": "#print-only-document-details dt:contains(RIN) + dd",
+            "htmlUrl": "link[rel=canonical]@href",
+            "pdfUrl": "a[href$=\".pdf\"]@href"
+          }
+        }
+      },
+      "params": [
+        {
+          "name": "documentNumber",
+          "type": "string",
+          "required": true,
+          "description": "Federal Register document number, for example 2023-18624.",
+          "example": "2023-18624",
+          "pattern": "[A-Za-z0-9]+-[0-9]+"
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "checks": [
+        {
+          "args": {
+            "documentNumber": "2026-22082"
+          },
+          "expect": "result",
+          "purpose": "A second document redirects to its details."
+        },
+        {
+          "args": {
+            "documentNumber": "1900-999999"
+          },
+          "expect": "input",
+          "purpose": "A nonexistent document number is not found."
+        }
+      ]
+    }
+  ]
+}
