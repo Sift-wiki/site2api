@@ -1,0 +1,155 @@
+{
+  "name": "duckduckgo",
+  "displayName": "DuckDuckGo",
+  "baseUrl": "https://html.duckduckgo.com",
+  "description": "Signed-out web search results and search autocomplete suggestions.",
+  "operations": [
+    {
+      "name": "search",
+      "description": "Search the first page of public web results.",
+      "request": {
+        "method": "GET",
+        "url": "https://html.duckduckgo.com/html/?q=%7Bq%7D",
+        "headers": {
+          "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/jxl,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+          "accept-language": "en-US,en;q=0.9",
+          "priority": "u=0, i",
+          "sec-ch-ua": "\"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Google Chrome\";v=\"156\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\"",
+          "sec-fetch-dest": "document",
+          "sec-fetch-mode": "navigate",
+          "sec-fetch-site": "none",
+          "sec-fetch-user": "?1",
+          "upgrade-insecure-requests": "1",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36"
+        }
+      },
+      "slots": [
+        {
+          "param": "q",
+          "at": [
+            "query:q"
+          ]
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://html.duckduckgo.com/html/?q={q}"
+      },
+      "match": {
+        "method": "GET",
+        "host": "html.duckduckgo.com",
+        "path": "/html/"
+      },
+      "response": {
+        "format": "html",
+        "contentType": "text/html; charset=UTF-8",
+        "html": {
+          "items": "#links div.result:not(.result--ad)",
+          "fields": {
+            "title": "a.result__a",
+            "url": "a.result__a@href",
+            "snippet": ".result__snippet"
+          }
+        }
+      },
+      "params": [
+        {
+          "name": "q",
+          "type": "string",
+          "required": true,
+          "description": "Public web search query.",
+          "example": "python programming"
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "checks": [
+        {
+          "args": {
+            "q": "rust programming"
+          },
+          "expect": "result",
+          "purpose": "A different public search query returns results."
+        }
+      ]
+    },
+    {
+      "name": "suggest",
+      "description": "Get autocomplete suggestions for a search query.",
+      "request": {
+        "method": "GET",
+        "url": "https://duckduckgo.com/ac/?q=%7Bq%7D&kl=wt-wt&vertical=homepage",
+        "headers": {
+          "accept": "*/*",
+          "referer": "https://duckduckgo.com/",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36",
+          "sec-ch-ua": "\"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Google Chrome\";v=\"156\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\""
+        }
+      },
+      "slots": [
+        {
+          "param": "q",
+          "at": [
+            "query:q"
+          ]
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://duckduckgo.com/",
+        "steps": [
+          {
+            "action": "fill",
+            "selector": "textarea[name=q]",
+            "value": "{q}"
+          },
+          {
+            "action": "wait",
+            "ms": 2000
+          }
+        ]
+      },
+      "match": {
+        "method": "GET",
+        "host": "duckduckgo.com",
+        "path": "/ac/"
+      },
+      "response": {
+        "format": "json",
+        "contentType": "application/javascript; charset=UTF-8",
+        "pick": [
+          "phrase"
+        ],
+        "shape": {
+          "[].phrase": "string"
+        }
+      },
+      "params": [
+        {
+          "name": "q",
+          "type": "string",
+          "required": true,
+          "description": "Search query or prefix to complete.",
+          "example": "python"
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "checks": [
+        {
+          "args": {
+            "q": "rust language"
+          },
+          "expect": "result",
+          "purpose": "A different public query returns autocomplete suggestions."
+        }
+      ]
+    }
+  ]
+}
