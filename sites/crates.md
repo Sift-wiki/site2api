@@ -1,8 +1,12 @@
 No account is needed for these reads. crates.io asks for at most one request per second: space
 calls out.
 
-- Search is relevance-ranked, first page only, up to 10 results. Versions are sorted by publication
-  date, first page only, up to 100. Reverse dependencies return the first page, up to 10.
+- Search defaults to relevance and page 1, with up to 10 results per page. The optional `sort` is
+  `relevance`, `downloads` (all time), `recent-downloads`, `recent-updates`, `new`, or `alpha`.
+  `page` is a positive whole number. Versions are sorted by publication date, first page only, up
+  to 100. Reverse dependencies return the first page, up to 10.
+- The category index returns up to 100 categories. Keyword listings return the first 10 crates,
+  sorted by recent downloads.
 - `defaultVersion` is the version selected by crates.io for the crate page, not necessarily the
   highest version. The detail license belongs to that version. Links and license can be null.
 - Pass an exact published version to `getDependencies`. Its `req` is a Cargo version requirement;
@@ -14,7 +18,7 @@ calls out.
 ## Maintainer notes
 
 Verified 2026-11-01, logged out. Two captures per operation used `serde` and `tokio`; held-out
-`rand` calls matched the corresponding page requests. The final exported spec passed `verify crates`
+`rand` calls matched the corresponding page requests. The original exported spec passed `verify crates`
 (8 pass, 0 fail, 0 inconclusive), all at tier 1. A first call from an empty home (`getCrate rand`)
 also succeeded at tier 1.
 
@@ -32,4 +36,21 @@ also succeeded at tier 1.
   is returned instead; search has a populated `max_version`.
 - Reverse dependency names and versions come from the response's `versions` array, not the
   `dependencies` array, whose `crate_id` is the queried crate.
-- Search pagination and sort arguments were not proven and are not exposed. No writes were tried.
+- No writes were tried.
+
+### Additional reads, 2026-11-01 (logged out)
+
+- The exported spec passed `verify crates` from a fresh home: 13 pass, 0 fail, 0 inconclusive,
+  all at tier 1. A fresh-home search call also succeeded at tier 1.
+- Search captures used `serde` / `downloads` / page 2 and `tokio` / `recent-downloads` / page 3.
+  A held-out `rand` / `alpha` / page 2 call matched the search-page XHR, starting with `a1-ai`.
+  Changing sort and page separately for `serde` changed the results. The original defaults remain
+  relevance and page 1.
+- `/categories` loaded `/api/v1/categories?page=1&per_page=100&sort=alpha`, with 58 entries at
+  capture. `/keywords/async` and `/keywords/cli` loaded the keyword-filtered crates request;
+  held-out `serde` matched its page XHR, starting with `serde_json`.
+- A category detail page sends separate requests for metadata and its crates. The current response
+  recipe cannot combine the two, so no combined `listCategory` is included.
+- Crate pages fetch rendered README HTML from `static.crates.io`, on the same registrable site.
+  Captures for `serde` and `serde_json` returned HTML fragments without a stable enclosing element;
+  the whole-body HTML recipe matched nothing. README extraction is not included.

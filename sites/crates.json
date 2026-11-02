@@ -73,8 +73,8 @@
           "name": "name",
           "type": "string",
           "required": true,
-          "example": "serde",
-          "description": "Crate name, such as serde."
+          "description": "Crate name, such as serde.",
+          "example": "serde"
         }
       ],
       "readOnly": true,
@@ -152,98 +152,13 @@
           "name": "name",
           "type": "string",
           "required": true,
-          "example": "serde",
-          "description": "Crate name, such as serde."
+          "description": "Crate name, such as serde.",
+          "example": "serde"
         }
       ],
       "readOnly": true,
       "minTier": 1,
       "learnedLoggedIn": false
-    },
-    {
-      "name": "searchCrates",
-      "description": "Search crates by relevance, returning the first 10 results.",
-      "request": {
-        "method": "GET",
-        "url": "https://crates.io/api/v1/crates?page=1&per_page=10&sort=relevance&q=%7Bq%7D",
-        "headers": {
-          "accept": "*/*",
-          "accept-language": "en-US,en;q=0.9",
-          "priority": "u=1, i",
-          "referer": "https://crates.io/search?q={q}",
-          "sec-ch-ua": "\"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Google Chrome\";v=\"156\"",
-          "sec-ch-ua-mobile": "?0",
-          "sec-ch-ua-platform": "\"macOS\"",
-          "sec-fetch-dest": "empty",
-          "sec-fetch-mode": "cors",
-          "sec-fetch-site": "same-origin",
-          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36"
-        }
-      },
-      "slots": [
-        {
-          "param": "q",
-          "at": [
-            "query:q"
-          ]
-        },
-        {
-          "param": "q",
-          "at": [
-            "header:referer"
-          ],
-          "template": "https://crates.io/search?q={q}"
-        }
-      ],
-      "volatile": [],
-      "trigger": {
-        "url": "https://crates.io/search?q={q}"
-      },
-      "match": {
-        "method": "GET",
-        "host": "crates.io",
-        "path": "/api/v1/crates"
-      },
-      "response": {
-        "format": "json",
-        "contentType": "application/json",
-        "extract": "crates",
-        "pick": [
-          "name",
-          "maxVersion=max_version",
-          "description",
-          "downloads",
-          "recentDownloads=recent_downloads"
-        ],
-        "shape": {
-          "crates[].name": "string",
-          "crates[].downloads": "number",
-          "crates[].recent_downloads": "number",
-          "crates[].max_version": "string",
-          "crates[].description": "string"
-        }
-      },
-      "params": [
-        {
-          "name": "q",
-          "type": "string",
-          "required": true,
-          "example": "serde",
-          "description": "Search terms or crate name."
-        }
-      ],
-      "readOnly": true,
-      "minTier": 1,
-      "learnedLoggedIn": false,
-      "checks": [
-        {
-          "args": {
-            "q": "zzqqxxwvnocratematch"
-          },
-          "expect": "empty",
-          "purpose": "A query with no matching crates returns an empty list"
-        }
-      ]
     },
     {
       "name": "getVersions",
@@ -315,8 +230,8 @@
           "name": "name",
           "type": "string",
           "required": true,
-          "example": "serde",
-          "description": "Crate name, such as serde."
+          "description": "Crate name, such as serde.",
+          "example": "serde"
         }
       ],
       "readOnly": true,
@@ -395,15 +310,15 @@
           "name": "name",
           "type": "string",
           "required": true,
-          "example": "serde",
-          "description": "Crate name, such as serde."
+          "description": "Crate name, such as serde.",
+          "example": "serde"
         },
         {
           "name": "version",
           "type": "string",
           "required": true,
-          "example": "1.0.229",
-          "description": "Exact published version, such as 1.0.229."
+          "description": "Exact published version, such as 1.0.229.",
+          "example": "1.0.229"
         }
       ],
       "readOnly": true,
@@ -472,13 +387,285 @@
           "name": "name",
           "type": "string",
           "required": true,
-          "example": "serde",
-          "description": "Crate name, such as serde."
+          "description": "Crate name, such as serde.",
+          "example": "serde"
         }
       ],
       "readOnly": true,
       "minTier": 1,
       "learnedLoggedIn": false
+    },
+    {
+      "name": "searchCrates",
+      "description": "Search crates, returning up to 10 results per page.",
+      "request": {
+        "method": "GET",
+        "url": "https://crates.io/api/v1/crates?page=%7Bpage%7D&per_page=10&sort=%7Bsort%7D&q=%7Bq%7D",
+        "headers": {
+          "accept": "*/*",
+          "accept-language": "en-US,en;q=0.9",
+          "priority": "u=1, i",
+          "referer": "https://crates.io/search?q={q}",
+          "sec-ch-ua": "\"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Google Chrome\";v=\"156\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\"",
+          "sec-fetch-dest": "empty",
+          "sec-fetch-mode": "cors",
+          "sec-fetch-site": "same-origin",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36"
+        }
+      },
+      "slots": [
+        {
+          "param": "q",
+          "at": [
+            "query:q"
+          ]
+        },
+        {
+          "param": "sort",
+          "at": [
+            "query:sort"
+          ]
+        },
+        {
+          "param": "page",
+          "at": [
+            "query:page"
+          ]
+        },
+        {
+          "param": "q",
+          "at": [
+            "header:referer"
+          ],
+          "template": "https://crates.io/search?q={q}"
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://crates.io/search?q={q}&sort={sort}&page={page}"
+      },
+      "match": {
+        "method": "GET",
+        "host": "crates.io",
+        "path": "/api/v1/crates"
+      },
+      "response": {
+        "format": "json",
+        "contentType": "application/json",
+        "extract": "crates",
+        "pick": [
+          "name",
+          "maxVersion=max_version",
+          "description",
+          "downloads",
+          "recentDownloads=recent_downloads"
+        ],
+        "shape": {
+          "crates[].name": "string",
+          "crates[].downloads": "number",
+          "crates[].recent_downloads": "number",
+          "crates[].max_version": "string",
+          "crates[].description": "string"
+        }
+      },
+      "params": [
+        {
+          "name": "q",
+          "type": "string",
+          "required": true,
+          "description": "Search terms or crate name.",
+          "example": "serde"
+        },
+        {
+          "name": "sort",
+          "type": "string",
+          "required": false,
+          "description": "Sort order: relevance, all-time downloads, recent downloads, recent updates, newly added or alphabetical.",
+          "example": "relevance",
+          "default": "relevance",
+          "enum": [
+            "relevance",
+            "downloads",
+            "recent-downloads",
+            "recent-updates",
+            "new",
+            "alpha"
+          ]
+        },
+        {
+          "name": "page",
+          "type": "string",
+          "required": false,
+          "description": "One-based page number.",
+          "example": "1",
+          "default": "1",
+          "pattern": "[1-9][0-9]*",
+          "hint": "A positive whole page number"
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "checks": [
+        {
+          "args": {
+            "q": "rand",
+            "sort": "alpha",
+            "page": "2"
+          },
+          "expect": "result",
+          "purpose": "A different query, alphabetical sort and second page return results"
+        },
+        {
+          "args": {
+            "q": "zzqqxxwvnocratematch"
+          },
+          "expect": "empty",
+          "purpose": "A query with no matching crates returns an empty list"
+        }
+      ]
+    },
+    {
+      "name": "listCategories",
+      "description": "List public crate categories in alphabetical order.",
+      "request": {
+        "method": "GET",
+        "url": "https://crates.io/api/v1/categories?page=1&per_page=100&sort=alpha",
+        "headers": {
+          "accept": "*/*",
+          "accept-language": "en-US,en;q=0.9",
+          "priority": "u=1, i",
+          "referer": "https://crates.io/categories",
+          "sec-ch-ua": "\"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Google Chrome\";v=\"156\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\"",
+          "sec-fetch-dest": "empty",
+          "sec-fetch-mode": "cors",
+          "sec-fetch-site": "same-origin",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36"
+        }
+      },
+      "slots": [],
+      "volatile": [],
+      "trigger": {
+        "url": "https://crates.io/categories"
+      },
+      "match": {
+        "method": "GET",
+        "host": "crates.io",
+        "path": "/api/v1/categories"
+      },
+      "response": {
+        "format": "json",
+        "contentType": "application/json",
+        "extract": "categories",
+        "pick": [
+          "slug",
+          "name=category",
+          "crateCount=crates_cnt"
+        ],
+        "shape": {
+          "categories[].category": "string",
+          "categories[].slug": "string",
+          "categories[].crates_cnt": "number"
+        }
+      },
+      "params": [],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false
+    },
+    {
+      "name": "listKeyword",
+      "description": "List the first 10 crates with a keyword, sorted by recent downloads.",
+      "request": {
+        "method": "GET",
+        "url": "https://crates.io/api/v1/crates?keyword=%7Bkeyword%7D&page=1&per_page=10&sort=recent-downloads",
+        "headers": {
+          "accept": "*/*",
+          "accept-language": "en-US,en;q=0.9",
+          "priority": "u=1, i",
+          "referer": "https://crates.io/keywords/{keyword}",
+          "sec-ch-ua": "\"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Google Chrome\";v=\"156\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\"",
+          "sec-fetch-dest": "empty",
+          "sec-fetch-mode": "cors",
+          "sec-fetch-site": "same-origin",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36"
+        }
+      },
+      "slots": [
+        {
+          "param": "keyword",
+          "at": [
+            "query:keyword"
+          ]
+        },
+        {
+          "param": "keyword",
+          "at": [
+            "header:referer"
+          ],
+          "template": "https://crates.io/keywords/{keyword}"
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://crates.io/keywords/{keyword}"
+      },
+      "match": {
+        "method": "GET",
+        "host": "crates.io",
+        "path": "/api/v1/crates"
+      },
+      "response": {
+        "format": "json",
+        "contentType": "application/json",
+        "extract": "crates",
+        "pick": [
+          "name",
+          "description",
+          "downloads",
+          "recentDownloads=recent_downloads"
+        ],
+        "shape": {
+          "crates[].name": "string",
+          "crates[].downloads": "number",
+          "crates[].recent_downloads": "number",
+          "crates[].description": "string"
+        }
+      },
+      "params": [
+        {
+          "name": "keyword",
+          "type": "string",
+          "required": true,
+          "description": "Keyword slug, such as async.",
+          "example": "async"
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "checks": [
+        {
+          "args": {
+            "keyword": "cli"
+          },
+          "expect": "result",
+          "purpose": "The cli keyword returns different crates from async"
+        },
+        {
+          "args": {
+            "keyword": "zzqqxxwvnocratematch"
+          },
+          "expect": "empty",
+          "purpose": "A keyword with no matching crates returns an empty list"
+        }
+      ]
     }
   ]
 }
