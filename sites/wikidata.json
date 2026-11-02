@@ -1,0 +1,285 @@
+{
+  "name": "wikidata",
+  "displayName": "Wikidata",
+  "baseUrl": "https://www.wikidata.org",
+  "description": "Public Wikidata entity search, selected item claims, and English label resolution.",
+  "operations": [
+    {
+      "name": "searchEntities",
+      "description": "Search English entity labels and aliases.",
+      "request": {
+        "method": "GET",
+        "url": "https://www.wikidata.org/w/api.php?action=wbsearchentities&format=json&limit=10&language=en&uselang=en&type=%7Btype%7D&search=%7Bq%7D",
+        "headers": {
+          "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/jxl,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+          "accept-language": "en-US,en;q=0.9",
+          "priority": "u=0, i",
+          "sec-ch-ua": "\"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Google Chrome\";v=\"156\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\"",
+          "sec-fetch-dest": "document",
+          "sec-fetch-mode": "navigate",
+          "sec-fetch-site": "none",
+          "sec-fetch-user": "?1",
+          "upgrade-insecure-requests": "1",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36"
+        }
+      },
+      "slots": [
+        {
+          "param": "q",
+          "at": [
+            "query:search"
+          ]
+        },
+        {
+          "param": "type",
+          "at": [
+            "query:type"
+          ]
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://www.wikidata.org/w/api.php?action=wbsearchentities&format=json&limit=10&language=en&uselang=en&type={type}&search={q}"
+      },
+      "match": {
+        "method": "GET",
+        "host": "www.wikidata.org",
+        "path": "/w/api.php"
+      },
+      "response": {
+        "format": "json",
+        "contentType": "application/json; charset=utf-8",
+        "extract": "search",
+        "pick": [
+          "id",
+          "label",
+          "description",
+          "match"
+        ],
+        "shape": {
+          "search[].id": "string",
+          "search[].label": "string",
+          "search[].description": "string",
+          "search[].match": "object"
+        }
+      },
+      "params": [
+        {
+          "name": "q",
+          "type": "string",
+          "required": true,
+          "description": "Name or prefix to search for.",
+          "example": "Douglas"
+        },
+        {
+          "name": "type",
+          "type": "string",
+          "required": false,
+          "description": "Entity kind to search; defaults to items.",
+          "example": "item",
+          "default": "item",
+          "enum": [
+            "item",
+            "property",
+            "lexeme"
+          ]
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "checks": [
+        {
+          "args": {
+            "q": "Albert Einstein",
+            "type": "item"
+          },
+          "expect": "result",
+          "purpose": "Held-out item search"
+        },
+        {
+          "args": {
+            "q": "zzqqxxwvnothingmatch",
+            "type": "item"
+          },
+          "expect": "empty",
+          "purpose": "No matching entity"
+        },
+        {
+          "args": {
+            "q": "birth",
+            "type": "property"
+          },
+          "expect": "result",
+          "purpose": "Property search with a non-default type"
+        }
+      ]
+    },
+    {
+      "name": "getEntity",
+      "description": "Read English terms, selected displayed claims, and English Wikipedia title from an entity page.",
+      "request": {
+        "method": "GET",
+        "url": "https://www.wikidata.org/wiki/%7Bid%7D",
+        "headers": {
+          "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/jxl,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+          "accept-language": "en-US,en;q=0.9",
+          "priority": "u=0, i",
+          "sec-ch-ua": "\"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Google Chrome\";v=\"156\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\"",
+          "sec-fetch-dest": "document",
+          "sec-fetch-mode": "navigate",
+          "sec-fetch-site": "none",
+          "sec-fetch-user": "?1",
+          "upgrade-insecure-requests": "1",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36"
+        }
+      },
+      "slots": [
+        {
+          "param": "id",
+          "at": [
+            "path:1"
+          ]
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://www.wikidata.org/wiki/{id}"
+      },
+      "match": {
+        "method": "GET",
+        "host": "www.wikidata.org",
+        "path": "/wiki/*"
+      },
+      "response": {
+        "format": "html",
+        "contentType": "text/html; charset=UTF-8",
+        "html": {
+          "items": "body",
+          "fields": {
+            "label": ".wikibase-title-label",
+            "description": ".wikibase-entitytermsview-heading-description",
+            "aliases": "all:.wikibase-aliasesview-list-item",
+            "P31": "all:#P31 .wikibase-statementview-mainsnak .wikibase-snakview-value",
+            "P31ids": "all:#P31 .wikibase-statementview-mainsnak .wikibase-snakview-value a@href",
+            "P569": "all:#P569 .wikibase-statementview-mainsnak .wikibase-snakview-value",
+            "P19": "all:#P19 .wikibase-statementview-mainsnak .wikibase-snakview-value",
+            "P106": "all:#P106 .wikibase-statementview-mainsnak .wikibase-snakview-value",
+            "P17": "all:#P17 .wikibase-statementview-mainsnak .wikibase-snakview-value",
+            "P131": "all:#P131 .wikibase-statementview-mainsnak .wikibase-snakview-value",
+            "enwiki": ".wikibase-sitelinkview-enwiki .wikibase-sitelinkview-page a"
+          }
+        }
+      },
+      "params": [
+        {
+          "name": "id",
+          "type": "string",
+          "required": true,
+          "description": "Wikidata item ID, for example Q42.",
+          "example": "Q42",
+          "pattern": "Q[1-9][0-9]*",
+          "hint": "an item ID such as Q42"
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "checks": [
+        {
+          "args": {
+            "id": "Q937"
+          },
+          "expect": "result",
+          "purpose": "Held-out entity page"
+        },
+        {
+          "args": {},
+          "expect": "input",
+          "purpose": "Entity id is required"
+        },
+        {
+          "args": {
+            "id": "Q999999999999999"
+          },
+          "expect": "input",
+          "purpose": "A nonexistent entity is input"
+        }
+      ]
+    },
+    {
+      "name": "getLabels",
+      "description": "Resolve entity and property IDs to English labels and descriptions.",
+      "request": {
+        "method": "GET",
+        "url": "https://www.wikidata.org/w/api.php?action=wbgetentities&format=json&ids=%7Bids%7D&props=labels%7Cdescriptions&languages=en",
+        "headers": {
+          "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/jxl,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+          "accept-language": "en-US,en;q=0.9",
+          "priority": "u=0, i",
+          "sec-ch-ua": "\"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Google Chrome\";v=\"156\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\"",
+          "sec-fetch-dest": "document",
+          "sec-fetch-mode": "navigate",
+          "sec-fetch-site": "none",
+          "sec-fetch-user": "?1",
+          "upgrade-insecure-requests": "1",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36"
+        }
+      },
+      "slots": [
+        {
+          "param": "ids",
+          "at": [
+            "query:ids"
+          ]
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://www.wikidata.org/w/api.php?action=wbgetentities&format=json&ids={ids}&props=labels%7Cdescriptions&languages=en"
+      },
+      "match": {
+        "method": "GET",
+        "host": "www.wikidata.org",
+        "path": "/w/api.php"
+      },
+      "response": {
+        "format": "json",
+        "contentType": "application/json; charset=utf-8",
+        "extract": "entities"
+      },
+      "params": [
+        {
+          "name": "ids",
+          "type": "string",
+          "required": true,
+          "description": "Wikidata entity IDs separated by vertical bars, for example P31|Q42.",
+          "example": "P31|Q42"
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "checks": [
+        {
+          "args": {
+            "ids": "P31|P569|Q937"
+          },
+          "expect": "result",
+          "purpose": "Held-out mixed property and item IDs"
+        },
+        {
+          "args": {},
+          "expect": "input",
+          "purpose": "IDs are required"
+        }
+      ]
+    }
+  ]
+}
