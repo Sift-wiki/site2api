@@ -54,7 +54,7 @@
     },
     {
       "name": "search",
-      "description": "Search Hacker News stories via the Algolia index behind hn.algolia.com; returns up to 30 hits with title, url, points, num_comments, objectID, author, created_at.",
+      "description": "Search Hacker News by popularity, with an optional item type and zero-based page; returns up to 30 hits.",
       "request": {
         "method": "POST",
         "url": "https://uj5wyc0l7x-dsn.algolia.net/1/indexes/Item_dev/query?x-algolia-agent=Algolia%20for%20JavaScript%20(4.13.1)%3B%20Browser%20(lite)&x-algolia-api-key=28f0e1ec37a5e792e6845e67da5f20dd&x-algolia-application-id=UJ5WYC0L7X",
@@ -81,11 +81,19 @@
             "body",
             "json:/query"
           ]
+        },
+        {
+          "param": "type",
+          "at": ["body", "json:/tagFilters/0/0"]
+        },
+        {
+          "param": "page",
+          "at": ["body", "json:/page"]
         }
       ],
       "volatile": [],
       "trigger": {
-        "url": "https://hn.algolia.com/?q={query}"
+        "url": "https://hn.algolia.com/?query={query}&sort=byPopularity&type={type}&page={page}"
       },
       "match": {
         "host": "uj5wyc0l7x-dsn.algolia.net"
@@ -101,7 +109,10 @@
           "num_comments",
           "objectID",
           "author",
-          "created_at"
+          "created_at",
+          "comment_text",
+          "story_title",
+          "story_url"
         ],
         "shape": {
           "hits": "array",
@@ -192,7 +203,25 @@
           "type": "string",
           "required": true,
           "example": "sqlite",
-          "description": "Search text, as typed into hn.algolia.com (stories only, sorted by popularity)."
+          "description": "Search text, as typed into hn.algolia.com."
+        },
+        {
+          "name": "type",
+          "type": "string",
+          "required": false,
+          "default": "story",
+          "example": "story",
+          "enum": ["story", "comment", "ask_hn", "show_hn", "poll", "job"],
+          "description": "Item type to search; defaults to stories."
+        },
+        {
+          "name": "page",
+          "type": "number",
+          "required": false,
+          "default": 0,
+          "example": "0",
+          "min": 0,
+          "description": "Zero-based results page."
         }
       ],
       "readOnly": true,
@@ -201,7 +230,14 @@
       ],
       "minTier": 1,
       "learnedLoggedIn": false,
-      "learnedAt": "2026-09-27T11:02:04.098Z"
+      "learnedAt": "2026-09-27T11:02:04.098Z",
+      "checks": [
+        {
+          "args": {"query": "sqlite", "type": "comment", "page": 1},
+          "expect": "result",
+          "purpose": "Comments on a later page"
+        }
+      ]
     },
     {
       "name": "getItem",
@@ -525,6 +561,49 @@
           "expect": "result",
           "purpose": "Well-known moderator account"
         }
+      ]
+    },
+    {
+      "name": "searchByDate",
+      "description": "Search Hacker News by newest first, with an optional item type and zero-based page.",
+      "request": {
+        "method": "POST",
+        "url": "https://uj5wyc0l7x-dsn.algolia.net/1/indexes/Item_dev_sort_date/query?x-algolia-agent=Algolia%20for%20JavaScript%20(4.13.1)%3B%20Browser%20(lite)&x-algolia-api-key=28f0e1ec37a5e792e6845e67da5f20dd&x-algolia-application-id=UJ5WYC0L7X",
+        "headers": {
+          "accept": "*/*",
+          "accept-language": "en-US,en;q=0.9",
+          "origin": "https://hn.algolia.com",
+          "referer": "https://hn.algolia.com/",
+          "content-type": "application/x-www-form-urlencoded"
+        },
+        "body": "{\"query\":\"sqlite\",\"analyticsTags\":[\"web\"],\"page\":1,\"hitsPerPage\":30,\"minWordSizefor1Typo\":4,\"minWordSizefor2Typos\":8,\"advancedSyntax\":true,\"ignorePlurals\":false,\"clickAnalytics\":true,\"minProximity\":1,\"numericFilters\":[],\"tagFilters\":[[\"comment\"],[]],\"typoTolerance\":\"min\",\"queryType\":\"prefixNone\",\"restrictSearchableAttributes\":[\"title\",\"comment_text\",\"url\",\"story_text\",\"author\"],\"getRankingInfo\":true}"
+      },
+      "slots": [
+        {"param": "query", "at": ["body", "json:/query"]},
+        {"param": "type", "at": ["body", "json:/tagFilters/0/0"]},
+        {"param": "page", "at": ["body", "json:/page"]}
+      ],
+      "volatile": [],
+      "trigger": {"url": "https://hn.algolia.com/?dateRange=all&page={page}&prefix=false&query={query}&sort=byDate&type={type}"},
+      "match": {"host": "uj5wyc0l7x-dsn.algolia.net", "path": "/1/indexes/Item_dev_sort_date/query"},
+      "response": {
+        "format": "json",
+        "contentType": "application/json; charset=UTF-8",
+        "extract": "hits",
+        "pick": ["title", "url", "points", "num_comments", "objectID", "author", "created_at", "comment_text", "story_id", "story_title", "story_url"]
+      },
+      "params": [
+        {"name": "query", "type": "string", "required": true, "example": "sqlite", "description": "Search text as typed into hn.algolia.com."},
+        {"name": "type", "type": "string", "required": false, "example": "comment", "default": "story", "enum": ["story", "comment", "ask_hn", "show_hn", "poll", "job"], "description": "Item type to search; defaults to stories."},
+        {"name": "page", "type": "number", "required": false, "example": "1", "default": 0, "min": 0, "description": "Zero-based results page."}
+      ],
+      "readOnly": true,
+      "public": ["x-algolia-api-key"],
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "learnedAt": "2026-11-02T04:17:48.127Z",
+      "checks": [
+        {"args": {"query": "database", "type": "ask_hn", "page": 1}, "expect": "result", "purpose": "Held-out Ask HN results on a later page"}
       ]
     }
   ]

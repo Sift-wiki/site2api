@@ -2,7 +2,9 @@ No account is needed.
 
 - `frontPage`: job posts have neither `points` nor `comments`. Self posts (Ask HN) have a relative
   `url` such as `item?id=...`. Only the first page is included, with no pagination.
-- `search` returns stories only, ranked by popularity, and only page 0 (30 hits).
+- `search` defaults to stories ranked by popularity, page 0 (30 hits). `searchByDate` sorts newest
+  first. Both accept `type` (`story`, `comment`, `ask_hn`, `show_hn`, `poll`, `job`) and zero-based
+  `page`. Comment hits have comment text and story context instead of story titles and points.
 - `getItem` takes a story's id; a comment's id returns no story. `text` is set only on self posts
   (Ask HN). `getComments` returns the comments the item page shows, in thread order; `depth` is
   the indentation level (`0` for a top-level comment). Very long threads are split across pages
@@ -56,3 +58,14 @@ spec. All four ops are HTML GETs read with `--html` recipes.
 - During learning HN answered one browser-style request with HTTP 419 "Sorry" (its throttle). A
   later `input` check for a missing id also met 419, so no missing-item behaviour is recorded.
   The classifier reads 419 as `auth` (Laravel's expired-CSRF status).
+
+### 2026-11-01, logged out: Algolia search options
+
+Captured date-sorted `sqlite` comments on page 1 and `rust` stories on page 2. A held-out
+`database` Ask HN search on page 1 matched the first item returned by hn.algolia.com.
+The date index is `Item_dev_sort_date`; the body uses `tagFilters` such as `[["comment"],[]]`
+or `[["ask_hn"],[]]`, a numeric zero-based `page`, and `hitsPerPage: 30`. The original popularity
+index is `Item_dev`, and its default request remains stories, page 0 with `numericFilters: []`.
+The UI used `typoTolerance: "min"` for the date-sorted examples; `minProximity` differed between
+the captures, so the recorded comment value is retained. Author and time-range filters are not
+exposed.
