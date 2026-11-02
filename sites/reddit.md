@@ -7,6 +7,9 @@ caller's first call often goes through the browser tier (about 12 s with Chrome 
 - `hot` returns the posts the subreddit page renders first, usually 3 to 10, with no paging.
   `url` is the linked page on a link post and the post itself on a text post; `permalink` is
   relative to reddit.com.
+- `listPosts` returns the first rendered posts in a sorted feed, without paging. `sort` defaults
+  to `hot`; `t` (default `day`) only filters `top`, and Reddit ignores it for the other sorts. Links have the same
+  meaning as in `hot`.
 - A subreddit that is private, banned or misspelled answers `input` (no posts on the page).
 
 ## Maintainer notes
@@ -31,3 +34,16 @@ not heal them.
 api-anything call reddit search query="local llm"
 api-anything call reddit hot sub=programming
 ```
+
+### 2026-11-01, logged out
+
+| op | args | returns | tier |
+|---|---|---|---|
+| `listPosts` | `sub`, `sort` (`hot`, `new`, `top`, `rising`), `t` (`hour`, `day`, `week`, `month`, `year`, `all`) | First rendered posts, using the same fields as `hot` | 1, or browser fallback behind the challenge |
+
+`listPosts` captures the GET document at `/r/<sub>/<sort>/?t=<range>` and reads
+`shreddit-post` attributes. Learned with `r/programming` top/day and `r/technology` top/year;
+the held-out `r/linux` rising/month call matched the captured page's first three posts. The
+time range only filters top feeds. A post capture of the old Obama AMA encountered a CAPTCHA;
+a recent post page loaded, but the tested HTML recipe did not extract its comments as structured
+records, so no post operation was added.
