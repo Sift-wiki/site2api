@@ -1,7 +1,8 @@
 No account is needed. Reads public repositories only.
 
 - `searchModels` and `searchDatasets` match words in the repository id (`owner/name`), not in the
-  model card, sorted by trending, first page (30) only.
+  model card, sorted by trending by default, first page (30) only. `searchModels` also accepts
+  `sort=likes`, `downloads`, `created` or `modified`.
 - `getModel` takes the id split in two: `openai/whisper-large-v3` is `author=openai`,
   `name=whisper-large-v3` (both come back from `searchModels`). The case of the id matters
   (`Qwen`, not `qwen`).
@@ -20,6 +21,9 @@ No account is needed. Reads public repositories only.
 - `searchSpaces` returns the first page, including Spaces that are not running. A Space's linked
   models or datasets, runtime hardware, SDK, title and emoji may be absent when not declared.
   Runtime status can change independently of the repository's last modification time.
+- `getModelFiles` lists the root of the `main` revision, not subdirectories or other revisions.
+  It returns the first page only, with sizes in bytes; a directory's size may be zero. It does not
+  download file contents.
 
 ## Maintainer notes
 
@@ -65,3 +69,18 @@ Every call answered at tier 1 (plain HTTP).
   found; no paper operation was added. Sort/filter and model-file operations were not attempted.
 - Pages sent AWS WAF and Stripe requests on their own; `add` stopped non-read beacons. The
   per-request `x-request-id` was removed from the Spaces search template.
+
+### 2026-11-01, logged out: model sort and files
+
+- `searchModels` was relearned with `bert`/`likes` and `whisper`/`downloads`. Held out
+  `qwen`/`modified` matched the order on the models page. Omitting `sort` uses `trending`.
+  Its rotating `x-request-id` was removed before verification. The result check establishes a
+  nonempty response, not an assertion about the ordering.
+- The `google-bert/bert-base-uncased` files tab was server-rendered and did not capture a tree
+  JSON request. `getModelFiles` instead opens the public tree API directly, as the existing
+  metadata ops do. Learned with `google-bert/bert-base-uncased` and `openai/whisper-large-v3`;
+  held out `Qwen/Qwen3.8-27B`, whose file names and sizes matched its files page.
+- Paper detail capture was server-rendered. Its outline did not identify an embedded JSON recipe;
+  an initial HTML recipe found the title but not a reliable author list or all requested counts.
+  No paper operation was added. Additional model filters and daily papers were not attempted.
+- The pages sent AWS WAF and Stripe beacons on their own; `add` stopped non-read beacons.
