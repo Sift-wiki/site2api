@@ -11,6 +11,10 @@ No account is needed for public repositories.
   defaults to `is:issue state:open`; pass the whole filter when you change it, keeping `is:issue`
   (`is:issue state:closed label:bug`). `state` is `REPO_ISSUE_STATE_OPEN` or
   `REPO_ISSUE_STATE_CLOSED`. `comments` and `labels` are missing when an issue has none.
+- `listPullRequests` returns page 1 only (up to 25), newest first. `query` defaults to
+  `is:pr is:open`; pass the whole filter when changing it, keeping `is:pr`. The state is
+  `REPO_ISSUE_PULL_REQUEST_STATE_OPEN`, `REPO_ISSUE_PULL_REQUEST_STATE_CLOSED` or
+  `REPO_ISSUE_PULL_REQUEST_STATE_MERGED`. `labels` is missing when there are none.
 - GitHub limits how fast logged-out visitors can search. Keep `searchRepos` calls spaced out.
 
 ## Maintainer notes
@@ -38,4 +42,19 @@ Verified 2026-10-31, logged out, from a clean `API_ANYTHING_HOME` holding only t
   api.github.com, so heal could not re-learn them either; and the unauthenticated REST API allows
   60 requests an hour per IP. These ops were learned from github.com's own pages instead; its
   `repo` and `issues` ops set which data `getRepo` and `listIssues` cover.
-- Not covered: pull requests, README text, file contents, code search (code search needs a login).
+- Not covered: individual pull requests, README text, file contents, code search (code search needs a login).
+
+### 2026-11-01, logged out
+
+`verify github` passed 8 of 8 cases at tier 1, including the original operations and the new
+operation's example and closed-filter check.
+
+| op | request | checked with (not an example) | tier |
+|---|---|---|---|
+| `listPullRequests` | `/<owner>/<repo>/issues?q=...`, with the page's `react-app.embeddedData` at `payload.issuesIndexContentRoute.results[*].pullRequest` | `vitejs/vite`, `is:pr is:closed`; compared the first result and label with the page | 1 |
+
+- The dedicated `/pulls` page did not expose the same embedded JSON. The issues page supports
+  `is:pr` and supplies pull request records instead.
+- The issue detail page embeds an issue and a timeline containing comments and other event types.
+  The timeline is paginated, so a simple extraction would not return a complete comment thread.
+  No issue detail operation was added.
