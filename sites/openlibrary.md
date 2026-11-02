@@ -24,6 +24,20 @@ No account is needed.
 
 ## Maintainer notes
 
+### 2026-11-01, logged out: additional investigation
+
+- A search page capture showed the sort picker values `relevance`, `editions`, `old`, `new`,
+  `rating`, `readinglog`, `want_to_read`, `currently_reading`, `already_read`,
+  `stopped_reading`, `trending` and `random`. The page and the author-search page were
+  server-rendered; neither capture showed a request to its JSON search twin.
+- Direct JSON document captures for author search, work ratings and work bookshelves answered
+  for two differing examples each. The work HTML page redirected to human verification, so
+  whether that page requests the two work JSON endpoints was not established.
+- Adding sort and page to `searchBooks` did not complete: the second page timed out, and a
+  second attempt failed with connection refused. A held-out author-search call then failed
+  twice with `ECONNREFUSED`. No new operations were exported without held-out calls and
+  verification. The pages sent Sentry analytics POSTs on their own; no write was called.
+
 ### 2026-11-01, logged out
 
 - Captured two differing JSON documents for each new operation. Held-out calls at tier 1 matched
