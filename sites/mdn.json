@@ -1,0 +1,224 @@
+{
+  "name": "mdn",
+  "displayName": "MDN Web Docs",
+  "baseUrl": "https://developer.mozilla.org",
+  "description": "Search English web platform documentation, read article sections, and inspect browser compatibility data without an account.",
+  "operations": [
+    {
+      "name": "searchDocs",
+      "description": "Search English MDN documentation, returning the first page of results.",
+      "request": {
+        "method": "GET",
+        "url": "https://developer.mozilla.org/api/v1/search?q=%7Bq%7D&page=1&locale=en-US",
+        "headers": {
+          "sec-ch-ua-platform": "\"macOS\"",
+          "referer": "https://developer.mozilla.org/en-US/search?q={q}",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36",
+          "sec-ch-ua": "\"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Google Chrome\";v=\"156\"",
+          "sec-ch-ua-mobile": "?0"
+        }
+      },
+      "slots": [
+        {
+          "param": "q",
+          "at": [
+            "query:q"
+          ]
+        },
+        {
+          "param": "q",
+          "at": [
+            "header:referer"
+          ],
+          "template": "https://developer.mozilla.org/en-US/search?q={q}"
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://developer.mozilla.org/en-US/search?q={q}"
+      },
+      "match": {
+        "path": "/api/v1/search"
+      },
+      "response": {
+        "format": "json",
+        "contentType": "application/json",
+        "extract": "documents",
+        "pick": [
+          "title",
+          "slug",
+          "url=mdn_url",
+          "summary",
+          "score"
+        ],
+        "shape": {
+          "documents[].mdn_url": "string",
+          "documents[].score": "number",
+          "documents[].title": "string",
+          "documents[].slug": "string",
+          "documents[].summary": "string"
+        }
+      },
+      "params": [
+        {
+          "name": "q",
+          "type": "string",
+          "required": true,
+          "example": "fetch",
+          "description": "Search terms, such as fetch."
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "checks": [
+        {
+          "args": {
+            "q": "zzqqxxwvmdnnosuchdocument"
+          },
+          "expect": "empty",
+          "purpose": "An unmatched query returns no documents"
+        }
+      ]
+    },
+    {
+      "name": "getDoc",
+      "description": "Read an English MDN page's title, last modified date, and rendered section text.",
+      "request": {
+        "method": "GET",
+        "url": "https://developer.mozilla.org/en-US/docs/%7Bslug%7D",
+        "headers": {
+          "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/jxl,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+          "accept-language": "en-US,en;q=0.9",
+          "priority": "u=0, i",
+          "sec-ch-ua": "\"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Google Chrome\";v=\"156\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\"",
+          "sec-fetch-dest": "document",
+          "sec-fetch-mode": "navigate",
+          "sec-fetch-site": "none",
+          "sec-fetch-user": "?1",
+          "upgrade-insecure-requests": "1",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36"
+        }
+      },
+      "slots": [
+        {
+          "param": "slug",
+          "at": [
+            "path:2"
+          ]
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://developer.mozilla.org/en-US/docs/{slug}"
+      },
+      "match": {
+        "method": "GET",
+        "host": "developer.mozilla.org",
+        "path": "/en-US/docs/*"
+      },
+      "response": {
+        "format": "html",
+        "contentType": "text/html",
+        "html": {
+          "items": "main",
+          "fields": {
+            "title": "h1",
+            "sections": "all:section.content-section",
+            "lastModified": "time@datetime"
+          }
+        }
+      },
+      "params": [
+        {
+          "name": "slug",
+          "type": "string",
+          "required": true,
+          "example": "Web/API/Window/fetch",
+          "description": "Path after /en-US/docs/, such as Web/API/Window/fetch."
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "checks": [
+        {
+          "args": {
+            "slug": "Web/API/zzqqxxwvmdnnosuchdocument"
+          },
+          "expect": "input",
+          "purpose": "A nonexistent documentation page returns 404"
+        }
+      ]
+    },
+    {
+      "name": "getCompat",
+      "description": "Read browser support statements and status for a browser compatibility data feature.",
+      "request": {
+        "method": "GET",
+        "url": "https://bcd.developer.mozilla.org/bcd/api/v0/current/%7Bfeature%7D.json",
+        "headers": {
+          "accept": "*/*",
+          "accept-language": "en-US,en;q=0.9",
+          "origin": "https://developer.mozilla.org",
+          "priority": "u=1, i",
+          "referer": "https://developer.mozilla.org/",
+          "sec-ch-ua": "\"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Google Chrome\";v=\"156\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\"",
+          "sec-fetch-dest": "empty",
+          "sec-fetch-mode": "cors",
+          "sec-fetch-site": "same-site",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36"
+        }
+      },
+      "slots": [
+        {
+          "param": "feature",
+          "at": [
+            "path:4"
+          ],
+          "template": "{feature}.json"
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://bcd.developer.mozilla.org/bcd/api/v0/current/{feature}.json"
+      },
+      "match": {
+        "method": "GET",
+        "host": "bcd.developer.mozilla.org",
+        "path": "/bcd/api/v0/current/*"
+      },
+      "response": {
+        "format": "json",
+        "contentType": "application/json",
+        "extract": "data.__compat",
+        "pick": [
+          "support",
+          "status",
+          "mdn_url"
+        ],
+        "shape": {
+          "data.__compat.mdn_url": "string",
+          "data.__compat.status": "object",
+          "data.__compat.support": "object"
+        }
+      },
+      "params": [
+        {
+          "name": "feature",
+          "type": "string",
+          "required": true,
+          "example": "api.fetch",
+          "description": "Case-sensitive BCD feature key, such as api.fetch or css.properties.grid."
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false
+    }
+  ]
+}
