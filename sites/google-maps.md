@@ -35,3 +35,22 @@ The request also contained a changing opaque value. It was not bundled: travel-m
 the value's provenance and a comparison with the rendered page remain unverified. The shared
 browser preview timed out twice when reading the page. Autocomplete and reviews were not
 established. No CAPTCHA or unusual-traffic page was observed in the captures.
+
+### Follow-up on 2026-11-01 (signed out)
+
+No new operation was bundled. Two captures of the same Golden Gate Bridge to Palace of Fine
+Arts driving route returned 200; the changing opaque directions value also appeared in the
+page document, but not in the captured cookie or storage snapshot. Its issuance and replay
+requirements were not proven, and it was not copied into the spec. A walking capture for
+the same pair changed the request's mode field from `!1e0` to `!1e2`. These are numeric
+values, while slots have no mapping from the requested named mode enum to those values.
+Other modes and rendered route summaries were not verified in this follow-up.
+
+The `place_id:` URL again led to a `/maps/preview/place` request with an internal feature ID,
+not the original ID. Search responses for Space Needle Seattle and Empire State Building
+New York carried place data at `[0][1][0][14]`, including hours and sometimes phone.
+The held-out Golden Gate Bridge San Francisco search instead returned a list at `[64]`:
+the rendered page included a sponsored result followed by Golden Gate Bridge. A fixed
+single-place extraction would not handle both shapes, nor reliably choose a named place.
+The page sent its own logging requests; no write was intentionally performed. No CAPTCHA
+or unusual-traffic page appeared in these captures.
