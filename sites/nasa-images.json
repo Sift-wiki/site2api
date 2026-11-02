@@ -1,0 +1,168 @@
+{
+  "name": "nasa-images",
+  "displayName": "NASA Image and Video Library",
+  "baseUrl": "https://images.nasa.gov",
+  "description": "Search NASA's public image, video and audio library and find available media assets.",
+  "operations": [
+    {
+      "name": "getAssets",
+      "description": "Find the available asset URLs for a NASA library item.",
+      "request": {
+        "method": "GET",
+        "url": "https://images-api.nasa.gov/asset/%7BnasaId%7D",
+        "headers": {
+          "accept": "application/json, text/plain, */*",
+          "accept-language": "en-US,en;q=0.9",
+          "origin": "https://images.nasa.gov",
+          "priority": "u=1, i",
+          "sec-ch-ua": "\"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Google Chrome\";v=\"156\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\"",
+          "sec-fetch-dest": "empty",
+          "sec-fetch-mode": "cors",
+          "sec-fetch-site": "same-site",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36"
+        }
+      },
+      "slots": [
+        {
+          "param": "nasaId",
+          "at": [
+            "path:1"
+          ]
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://images.nasa.gov/details/{nasaId}"
+      },
+      "match": {
+        "method": "GET",
+        "host": "images-api.nasa.gov",
+        "path": "/asset/*"
+      },
+      "response": {
+        "format": "json",
+        "contentType": "application/json",
+        "extract": "collection.items",
+        "pick": [
+          "href"
+        ],
+        "shape": {
+          "collection.items[].href": "string"
+        }
+      },
+      "params": [
+        {
+          "name": "nasaId",
+          "type": "string",
+          "required": true,
+          "description": "NASA library item identifier returned by search.",
+          "example": "PIA07081"
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "checks": [
+        {
+          "args": { "nasaId": "as11-40-5874" },
+          "expect": "result",
+          "purpose": "Another public item has assets."
+        },
+        {
+          "args": { "nasaId": "zzqqxx-no-such-nasa-item-123456789" },
+          "expect": "input",
+          "purpose": "An unknown item is input rather than drift."
+        }
+      ]
+    },
+    {
+      "name": "search",
+      "description": "Search the first page of public media created from 1920 through 2026.",
+      "request": {
+        "method": "GET",
+        "url": "https://images-api.nasa.gov/search?q=%7Bq%7D&page=1&media_type=image%2Cvideo%2Caudio&year_start=1920&year_end=2026",
+        "headers": {
+          "accept": "application/json, text/plain, */*",
+          "accept-language": "en-US,en;q=0.9",
+          "origin": "https://images.nasa.gov",
+          "priority": "u=1, i",
+          "sec-ch-ua": "\"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Google Chrome\";v=\"156\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\"",
+          "sec-fetch-dest": "empty",
+          "sec-fetch-mode": "cors",
+          "sec-fetch-site": "same-site",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36"
+        }
+      },
+      "slots": [
+        {
+          "param": "q",
+          "at": [
+            "query:q"
+          ]
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://images.nasa.gov/search?q={q}&page=1&media=image,video,audio&yearStart=1920&yearEnd=2026"
+      },
+      "match": {
+        "method": "GET",
+        "host": "images-api.nasa.gov",
+        "path": "/search"
+      },
+      "response": {
+        "format": "json",
+        "contentType": "application/json",
+        "extract": "collection.items",
+        "pick": [
+          "nasaId=data[0].nasa_id",
+          "title=data[0].title",
+          "mediaType=data[0].media_type",
+          "dateCreated=data[0].date_created",
+          "center=data[0].center",
+          "description=data[0].description",
+          "keywords=data[0].keywords",
+          "thumbnail=links[0].href"
+        ],
+        "shape": {
+          "collection.items[].data[].center": "string",
+          "collection.items[].data[].date_created": "string",
+          "collection.items[].data[].description": "string",
+          "collection.items[].data[].keywords": "array",
+          "collection.items[].data[].media_type": "string",
+          "collection.items[].data[].nasa_id": "string",
+          "collection.items[].data[].title": "string",
+          "collection.items[].links[].href": "string"
+        }
+      },
+      "params": [
+        {
+          "name": "q",
+          "type": "string",
+          "required": true,
+          "description": "Words to search in the NASA media library.",
+          "example": "apollo 11"
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "checks": [
+        {
+          "args": { "q": "mars rover" },
+          "expect": "result",
+          "purpose": "A different public query returns media."
+        },
+        {
+          "args": { "q": "zzqqxxnonexistentnasaimage123456789" },
+          "expect": "empty",
+          "purpose": "A nonsense query returns no media."
+        }
+      ]
+    }
+  ]
+}
