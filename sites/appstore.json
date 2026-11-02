@@ -1,0 +1,293 @@
+{
+  "name": "appstore",
+  "displayName": "Apple App Store",
+  "baseUrl": "https://apps.apple.com",
+  "description": "Public App Store app listings, displayed reviews, developer shelves and US iPhone search results.",
+  "operations": [
+    {
+      "name": "getApp",
+      "description": "Read public app metadata from its App Store listing's structured data.",
+      "request": {
+        "method": "GET",
+        "url": "https://apps.apple.com/%7Bcountry%7D/app/spotify-music-and-podcasts/id%7BappId%7D",
+        "headers": {
+          "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/jxl,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+          "accept-language": "en-US,en;q=0.9",
+          "priority": "u=0, i",
+          "sec-ch-ua": "\"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Google Chrome\";v=\"156\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\"",
+          "sec-fetch-dest": "document",
+          "sec-fetch-mode": "navigate",
+          "sec-fetch-site": "none",
+          "sec-fetch-user": "?1",
+          "upgrade-insecure-requests": "1",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36"
+        }
+      },
+      "slots": [
+        {
+          "param": "country",
+          "at": [
+            "path:0"
+          ]
+        },
+        {
+          "param": "appId",
+          "at": [
+            "path:3"
+          ],
+          "template": "id{appId}"
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://apps.apple.com/{country}/app/id{appId}"
+      },
+      "match": {
+        "method": "GET",
+        "host": "apps.apple.com",
+        "path": "/*/app/*/*"
+      },
+      "response": {
+        "format": "embedded",
+        "contentType": "text/html",
+        "pick": [
+          "name",
+          "developer=author.name",
+          "price=offers.price",
+          "currency=offers.priceCurrency",
+          "rating=aggregateRating.ratingValue",
+          "ratingCount=aggregateRating.reviewCount",
+          "category=genre",
+          "compatibility=operatingSystem",
+          "description"
+        ],
+        "embedded": {
+          "regex": "application/ld\\+json[^>]*>\\s*(\\{)(?=[^<]*?\"@type\"\\s*:\\s*\"SoftwareApplication\")"
+        }
+      },
+      "params": [
+        {
+          "name": "appId",
+          "type": "string",
+          "required": true,
+          "example": "324684580",
+          "description": "Numeric app ID from an App Store listing URL.",
+          "pattern": "[0-9]{1,20}"
+        },
+        {
+          "name": "country",
+          "type": "string",
+          "required": false,
+          "default": "us",
+          "example": "us",
+          "description": "Two-letter lowercase App Store country code.",
+          "pattern": "[a-z]{2}"
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "checks": [
+        {"args": {"appId": "389801252", "country": "gb"}, "expect": "result", "purpose": "Different app and storefront."},
+        {"args": {"appId": "570060128", "country": "us"}, "expect": "result", "purpose": "Held-out Duolingo listing."},
+        {"args": {"appId": "invalid/path"}, "expect": "input", "purpose": "Reject invalid app ID locally."}
+      ]
+    },
+    {
+      "name": "search",
+      "description": "Search initial US iPhone App Store results by text.",
+      "request": {
+        "method": "GET",
+        "url": "https://apps.apple.com/us/iphone/search?term=%7Bterm%7D",
+        "headers": {
+          "upgrade-insecure-requests": "1",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36",
+          "sec-ch-ua": "\"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Google Chrome\";v=\"156\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\""
+        }
+      },
+      "slots": [
+        {
+          "param": "term",
+          "at": [
+            "query:term"
+          ]
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://apps.apple.com/us/iphone/search?term={term}"
+      },
+      "match": {
+        "method": "GET",
+        "host": "apps.apple.com",
+        "path": "/us/iphone/search"
+      },
+      "response": {
+        "format": "html",
+        "contentType": "text/html",
+        "pick": [
+          "appId=url~id([0-9]+)",
+          "name",
+          "rating"
+        ],
+        "html": {
+          "items": "ul.grid > li",
+          "fields": {
+            "url": "div.link-container a@href",
+            "name": "span.title",
+            "rating": "ol.stars@aria-label"
+          }
+        }
+      },
+      "params": [
+        {
+          "name": "term",
+          "type": "string",
+          "required": true,
+          "example": "music",
+          "description": "Search terms as ordinary text."
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "checks": [
+        {"args": {"term": "weather"}, "expect": "result", "purpose": "Second search differs from music."},
+        {"args": {"term": "chess"}, "expect": "result", "purpose": "Held-out search compared to the page."}
+      ]
+    },
+    {
+      "name": "getReviews",
+      "description": "Read the reviews featured on a public US app listing.",
+      "request": {
+        "method": "GET",
+        "url": "https://apps.apple.com/us/app/spotify-music-and-podcasts/id%7BappId%7D",
+        "headers": {
+          "upgrade-insecure-requests": "1",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36",
+          "sec-ch-ua": "\"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Google Chrome\";v=\"156\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\""
+        }
+      },
+      "slots": [
+        {
+          "param": "appId",
+          "at": [
+            "path:3"
+          ],
+          "template": "id{appId}"
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://apps.apple.com/us/app/id{appId}"
+      },
+      "match": {
+        "method": "GET",
+        "host": "apps.apple.com",
+        "path": "/us/app/*/*"
+      },
+      "response": {
+        "format": "embedded",
+        "contentType": "text/html",
+        "extract": "data[0].data.shelfMapping.allProductReviews.items",
+        "pick": [
+          "title=review.title",
+          "rating=review.rating",
+          "date=review.date",
+          "text=review.contents",
+          "reviewer=review.reviewerName"
+        ],
+        "embedded": {
+          "regex": "id=\"serialized-server-data\"[^>]*>\\s*([[{])"
+        }
+      },
+      "params": [
+        {
+          "name": "appId",
+          "type": "string",
+          "required": true,
+          "example": "324684580",
+          "description": "Numeric app ID from an App Store listing URL.",
+          "pattern": "[0-9]{1,20}"
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "checks": [
+        {"args": {"appId": "389801252"}, "expect": "result", "purpose": "Second captured app has different reviews."},
+        {"args": {"appId": "570060128"}, "expect": "result", "purpose": "Held-out Duolingo review shelf."},
+        {"args": {"appId": "invalid/path"}, "expect": "input", "purpose": "Reject invalid app ID locally."}
+      ]
+    },
+    {
+      "name": "getDeveloperApps",
+      "description": "Read items from the initial public US developer page shelves.",
+      "request": {
+        "method": "GET",
+        "url": "https://apps.apple.com/us/developer/google/id%7BdeveloperId%7D",
+        "headers": {
+          "upgrade-insecure-requests": "1",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36",
+          "sec-ch-ua": "\"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Google Chrome\";v=\"156\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\""
+        }
+      },
+      "slots": [
+        {
+          "param": "developerId",
+          "at": [
+            "path:3"
+          ],
+          "template": "id{developerId}"
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://apps.apple.com/us/developer/id{developerId}"
+      },
+      "match": {
+        "method": "GET",
+        "host": "apps.apple.com",
+        "path": "/us/developer/*/*"
+      },
+      "response": {
+        "format": "embedded",
+        "contentType": "text/html",
+        "extract": "data[0].data.shelves[*].items",
+        "pick": [
+          "appId=adamId",
+          "name=title"
+        ],
+        "embedded": {
+          "regex": "id=\"serialized-server-data\"[^>]*>\\s*([[{])"
+        }
+      },
+      "params": [
+        {
+          "name": "developerId",
+          "type": "string",
+          "required": true,
+          "example": "281956209",
+          "description": "Numeric developer ID from an App Store developer URL.",
+          "pattern": "[0-9]{1,20}"
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "checks": [
+        {"args": {"developerId": "570060151"}, "expect": "result", "purpose": "Second captured developer differs from Google."},
+        {"args": {"developerId": "324684583"}, "expect": "result", "purpose": "Held-out Spotify developer shelves."},
+        {"args": {"developerId": "invalid/path"}, "expect": "input", "purpose": "Reject invalid developer ID locally."}
+      ]
+    }
+  ]
+}
