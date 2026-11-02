@@ -57,3 +57,17 @@ listed an initial document response, but inspecting it with a `shreddit-post` re
 no matching items. No post, comment, community or user operation was added without the
 two examples and held-out validation. Existing operations passed all six verification cases
 at tier 2 in this session.
+
+### 2026-11-01, logged out: waited post capture
+
+The programming top/week feed returned recent posts at tier 2. Waiting for `shreddit-post`
+on the post pages for `r/programming` `1xft3w2` and `r/technology` `1xj6gwl` reached
+their canonical documents. The first document exposed the post's title, author, score,
+comment count, timestamp and link, but neither document contained `shreddit-comment`
+elements, and no comments partial appeared in the captures. A candidate `getPost` learned
+from the first canonical URL retained its title slug; its two-run diff found no matching
+second request, and replay for the second post returned no results. It was not added.
+The pages sent analytics requests during loading; capture stopped further POSTs after
+the wait steps began. Reddit loaded reCAPTCHA resources; no CAPTCHA was reported by capture.
+The unchanged spec passed all six `verify reddit` cases. A fresh-home `listPosts`
+call passed at tier 2 after the plain HTTP challenge.
