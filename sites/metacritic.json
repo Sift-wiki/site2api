@@ -1,0 +1,245 @@
+{
+  "name": "metacritic",
+  "displayName": "Metacritic",
+  "baseUrl": "https://www.metacritic.com",
+  "description": "Public title search and game and movie review scores from Metacritic.",
+  "operations": [
+    {
+      "name": "search",
+      "description": "Search public titles across games, movies, TV and music, first page.",
+      "request": {
+        "method": "GET",
+        "url": "https://www.metacritic.com/search/%7Bq%7D/",
+        "headers": {
+          "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/jxl,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+          "accept-language": "en-US,en;q=0.9",
+          "priority": "u=0, i",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\"",
+          "sec-fetch-dest": "document",
+          "sec-fetch-mode": "navigate",
+          "sec-fetch-site": "none",
+          "sec-fetch-user": "?1",
+          "upgrade-insecure-requests": "1",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36"
+        }
+      },
+      "slots": [
+        {
+          "param": "q",
+          "at": [
+            "path:1"
+          ]
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://www.metacritic.com/search/{q}/"
+      },
+      "match": {
+        "method": "GET",
+        "host": "www.metacritic.com",
+        "path": "/search/*/"
+      },
+      "response": {
+        "format": "html",
+        "contentType": "text/html;charset=utf-8",
+        "html": {
+          "items": "[data-testid=search-item]",
+          "fields": {
+            "title": "p.c-search-item__title",
+            "type": "span.global-tag-list__button",
+            "url": "a.c-search-item@href",
+            "releaseDate": "li.c-search-product-meta__list-item span",
+            "metascore": "div.c-siteReviewScore span"
+          }
+        }
+      },
+      "params": [
+        {
+          "name": "q",
+          "type": "string",
+          "required": true,
+          "description": "Title search words.",
+          "example": "elden ring"
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "checks": [
+        {
+          "args": { "q": "parasite" },
+          "expect": "result",
+          "purpose": "Parasite search returns different titles, including the 2019 movie."
+        },
+        {
+          "args": {},
+          "expect": "input",
+          "purpose": "Search words are required."
+        }
+      ]
+    },
+    {
+      "name": "getGame",
+      "description": "Read a game profile and the default platform critic and user scores.",
+      "request": {
+        "method": "GET",
+        "url": "https://www.metacritic.com/game/%7Bslug%7D/",
+        "headers": {
+          "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/jxl,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+          "accept-language": "en-US,en;q=0.9",
+          "priority": "u=0, i",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\"",
+          "sec-fetch-dest": "document",
+          "sec-fetch-mode": "navigate",
+          "sec-fetch-site": "none",
+          "sec-fetch-user": "?1",
+          "upgrade-insecure-requests": "1",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36"
+        }
+      },
+      "slots": [
+        {
+          "param": "slug",
+          "at": [
+            "path:1"
+          ]
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://www.metacritic.com/game/{slug}/"
+      },
+      "match": {
+        "method": "GET",
+        "host": "www.metacritic.com",
+        "path": "/game/*/"
+      },
+      "response": {
+        "format": "html",
+        "contentType": "text/html;charset=utf-8",
+        "html": {
+          "items": "[data-testid=product-hero]",
+          "fields": {
+            "title": "[data-testid=hero-title]",
+            "metascore": ".hero-scores > [data-testid=product-score]:nth-child(1) [data-testid=global-score-value]",
+            "criticCount": ".hero-scores > [data-testid=product-score]:nth-child(1) [data-testid=global-score-review-count]",
+            "userScore": ".hero-scores > [data-testid=product-score]:nth-child(2) [data-testid=global-score-value]",
+            "userCount": ".hero-scores > [data-testid=product-score]:nth-child(2) [data-testid=global-score-review-count]",
+            "releaseDate": ".hero-release-date__value",
+            "platform": ".game-platform-logo__icon@title",
+            "developer": "[data-testid=hero-summary-developer] a",
+            "publisher": "[data-testid=hero-metadata] a",
+            "genres": "all:.c-genreList_item a",
+            "summary": "[data-testid=hero-summary] .gap-3 > span:nth-child(2)"
+          }
+        }
+      },
+      "params": [
+        {
+          "name": "slug",
+          "type": "string",
+          "required": true,
+          "description": "Game page slug after /game/ in a search result URL.",
+          "example": "elden-ring"
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "checks": [
+        {
+          "args": { "slug": "hades" },
+          "expect": "result",
+          "purpose": "Hades returns its own game and scores instead of Elden Ring."
+        },
+        {
+          "args": {},
+          "expect": "input",
+          "purpose": "A game slug is required."
+        }
+      ]
+    },
+    {
+      "name": "getMovie",
+      "description": "Read a movie profile and its critic and user scores.",
+      "request": {
+        "method": "GET",
+        "url": "https://www.metacritic.com/movie/%7Bslug%7D/",
+        "headers": {
+          "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/jxl,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+          "accept-language": "en-US,en;q=0.9",
+          "priority": "u=0, i",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\"",
+          "sec-fetch-dest": "document",
+          "sec-fetch-mode": "navigate",
+          "sec-fetch-site": "none",
+          "sec-fetch-user": "?1",
+          "upgrade-insecure-requests": "1",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36"
+        }
+      },
+      "slots": [
+        {
+          "param": "slug",
+          "at": [
+            "path:1"
+          ]
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://www.metacritic.com/movie/{slug}/"
+      },
+      "match": {
+        "method": "GET",
+        "host": "www.metacritic.com",
+        "path": "/movie/*/"
+      },
+      "response": {
+        "format": "html",
+        "contentType": "text/html;charset=utf-8",
+        "html": {
+          "items": "[data-testid=product-hero]",
+          "fields": {
+            "title": "[data-testid=hero-title]",
+            "metascore": ".hero-scores > [data-testid=product-score]:nth-child(1) [data-testid=global-score-value]",
+            "criticCount": ".hero-scores > [data-testid=product-score]:nth-child(1) [data-testid=global-score-review-count]",
+            "userScore": ".hero-scores > [data-testid=product-score]:nth-child(2) [data-testid=global-score-value]",
+            "userCount": ".hero-scores > [data-testid=product-score]:nth-child(2) [data-testid=global-score-review-count]",
+            "year": "[data-testid=hero-metadata] li:first-child",
+            "genres": "all:.c-genreList_item a",
+            "summary": "[data-testid=hero-summary] .gap-3 > span:nth-child(2)"
+          }
+        }
+      },
+      "params": [
+        {
+          "name": "slug",
+          "type": "string",
+          "required": true,
+          "description": "Movie page slug after /movie/ in a search result URL.",
+          "example": "the-godfather"
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "checks": [
+        {
+          "args": { "slug": "inception" },
+          "expect": "result",
+          "purpose": "Inception returns its own movie and scores instead of The Godfather."
+        },
+        {
+          "args": {},
+          "expect": "input",
+          "purpose": "A movie slug is required."
+        }
+      ]
+    }
+  ]
+}
