@@ -202,6 +202,330 @@
       "minTier": 1,
       "learnedLoggedIn": false,
       "learnedAt": "2026-09-27T11:02:04.098Z"
+    },
+    {
+      "name": "getItem",
+      "description": "A Hacker News story or Ask/Show HN post: title, link, points, author, age, comment count, text",
+      "request": {
+        "method": "GET",
+        "url": "https://news.ycombinator.com/item?id=8863",
+        "headers": {
+          "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/jxl,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+          "accept-language": "en-US,en;q=0.9",
+          "priority": "u=0, i",
+          "sec-ch-ua": "\"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Google Chrome\";v=\"156\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\"",
+          "sec-fetch-dest": "document",
+          "sec-fetch-mode": "navigate",
+          "sec-fetch-site": "none",
+          "sec-fetch-user": "?1",
+          "upgrade-insecure-requests": "1",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36"
+        }
+      },
+      "slots": [
+        {
+          "param": "id",
+          "at": [
+            "query:id"
+          ]
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://news.ycombinator.com/item?id={id}"
+      },
+      "match": {
+        "path": "/item"
+      },
+      "response": {
+        "format": "html",
+        "contentType": "text/html; charset=utf-8",
+        "html": {
+          "items": "tr.athing.submission",
+          "fields": {
+            "id": "@id",
+            "title": ".titleline > a",
+            "url": ".titleline > a@href",
+            "points": "+ tr .score",
+            "author": "+ tr .hnuser",
+            "age": "+ tr .age",
+            "comments": "+ tr .subline > a:last-child",
+            "text": "~ tr .toptext"
+          }
+        }
+      },
+      "params": [
+        {
+          "name": "id",
+          "type": "string",
+          "required": true,
+          "example": "8863",
+          "description": "Item id from a news.ycombinator.com/item?id= link"
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "learnedAt": "2026-11-02T01:18:58.003Z",
+      "checks": [
+        {
+          "args": {
+            "id": "10000000"
+          },
+          "expect": "result",
+          "purpose": "Held-out story"
+        }
+      ]
+    },
+    {
+      "name": "getComments",
+      "description": "The comments on a Hacker News item, in thread order, with indentation depth",
+      "request": {
+        "method": "GET",
+        "url": "https://news.ycombinator.com/item?id=8863",
+        "headers": {
+          "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/jxl,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+          "accept-language": "en-US,en;q=0.9",
+          "priority": "u=0, i",
+          "sec-ch-ua": "\"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Google Chrome\";v=\"156\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\"",
+          "sec-fetch-dest": "document",
+          "sec-fetch-mode": "navigate",
+          "sec-fetch-site": "none",
+          "sec-fetch-user": "?1",
+          "upgrade-insecure-requests": "1",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36"
+        }
+      },
+      "slots": [
+        {
+          "param": "id",
+          "at": [
+            "query:id"
+          ]
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://news.ycombinator.com/item?id={id}"
+      },
+      "match": {
+        "path": "/item"
+      },
+      "response": {
+        "format": "html",
+        "contentType": "text/html; charset=utf-8",
+        "html": {
+          "items": "tr.comtr",
+          "fields": {
+            "id": "@id",
+            "author": ".hnuser",
+            "age": ".age",
+            "depth": "td.ind@indent",
+            "text": ".commtext"
+          }
+        }
+      },
+      "params": [
+        {
+          "name": "id",
+          "type": "string",
+          "required": true,
+          "example": "8863",
+          "description": "Item id from a news.ycombinator.com/item?id= link"
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "learnedAt": "2026-11-02T01:19:09.012Z",
+      "checks": [
+        {
+          "args": {
+            "id": "10000000"
+          },
+          "expect": "result",
+          "purpose": "Held-out thread"
+        }
+      ]
+    },
+    {
+      "name": "listStories",
+      "description": "A Hacker News story list (front page, newest, best, Ask HN, Show HN, jobs), one page",
+      "request": {
+        "method": "GET",
+        "url": "https://news.ycombinator.com/newest?p=1",
+        "headers": {
+          "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/jxl,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+          "accept-language": "en-US,en;q=0.9",
+          "priority": "u=0, i",
+          "sec-ch-ua": "\"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Google Chrome\";v=\"156\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\"",
+          "sec-fetch-dest": "document",
+          "sec-fetch-mode": "navigate",
+          "sec-fetch-site": "none",
+          "sec-fetch-user": "?1",
+          "upgrade-insecure-requests": "1",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36"
+        }
+      },
+      "slots": [
+        {
+          "param": "list",
+          "at": [
+            "path:0"
+          ]
+        },
+        {
+          "param": "page",
+          "at": [
+            "query:p"
+          ]
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://news.ycombinator.com/{list}?p={page}"
+      },
+      "match": {
+        "method": "GET",
+        "host": "news.ycombinator.com",
+        "path": "/*"
+      },
+      "response": {
+        "format": "html",
+        "contentType": "text/html; charset=utf-8",
+        "html": {
+          "items": "tr.athing.submission",
+          "fields": {
+            "id": "@id",
+            "title": ".titleline > a",
+            "url": ".titleline > a@href",
+            "points": "+ tr .score",
+            "author": "+ tr .hnuser",
+            "age": "+ tr .age",
+            "comments": "+ tr .subline > a:last-child"
+          }
+        }
+      },
+      "params": [
+        {
+          "name": "list",
+          "type": "string",
+          "required": false,
+          "example": "newest",
+          "enum": [
+            "news",
+            "newest",
+            "best",
+            "ask",
+            "show",
+            "jobs",
+            "front"
+          ],
+          "description": "Which list: news (front page), newest, best, ask, show, jobs, front (past front pages)",
+          "default": "news"
+        },
+        {
+          "name": "page",
+          "type": "string",
+          "required": false,
+          "example": "1",
+          "min": 1,
+          "description": "Page number, starting at 1",
+          "default": "1"
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "learnedAt": "2026-11-02T01:19:35.636Z",
+      "checks": [
+        {
+          "args": {
+            "list": "ask",
+            "page": "1"
+          },
+          "expect": "result",
+          "purpose": "Ask HN list"
+        }
+      ]
+    },
+    {
+      "name": "getUser",
+      "description": "A Hacker News user's public profile: created date, karma, about",
+      "request": {
+        "method": "GET",
+        "url": "https://news.ycombinator.com/user?id=pg",
+        "headers": {
+          "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/jxl,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+          "accept-language": "en-US,en;q=0.9",
+          "priority": "u=0, i",
+          "sec-ch-ua": "\"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Google Chrome\";v=\"156\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\"",
+          "sec-fetch-dest": "document",
+          "sec-fetch-mode": "navigate",
+          "sec-fetch-site": "none",
+          "sec-fetch-user": "?1",
+          "upgrade-insecure-requests": "1",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36"
+        }
+      },
+      "slots": [
+        {
+          "param": "username",
+          "at": [
+            "query:id"
+          ]
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://news.ycombinator.com/user?id={username}"
+      },
+      "match": {
+        "path": "/user"
+      },
+      "response": {
+        "format": "html",
+        "contentType": "text/html; charset=utf-8",
+        "html": {
+          "items": "tr.athing",
+          "fields": {
+            "username": ".hnuser",
+            "created": "+ tr .age",
+            "karma": "+ tr + tr > td:nth-child(2)",
+            "about": "+ tr + tr + tr > td[style]"
+          }
+        }
+      },
+      "params": [
+        {
+          "name": "username",
+          "type": "string",
+          "required": true,
+          "example": "pg",
+          "description": "Hacker News username"
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "learnedAt": "2026-11-02T01:20:48.544Z",
+      "checks": [
+        {
+          "args": {
+            "username": "dang"
+          },
+          "expect": "result",
+          "purpose": "Well-known moderator account"
+        }
+      ]
     }
   ]
 }
