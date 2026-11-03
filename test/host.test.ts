@@ -825,7 +825,7 @@ test("loading SQLite for host planning suppresses only its experimental warning"
 });
 
 test("signedIn fails closed for a locked or malformed own profile, but ignores it at maxTier 1", () => {
-  const db = profileDb("Default/Cookies");
+  const db = profileDb();
   db.exec("BEGIN EXCLUSIVE");
   try {
     const plan = planCall("fixture", "search");
