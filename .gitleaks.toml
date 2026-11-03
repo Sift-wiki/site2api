@@ -30,6 +30,9 @@ regexes = [
   '''^EAAGm0PX4ZCpsBAKZCZBw7hjk2ZAn9ZCqZB8ZAzT$''',
   # test/secrets.test.ts: the made-up session cookie the redaction tests hide from messages
   '''^Tk4Rf9Lp2Wq7Zx3Nm8Vb$''',
+  # test/host.test.ts in published commit a078643: an alphabet/digit suffix of its made-up
+  # tier-3 preview token. Never issued by a service; retained only for the full-history scan.
+  '''^Abcdef123456789$''',
   # test/edge/*.test.ts: JWTs with fake payloads ({"sub":"anon"}, {"sub":"1234"}, {"sub":"user-1"})
   # and fake signatures ("anonymous", "signature_123", "foobarbazqux")
   '''^eyJhbGciOiJIUzI1NiJ9\.eyJzdWIiOiJhbm9uIn0\.YW5vbnltb3Vz$''',

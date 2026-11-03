@@ -665,7 +665,7 @@ test("plans bind their tier and cap, including remembered tiers and caps below m
 });
 
 test("tier-3 plans fill and redact the URL, soft navigation and steps", () => {
-  const token = ["SecretToken", "Abcdef123456789"].join("");
+  const token = ["Secret", "Token", "Abcd", "ef123456789"].join("");
   saveSession("fixture", { cookies: [], values: { token } });
   saveSite({
     ...site,
