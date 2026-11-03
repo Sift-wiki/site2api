@@ -48,9 +48,14 @@ const emptyPlan = planCall("hacker-news", "frontPage");
 assert.ok(emptyPlan.ok, JSON.stringify(emptyPlan));
 assert.equal(emptyPlan.signedIn, false);
 assert.deepEqual(readdirSync(profile).sort(), before);
-const edit = new DatabaseSync(cookieFile);
-edit.prepare("INSERT INTO cookies VALUES(?, ?)").run(".news.ycombinator.com", "synthetic-cookie");
-edit.close();
+const insert = (name) => {
+  const edit = new DatabaseSync(cookieFile);
+  edit.prepare("INSERT INTO cookies VALUES(?, ?)").run(".news.ycombinator.com", name);
+  edit.close();
+};
+insert("synthetic-visitor-cookie");
+assert.equal(hostSite("hacker-news").site.signedIn, false);
+insert("user_session");
 assert.equal(hostSite("hacker-news").site.signedIn, true);
 const wal = new DatabaseSync(cookieFile);
 wal.exec("DELETE FROM cookies; PRAGMA journal_mode=WAL");

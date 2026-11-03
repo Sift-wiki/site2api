@@ -33,16 +33,37 @@ a `blocked` result, not a callable plan. The existing unconfirmed-operation cap 
 Blocked plans use the same recovery step as `call()`: ordinary caps ask to raise the tier;
 an agent-pulled candidate needing tier 3 asks for a human's review and CLI pull, not a higher cap.
 
-`signedIn` is a caution, not proof of a valid login. Any stored cookie or session value counts,
-even an expired, empty or guest one. When the call can reach a browser tier (it starts there, or a
-read or a write's readback may climb within the cap), planning also looks in api-anything's own
-Chrome profile for a cookie on the site's registrable domains: request, lookup, trigger and inline
-readback hosts, or any domain when one of those origins is templated. It reads the cookie hosts of
-`Default/Network/Cookies`, never a value, and opens no everyday-browser profile and no Keychain.
-What it cannot read counts as signed in: a running Chrome, a non-empty journal or WAL, a WAL-mode
-database (opening one would create `-shm` and `-wal` files in the profile, so it is not opened), a
-missing database, a lock or an unknown schema. A profile that does not exist does not count.
-`hostSites()` and `hostSite()` use the default cap of 3; a plan with `maxTier: 1` does not look.
+`signedIn` means the call may run under the user's account. It is answered from evidence of a
+login, never from the mere presence of a cookie, and it is a caution, not proof that the login is
+still valid. It is true when:
+
+1. The site has a login on record, as `call()` judges one before it calls a guest's answer `auth`:
+   its session has a `source` (set by `api-anything login`: a browser import, `--window` or
+   `--cookies`), or its jar holds a live, non-empty sign-in cookie (`signInCookies`): one of the
+   spec's `loginCookies` when it pins them, else `logged_in=yes` or a name like `sessionid`, `sid`,
+   `*_session` or `__Secure-1PSID` (`AUTH_COOKIE`) that is not in the session's `guestCookies`.
+2. The call can reach a browser tier (it starts there, or a read or a write's readback may climb
+   within the cap), or the site holds a session value (session values are captured in api-anything's
+   own Chrome profile), and that profile may carry a sign-in for one of the site's registrable
+   domains: those of its request, lookup, trigger and inline readback hosts, or any domain when one
+   of those origins is templated. It may when:
+   - any site has a login on record (`source`) for one of those domains: its cookies' domains, its
+     spec's hosts, or its name (`login <domain>` names a site after its host). A login puts its
+     cookies into the profile every site on the domain shares.
+   - the profile holds a cookie on one of those domains whose name is a sign-in name (`AUTH_COOKIE`
+     or the spec's `loginCookies`), expired or not. Planning reads only the host and name of each
+     cookie in `Default/Network/Cookies` and `Default/Cookies`, never a value, and opens no
+     everyday-browser profile and no Keychain.
+   - planning cannot read the profile: a running Chrome, a non-empty journal or WAL, a WAL-mode
+     database (opening one would create `-shm` and `-wal` files in the profile, so it is not
+     opened), a missing database, a lock or an unknown schema. A profile that does not exist does
+     not count.
+
+Nothing else counts. Anonymous cookies a signed-out response sets (Google's `NID`, consent,
+analytics and CSRF cookies), expired or empty ones, and session values with no login behind them
+leave `signedIn` false, so a call's own `Set-Cookie` does not turn the next plan signed in.
+`hostSites()` and `hostSite()` use the default cap of 3; a plan with `maxTier: 1` for a site with no
+session value does not look at the profile or at other sites' logins.
 
 `hosts` lists known HTTP(S) hostnames from the base URL, requests, derived lookups, trigger URLs,
 soft-navigation pages, `goto` steps, and inline readbacks and their lookups/triggers.

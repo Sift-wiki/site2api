@@ -3,10 +3,13 @@
  * and sharing remain CLI workflows. This module never installs specs or starts background work.
  */
 import { createHash } from "node:crypto";
+import { readdirSync } from "node:fs";
+import { join } from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { closeBrowser } from "./browser.js";
 import { setAt } from "./codec.js";
 import { describeOperation, type OperationDescription } from "./describe.js";
+import { siteOf } from "./domain.js";
 import {
   badSession,
   bareCall,
@@ -26,7 +29,7 @@ import { fillTrigger } from "./heal.js";
 import { buildRequest, unknownArgs, withDefaults } from "./http.js";
 import { profileSignedIn } from "./profile-state.js";
 import { captureLive, redact } from "./secrets.js";
-import { loadSession, placeholders, type Session } from "./session.js";
+import { home, loadSession, placeholders, type Session, signInCookies } from "./session.js";
 import type { Operation, Request, Site, Trigger } from "./spec.js";
 import { listSites, loadSite, type Resolved, rememberedTier, siteNotes } from "./store.js";
 
@@ -44,7 +47,7 @@ export interface HostSite {
   name: string;
   source: "user" | "bundled" | "pulled";
   hosts: string[];
-  /** Stored values, own-profile cookies when browser tiers are reachable, or unreadable profile state. */
+  /** Evidence of a login, never the mere presence of cookies (docs/HOST.md). */
   signedIn: boolean;
   operations: HostOperation[];
 }
@@ -127,20 +130,59 @@ function hostnames(urls: string[]): string[] {
   ];
 }
 
-function signedIn(s: Session, site: Site, browser: boolean): boolean {
-  if (s.cookies.length > 0 || Object.keys(s.values).length > 0) return true;
-  if (!browser) return false;
-  const urls = siteUrls(site);
-  // A templated origin could be any site in the profile: no host list, so any cookie counts.
-  return profileSignedIn(urls.some((url) => !staticUrl(url)) ? [] : hostnames(urls));
+/**
+ * The registrable domains of every login on record (`Session.source`): its cookies' domains, its site's
+ * hosts, and the site's name, which `login <domain>` takes from the host. A login also puts its cookies
+ * into api-anything's own profile, which every site on those domains shares.
+ */
+function loginDomains(): Set<string> {
+  const domains = new Set<string>();
+  let files: string[] = [];
+  try {
+    files = readdirSync(join(home(), "sessions"));
+  } catch {
+    // no session saved yet
+  }
+  for (const file of files.filter((f) => f.endsWith(".json"))) {
+    const name = file.slice(0, -".json".length);
+    try {
+      const s = loadSession(name);
+      if (!s.source) continue;
+      domains.add(siteOf(name));
+      for (const c of s.cookies) domains.add(siteOf(c.domain.replace(/^\./, "")));
+      const r = loadSite(name);
+      if (r) for (const host of hostnames(siteUrls(r.site))) domains.add(siteOf(host));
+    } catch {
+      // an unreadable session is no login on record; an unreadable spec still leaves its cookies' domains
+    }
+  }
+  return domains;
 }
 
-function summary(r: Resolved): HostSite {
+/**
+ * Whether the call may run under the user's account, from evidence of a login only: an anonymous cookie a
+ * signed-out response sets (NID, consent, analytics, CSRF) is none, so a call's own Set-Cookie never turns
+ * the next plan signed in. `browser`: the call can reach api-anything's own Chrome profile.
+ */
+function signedIn(s: Session, site: Site, browser: boolean, logins?: Set<string>): boolean {
+  // A login on record, as call() judges one before it calls a guest's answer `auth`.
+  if (s.source || signInCookies(s.cookies, site.loginCookies, s.guestCookies).length > 0) return true;
+  // Session values are captured in the own profile, so they carry whatever sign-in it holds.
+  if (!browser && Object.keys(s.values).length === 0) return false;
+  const urls = siteUrls(site);
+  // A templated origin could be any site in the profile: no host list, so any domain counts.
+  const hosts = urls.some((url) => !staticUrl(url)) ? [] : hostnames(urls);
+  const domains = logins ?? loginDomains();
+  if (hosts.length ? hosts.some((host) => domains.has(siteOf(host))) : domains.size > 0) return true;
+  return profileSignedIn(hosts, site.loginCookies);
+}
+
+function summary(r: Resolved, logins: Set<string>): HostSite {
   return {
     name: r.site.name,
     source: r.source === "registry" ? "pulled" : r.source,
     hosts: hostnames(siteUrls(r.site)),
-    signedIn: signedIn(loadSession(r.site.name), r.site, r.site.operations.length > 0),
+    signedIn: signedIn(loadSession(r.site.name), r.site, r.site.operations.length > 0, logins),
     operations: r.site.operations.map((op) => ({
       name: op.name,
       readOnly: op.readOnly,
@@ -152,10 +194,11 @@ function summary(r: Resolved): HostSite {
 
 /** List every valid callable site using local files only; invalid specs/sessions are omitted. */
 export function hostSites(): HostSite[] {
+  const logins = loginDomains();
   return listSites().flatMap((name) => {
     try {
       const r = loadSite(name);
-      return r ? [summary(r)] : [];
+      return r ? [summary(r, logins)] : [];
     } catch {
       return [];
     }
@@ -170,7 +213,7 @@ export function hostSite(
   if (!r) return undefined;
   const notes = siteNotes(r.site.name);
   return {
-    site: summary(r),
+    site: summary(r, loginDomains()),
     ...(notes ? { notes } : {}),
     operations: r.site.operations.map((op) => describeOperation(r.site, op.name)),
   };

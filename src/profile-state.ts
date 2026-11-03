@@ -1,8 +1,9 @@
-/** Offline sign-in caution for api-anything's own Chrome profile. Reads cookie hosts, never values. */
+/** Offline sign-in caution for api-anything's own Chrome profile. Reads cookie hosts and names, never values. */
 import { closeSync, lstatSync, openSync, readSync } from "node:fs";
 import { join } from "node:path";
 import { siteOf } from "./domain.js";
 import { profileDir } from "./heal.js";
+import { AUTH_COOKIE } from "./session.js";
 import { openReadOnly } from "./sqlite.js";
 
 /** Whether `path` may be there: only ENOENT says no. `nonempty`: an empty file does not count. */
@@ -21,19 +22,24 @@ const COOKIE_DBS = [
   ["Default", "Cookies"],
 ];
 
-/** Any cookie on one of the hosts' sites counts, even a guest or expired one; so does a profile it cannot read. */
-export function profileSignedIn(hosts: string[]): boolean {
+/**
+ * Whether the profile may hold a sign-in on one of the hosts' sites (any site when there are none): a
+ * cookie named like a login (`AUTH_COOKIE`, or one of `loginCookies`), even an expired one, or a profile
+ * it cannot read. An anonymous cookie (NID, a consent or CSRF cookie) is no sign-in.
+ */
+export function profileSignedIn(hosts: string[], loginCookies: string[] = []): boolean {
   const dir = profileDir();
   if (!present(dir)) return false;
   // A running Chrome may not have flushed new cookies yet.
   if (present(join(dir, "SingletonLock"))) return true;
   const domains = new Set(hosts.map(siteOf));
+  const login = (name: string) => AUTH_COOKIE.test(name) || loginCookies.includes(name);
   const files = COOKIE_DBS.map((parts) => join(dir, ...parts)).filter((file) => present(file));
   if (!files.length) return true;
-  return files.some((file) => holdsCookie(file, domains));
+  return files.some((file) => holdsLogin(file, domains, login));
 }
 
-function holdsCookie(file: string, domains: Set<string>): boolean {
+function holdsLogin(file: string, domains: Set<string>, login: (name: string) => boolean): boolean {
   // A pending journal or WAL holds cookies the file lacks.
   if (present(`${file}-wal`, true) || present(`${file}-journal`, true)) return true;
   try {
@@ -48,9 +54,9 @@ function holdsCookie(file: string, domains: Set<string>): boolean {
     }
     const db = openReadOnly(file);
     try {
-      for (const { host_key } of db.prepare("SELECT host_key FROM cookies").iterate()) {
-        if (typeof host_key !== "string" || !domains.size) return true;
-        if (domains.has(siteOf(host_key.replace(/^\./, "")))) return true;
+      for (const { host_key, name } of db.prepare("SELECT host_key, name FROM cookies").iterate()) {
+        if (typeof host_key !== "string" || typeof name !== "string") return true;
+        if (login(name) && (!domains.size || domains.has(siteOf(host_key.replace(/^\./, ""))))) return true;
       }
     } finally {
       db.close();
