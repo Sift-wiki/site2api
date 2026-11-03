@@ -193,6 +193,19 @@ function transform(v: string, t: "strip-quotes" | "url-decode" | undefined): str
 export const holdsRef = (s: Operation["slots"][number]) =>
   !!s.ref || (s.template !== undefined && templateRefs(s.template).length > 0);
 
+/** The names of the stored, non-empty session values `buildRequest` puts into `op`'s request. */
+export function filledValues(op: Pick<Operation, "request" | "slots">, session: Session): string[] {
+  const refs = op.slots.flatMap((s) => [...(s.ref ? [s.ref] : []), ...templateRefs(s.template ?? "")]);
+  const filled = (ref: string) => {
+    try {
+      return !!resolveRef(ref, session, op.request.url);
+    } catch {
+      return !!session.values[ref.slice("session:".length)]; // an unparseable URL: count what is stored
+    }
+  };
+  return [...new Set(refs.filter((r) => r.startsWith("session:") && filled(r)).map((r) => r.slice("session:".length)))];
+}
+
 /**
  * A gen slot's value: a UUID v4 drawn from `seed` and the slot's place, so every request one call
  * builds carries the same one. With no seed, a fresh one.

@@ -13,7 +13,7 @@ import { answerShare } from "../src/identity.js";
 import { registryName } from "../src/publish.js";
 import { settle } from "../src/report.js";
 import { scanSecrets } from "../src/secrets.js";
-import { loadSession, saveSession, sessionFile } from "../src/session.js";
+import { loadSession, mergeCapture, saveSession, sessionFile } from "../src/session.js";
 import { parseSite, type Site } from "../src/spec.js";
 import {
   cooling,
@@ -25,6 +25,7 @@ import {
   saveSite,
   siteNotes,
 } from "../src/store.js";
+import type { StoredCookie } from "../src/types.js";
 import { type Fixture, startFixture } from "./fixture/server.js";
 
 const BUNDLED = fileURLToPath(new URL("../sites", import.meta.url));
@@ -116,23 +117,6 @@ test("discovery lists bundled, pulled and user sites; user copy wins; notes, sch
   assert.equal(user.operations[0]?.params.additionalProperties, false);
   writeFileSync(join(home, "sites", "fixture.md"), "Caller notes\n\n## Maintainer notes\nPrivate details");
   assert.equal(hostSite("fixture")?.notes, "Caller notes");
-  saveSession("fixture", { cookies: [], values: { theme: "" } });
-  assert.equal(hostSite("fixture")?.site.signedIn, true, "even an empty stored value counts");
-  saveSession("fixture", {
-    cookies: [
-      {
-        name: "guest",
-        value: "guest-cookie",
-        domain: "127.0.0.1",
-        path: "/",
-        expires: 1,
-        httpOnly: false,
-        secure: false,
-      },
-    ],
-    values: {},
-  });
-  assert.equal(hostSite("fixture")?.site.signedIn, true, "an expired guest cookie counts conservatively");
   const copy = loadSite("hacker-news")!.site;
   saveSite({ ...copy, operations: [copy.operations[0]!] });
   const sites = hostSites();
@@ -152,6 +136,347 @@ test("discovery lists bundled, pulled and user sites; user copy wins; notes, sch
   assert.equal(hostSite("pulled")?.site.source, "pulled");
   assert.ok(hostSites().some((s) => s.name === "pulled"));
   assert.equal(hostSite("absent"), undefined);
+  assert.deepEqual(fixture.calls, []);
+});
+
+const cookie = (name: string, value: string, more: Partial<StoredCookie> = {}): StoredCookie => ({
+  name,
+  value,
+  domain: "127.0.0.1",
+  path: "/",
+  expires: -1,
+  httpOnly: false,
+  secure: false,
+  ...more,
+});
+
+test("signedIn is a login on record or a cookie that may carry one, never known-anonymous cookies or unsent values", () => {
+  const signedIn = () => hostSite("fixture")?.site.signedIn;
+  const anonymous = [
+    cookie("NID", "511=anonymous-preference-id"),
+    cookie("CONSENT", "PENDING+987"),
+    cookie("_ga", "GA1.1.123456789.1700000000"),
+    cookie("csrftoken", "anonymous-csrf-token-value"),
+    cookie("sessionid", "expired-session-value", { expires: 1 }),
+    cookie("user_session", ""),
+  ];
+  saveSession("fixture", { cookies: anonymous, values: { theme: "", "x-guest-token": "1234567890" } });
+  assert.equal(signedIn(), false, "anonymous, expired and empty cookies and session values are no login");
+  const capped = planCall("fixture", "search");
+  assert.ok(capped.ok);
+  assert.equal(capped.signedIn, false, "the profile is reachable at the default cap, and holds nothing");
+  saveSession("fixture", { cookies: [...anonymous, cookie("sessionid", "live-session-value")], values: {} });
+  assert.equal(signedIn(), true, "a live auth-named cookie");
+  assert.equal(planned("search").signedIn, true, "the jar counts at maxTier 1");
+  saveSession("fixture", {
+    cookies: [...anonymous, cookie("laravel_session", "every-visitor-gets-one")],
+    values: {},
+    guestCookies: ["laravel_session"],
+  });
+  assert.equal(signedIn(), false, "a name a signed-out visit is given");
+  saveSession("fixture", { cookies: [], values: {}, source: "window" });
+  assert.equal(signedIn(), true, "a login on record, even with its cookies gone");
+  assert.equal(planned("search").signedIn, true);
+  saveSite({ ...site, loginCookies: ["member"] });
+  saveSession("fixture", { cookies: [cookie("member", "pinned-login")], values: {} });
+  assert.equal(signedIn(), true, "a pinned loginCookies name");
+  saveSession("fixture", { cookies: [cookie("sessionid", "not-the-pinned-name")], values: {} });
+  assert.equal(signedIn(), true, "a pinned list adds names, never makes another one anonymous");
+});
+
+test("a login on another site of the same registrable domain counts where the shared profile is reachable", () => {
+  const on = (name: string, origin: string): Site => ({
+    ...site,
+    name,
+    baseUrl: origin,
+    operations: [
+      {
+        ...site.operations[0]!,
+        request: { ...site.operations[0]!.request, url: `${origin}/api/search?q=alice` },
+        trigger: { url: `${origin}/search?q={q}` },
+      },
+    ],
+  });
+  saveSite(on("flights", "https://www.example.co.uk"));
+  saveSite(on("maps", "https://maps.example.co.uk"));
+  const plan = (maxTier?: 1) => {
+    const p = planCall("flights", "search", {}, maxTier ? { maxTier } : {});
+    assert.ok(p.ok, JSON.stringify(p));
+    return p.signedIn;
+  };
+  saveSession("maps", { cookies: [cookie("NID", "anonymous", { domain: ".example.co.uk" })], values: {} });
+  assert.equal(plan(), false, "another site's anonymous cookies are no login");
+  saveSession("maps", { cookies: [], values: {}, source: "chrome:Default" });
+  assert.equal(plan(), true, "maps' login put its cookies into the profile flights' browser tiers use");
+  assert.equal(hostSite("flights")?.site.signedIn, true);
+  assert.equal(hostSites().find((s) => s.name === "flights")?.signedIn, true);
+  assert.equal(plan(1), false, "tier 1 sends only flights' own jar");
+  saveSession("flights", { cookies: [], values: { "x-goog-batchexecute-bgr": "captured-in-the-profile" } });
+  assert.equal(plan(1), true, "a session value was captured in that profile");
+  assert.equal(hostSite("fixture")?.site.signedIn, false, "another registrable domain");
+  rmSync(join(home, "sessions", "maps.json"));
+  saveSession("flights", { cookies: [], values: {} });
+  assert.equal(plan(), false);
+  // `login example.co.uk` with no spec names the site after its host.
+  saveSession("example.co.uk", { cookies: [], values: {}, source: "file" });
+  assert.equal(plan(), true);
+  rmSync(join(home, "sessions", "example.co.uk.json"));
+  // A window login can store cookies of an identity provider on another domain than its site's.
+  saveSession("video", {
+    cookies: [cookie("SID", "identity-provider-login", { domain: ".example.co.uk" })],
+    values: {},
+    source: "window",
+  });
+  assert.equal(plan(), true);
+  assert.deepEqual(fixture.calls, []);
+});
+
+test("a signed-out read's own anonymous cookies leave the next plan unchanged; a login still refuses a write", async () => {
+  saveSite({
+    ...site,
+    operations: [
+      {
+        ...site.operations[0]!,
+        request: {
+          method: "GET",
+          url: `${fixture.url}/api/visitor-search?q=alice`,
+          headers: { "x-csrf-token": "" },
+        },
+        slots: [
+          { param: "q", at: ["query:q"] },
+          { ref: "cookie:csrftoken", at: ["header:x-csrf-token"] },
+        ],
+      },
+      site.operations[1]!,
+      site.operations[2]!,
+    ],
+  });
+  // The default cap: the shared profile is reachable, as for an embedding host's reads.
+  const plan = (op: string, args: Record<string, unknown>) => {
+    const p = planCall("fixture", op, args);
+    assert.ok(p.ok, JSON.stringify(p));
+    return p;
+  };
+  const approved = plan("search", { q: "sfo" });
+  assert.equal(approved.signedIn, false);
+  const first = await callPlanned(approved, { minIntervalMs: 0 });
+  assert.equal(first.ok, true, JSON.stringify(first));
+  const jar = loadSession("fixture").cookies;
+  assert.deepEqual(jar.map((c) => c.name).sort(), ["CONSENT", "NID", "_ga", "csrftoken"]);
+  assert.deepEqual(plan("search", { q: "sfo" }), approved, "the same plan, fingerprint and signedIn");
+  assert.equal(hostSite("fixture")?.site.signedIn, false);
+  const second = await callPlanned(approved, { minIntervalMs: 0 });
+  assert.equal(second.ok, true, JSON.stringify(second));
+  const sent = fixture.calls.at(-1)!.headers;
+  assert.equal(sent["x-csrf-token"], jar.find((c) => c.name === "csrftoken")?.value, "the cookie ref still goes");
+  assert.match(String(sent.cookie), /NID=511=/, "the jar's anonymous cookies still go");
+  assert.deepEqual(plan("search", { q: "sfo" }), approved, "rotated values change nothing either");
+
+  const write = plan("addTodo", { title: "after anonymous cookies" });
+  assert.equal(write.signedIn, false);
+  const anonymous = loadSession("fixture");
+  saveSession("fixture", {
+    ...anonymous,
+    cookies: [...anonymous.cookies, cookie("sessionid", "signed-in-meanwhile", { httpOnly: true })],
+  });
+  const refused = await callPlanned(write, { allowWrites: true, minIntervalMs: 0 });
+  assert.equal(refused.class, "refused", JSON.stringify(refused));
+  assert.equal(refused.write, "not_sent");
+  assert.equal(fixture.calls.filter((c) => c.method === "POST").length, 0);
+  saveSession("fixture", anonymous);
+  const applied = await callPlanned(write, { allowWrites: true, minIntervalMs: 0 });
+  assert.equal(applied.ok, true, JSON.stringify(applied));
+  assert.equal(applied.write, "applied");
+  assert.equal(fixture.calls.filter((c) => c.method === "POST").length, 1);
+});
+
+// Hacker News's login cookie is `user` (`<name>&<hash>`); Java, PHP and Express name theirs JSESSIONID,
+// PHPSESSID and connect.sid; Google's account cookies are the SID family.
+const ACCOUNT_COOKIES = [
+  cookie("user", "alice&Ab3dE5fG7hI9jK1lM3nO5pQ7rS9tU1v"),
+  cookie("JSESSIONID", "node0abc123def456ghi789.node0"),
+  cookie("PHPSESSID", "q2v6l9n3k1m8p4r7s5t0u2w4x6"),
+  cookie("connect.sid", "s%3Aabc123.def456"),
+  cookie("session", "eyJ1c2VyIjoiYWxpY2UifQ.abc"),
+  cookie("sid", "abc123"),
+  cookie("logged_in", "yes"),
+  ...[
+    "SID",
+    "HSID",
+    "SSID",
+    "APISID",
+    "SAPISID",
+    "__Secure-1PSID",
+    "__Secure-3PSID",
+    "__Secure-1PAPISID",
+    "__Secure-3PAPISID",
+    "__Secure-1PSIDTS",
+    "__Secure-3PSIDCC",
+  ].map((name) => cookie(name, "g.a000-synthetic-account-value")),
+];
+const ANONYMOUS_COOKIES = [
+  "NID",
+  "AEC",
+  "SOCS",
+  "CONSENT",
+  "1P_JAR",
+  "__Secure-ENID",
+  "_ga",
+  "_ga_ABC123XYZ",
+  "_gid",
+  "_gat",
+  "_gat_UA-12345-1",
+  "_fbp",
+  "OptanonConsent",
+  "OptanonAlertBoxClosed",
+  "euconsent-v2",
+  "__cf_bm",
+  "_cfuvid",
+  "cf_clearance",
+  "csrftoken",
+  "XSRF-TOKEN",
+  "_csrf",
+].map((name) => cookie(name, "anonymous-visitor-value"));
+
+test("any live jar cookie counts as signed in unless its name is known to be anonymous", async () => {
+  const signedIn = () => planned("search").signedIn; // maxTier 1: the jar alone
+  saveSession("fixture", { cookies: ANONYMOUS_COOKIES, values: {} });
+  assert.equal(signedIn(), false, "analytics, consent, bot-management, CSRF and Google's signed-out cookies");
+  assert.equal(hostSite("fixture")?.site.signedIn, false);
+  for (const login of ACCOUNT_COOKIES) {
+    saveSession("fixture", { cookies: [...ANONYMOUS_COOKIES, login], values: {} });
+    assert.equal(signedIn(), true, login.name);
+  }
+  saveSession("fixture", { cookies: [cookie("an-unknown-name", "x")], values: {} });
+  assert.equal(signedIn(), true, "an unknown name is no evidence of anonymity");
+  saveSession("fixture", { cookies: [ACCOUNT_COOKIES[1]!], values: {}, guestCookies: ["JSESSIONID"] });
+  assert.equal(signedIn(), false, "a name a signed-out visit to the site was given");
+  saveSite({ ...site, loginCookies: ["JSESSIONID"] });
+  assert.equal(signedIn(), true, "a pinned login name counts even when a guest is given it");
+  saveSite({ ...site, loginCookies: ["member"] });
+  saveSession("fixture", { cookies: [ACCOUNT_COOKIES[0]!], values: {} });
+  assert.equal(signedIn(), true, "a pinned name never makes another name anonymous");
+  saveSite(site);
+
+  saveSession("fixture", { cookies: ANONYMOUS_COOKIES, values: {} });
+  const write = planned("addTodo", { title: "before the login" });
+  assert.equal(write.signedIn, false);
+  saveSession("fixture", { cookies: [...ANONYMOUS_COOKIES, ACCOUNT_COOKIES[0]!], values: {} });
+  const refused = await callPlanned(write, { ...opts, allowWrites: true });
+  assert.equal(refused.class, "refused", JSON.stringify(refused));
+  assert.equal(refused.write, "not_sent");
+  assert.deepEqual(fixture.calls, []);
+});
+
+test("a stored session value the request fills counts as signed in, and its arrival refuses an approved write unsent", async () => {
+  const bearer = { ref: "session:bearer", at: ["header:authorization"] };
+  const withBearer = (op: Site["operations"][number]) => ({
+    ...op,
+    request: { ...op.request, headers: { ...op.request.headers, authorization: "" } },
+    slots: [...op.slots, bearer],
+  });
+  saveSite({ ...site, operations: site.operations.map((op) => (op.name === "todos" ? op : withBearer(op))) });
+  const write = planned("addTodo", { title: "before the token" });
+  assert.equal(write.signedIn, false);
+  assert.equal(write.request.headers.authorization, undefined, "no stored value: the header is left out, as sent");
+  const token = "Bearer synthetic-account-token-123";
+  saveSession("fixture", { cookies: [], values: { bearer: token }, valueHosts: { bearer: "127.0.0.1" } });
+  const read = planned("search");
+  assert.equal(read.signedIn, true, "no source and no cookie: the bearer alone");
+  assert.equal(read.request.headers.authorization, "<bearer>");
+  assert.equal(hostSite("fixture")?.site.signedIn, true);
+  const refused = await callPlanned(write, { ...opts, allowWrites: true });
+  assert.equal(refused.class, "refused", JSON.stringify(refused));
+  assert.equal(refused.write, "not_sent");
+  assert.equal(fixture.calls.length, 0);
+  const sent = await callPlanned(read, opts);
+  assert.equal(sent.ok, true, JSON.stringify(sent));
+  assert.equal(fixture.calls[0]?.headers.authorization, token, "the plan said signed in, and the account went");
+
+  // A value the call cannot send is none: bound to another host, or empty.
+  saveSession("fixture", { cookies: [], values: { bearer: token }, valueHosts: { bearer: "elsewhere.test" } });
+  assert.equal(planned("search").signedIn, false);
+  saveSession("fixture", { cookies: [], values: { bearer: "" }, valueHosts: { bearer: "127.0.0.1" } });
+  assert.equal(planned("search").signedIn, false);
+  // A write's readback read is sent with the session too.
+  saveSite({ ...site, operations: site.operations.map((op) => (op.name === "todos" ? withBearer(op) : op)) });
+  saveSession("fixture", { cookies: [], values: { bearer: token }, valueHosts: { bearer: "127.0.0.1" } });
+  assert.equal(planned("addTodo", { title: "read back with a token" }).signedIn, true);
+});
+
+test("an own-profile cookie on the site's domains counts unless its name is known to be anonymous", () => {
+  profileDb().close();
+  const only = (name: string) => {
+    const db = new DatabaseSync(join(home, "profile", "Default/Network/Cookies"));
+    db.exec("DELETE FROM cookies");
+    db.prepare("INSERT INTO cookies VALUES(?, ?)").run("127.0.0.1", name);
+    db.close();
+    return hostSite("fixture")?.site.signedIn;
+  };
+  for (const name of ["an-unknown-name", ...ACCOUNT_COOKIES.map((c) => c.name)]) assert.equal(only(name), true, name);
+  for (const { name } of ANONYMOUS_COOKIES) assert.equal(only(name), false, name);
+  saveSession("fixture", { cookies: [], values: {}, guestCookies: ["JSESSIONID"] });
+  assert.equal(only("JSESSIONID"), false, "a name a signed-out visit to the site was given");
+  saveSite({ ...site, loginCookies: ["JSESSIONID"] });
+  assert.equal(only("JSESSIONID"), true, "a pinned login name");
+});
+
+test("a session: ref shows its placeholder before a tier-3 run first captures its value", () => {
+  const op = site.operations[0]!;
+  saveSite({
+    ...site,
+    operations: [
+      {
+        ...op,
+        minTier: 3,
+        request: { ...op.request, headers: { "x-guest-token": "" } },
+        slots: [...op.slots, { ref: "session:x-guest-token", at: ["header:x-guest-token"] }],
+      },
+    ],
+  });
+  const before = planCall("fixture", "search");
+  assert.ok(before.ok, JSON.stringify(before));
+  assert.equal(before.tier, 3);
+  assert.equal(before.request.headers["x-guest-token"], "<x-guest-token>");
+  // What a read's tier-3 run stores: the page's anonymous cookies and the op's session value.
+  mergeCapture("fixture", [cookie("NID", "511=set-by-the-page")], {
+    from: op.request.url,
+    values: { "x-guest-token": "1700000000123456789" },
+  });
+  assert.deepEqual(planCall("fixture", "search"), before);
+  saveSession("fixture", {
+    cookies: [],
+    values: { "x-guest-token": "1700000000123456789" },
+    valueHosts: { "x-guest-token": "elsewhere.test" },
+  });
+  const elsewhere = planCall("fixture", "search");
+  assert.ok(elsewhere.ok);
+  assert.equal(elsewhere.request.headers["x-guest-token"], undefined, "a stored value the call cannot send");
+  assert.deepEqual(fixture.calls, []);
+});
+
+test("a bearer a tier-3 page captured from its storage makes the next plan signed in, with no cookie", () => {
+  const op = site.operations[0]!;
+  saveSite({
+    ...site,
+    operations: [
+      {
+        ...op,
+        minTier: 3,
+        request: { ...op.request, headers: { authorization: "" } },
+        slots: [...op.slots, { ref: "session:authorization", at: ["header:authorization"] }],
+      },
+    ],
+  });
+  const before = planCall("fixture", "search");
+  assert.ok(before.ok, JSON.stringify(before));
+  assert.equal(before.tier, 3);
+  assert.equal(before.signedIn, false);
+  mergeCapture("fixture", [], { from: op.request.url, values: { authorization: "Bearer stored-in-local-storage" } });
+  const after = planCall("fixture", "search");
+  assert.ok(after.ok);
+  assert.equal(after.signedIn, true, "the page holds an account bearer even though it fills it itself");
+  assert.notDeepEqual(after, before, "an anonymous approval no longer matches");
   assert.deepEqual(fixture.calls, []);
 });
 
@@ -216,7 +541,7 @@ test("planning redacts cookie/session values and encoded copies; fingerprints bi
   });
   const a = planned("search");
   assert.deepEqual(a.args, { q: "alice" });
-  assert.equal(a.request.headers.cookie, "auth=<auth>");
+  assert.equal(a.request.headers.cookie, "<per-site jar cookies>");
   assert.equal(a.request.headers.authorization, "<bearer>");
   assert.deepEqual(scanSecrets(a.request, loadSession("fixture")).secrets, []);
   assert.equal(planned("search").fingerprint, a.fingerprint);
@@ -753,10 +1078,19 @@ test("signedIn checks own-profile cookie names across registrable domains withou
   const before = readFileSync(path);
   assert.equal(hostSite("fixture")?.site.signedIn, false);
   assert.deepEqual(readdirSync(join(home, "profile"), { recursive: true }).sort(), files);
-  const edit = new DatabaseSync(path);
-  edit.prepare("INSERT INTO cookies VALUES(?, ?)").run("127.0.0.1", "guest");
-  edit.prepare("INSERT INTO cookies VALUES(?, ?)").run(".api.example.co.uk", "expired");
-  edit.close();
+  const insert = (rows: [string, string][]) => {
+    const edit = new DatabaseSync(path);
+    for (const row of rows) edit.prepare("INSERT INTO cookies VALUES(?, ?)").run(...row);
+    edit.close();
+  };
+  insert([
+    ["127.0.0.1", "guest"],
+    [".www.google.com", "NID"],
+    [".api.example.co.uk", "CONSENT"],
+    [".api.example.co.uk", "csrftoken"],
+  ]);
+  // A signed-out visit to the fixture was recorded being given `guest`.
+  saveSession("fixture", { cookies: [], values: {}, guestCookies: ["guest"] });
   saveSite({
     ...site,
     name: "sibling",
@@ -769,11 +1103,22 @@ test("signedIn checks own-profile cookie names across registrable domains withou
       },
     ],
   });
+  assert.equal(hostSite("fixture")?.site.signedIn, false, "known-anonymous and recorded guest names are no sign-in");
+  assert.equal(hostSite("sibling")?.site.signedIn, false);
+  saveSite({ ...site, loginCookies: ["guest"] });
+  assert.equal(hostSite("fixture")?.site.signedIn, true, "a pinned loginCookies name counts by name");
+  saveSite(site);
+  rmSync(sessionFile("fixture"));
+  assert.equal(hostSite("fixture")?.site.signedIn, true, "with no recorded guest list, `guest` is an unknown name");
+  insert([
+    ["127.0.0.1", "sessionid"],
+    [".api.example.co.uk", "__Secure-1PSID"],
+  ]);
   const stored = readFileSync(path);
   const storedFiles = readdirSync(join(home, "profile"), { recursive: true }).sort();
   assert.notDeepEqual(stored, before);
   assert.equal(hostSite("fixture")?.site.signedIn, true, "a missing per-site session cannot hide profile cookies");
-  assert.equal(hostSite("sibling")?.site.signedIn, true);
+  assert.equal(hostSite("sibling")?.site.signedIn, true, "a login cookie on another host of the registrable domain");
   const browser = planCall("fixture", "search");
   assert.ok(browser.ok);
   assert.equal(browser.signedIn, true, "a read may climb from tier 1");

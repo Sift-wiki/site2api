@@ -571,6 +571,25 @@ document.getElementById("gql").onclick=()=>fetch("/api/gql",{method:"POST",heade
       return json(res, 200, {
         data: { results: [`${u.searchParams.get("q")} one`, `${u.searchParams.get("q")} two`] },
       });
+    // A signed-out search that gives every visitor anonymous cookies, renewed on each answer, as Google
+    // gives NID: a preference id, a consent state, analytics, and a CSRF token page JS echoes in a header.
+    if (p === "/api/visitor-search") {
+      if (jar.csrftoken && req.headers["x-csrf-token"] !== jar.csrftoken) return json(res, 403, { error: "csrf" });
+      return send(
+        res,
+        200,
+        "application/json; charset=utf-8",
+        JSON.stringify({ data: { results: [`${u.searchParams.get("q")} one`] } }),
+        {
+          "set-cookie": [
+            `NID=511=${mint()}; Path=/; HttpOnly; Max-Age=15552000`,
+            `CONSENT=PENDING+${mint().slice(0, 3)}; Path=/`,
+            `_ga=GA1.1.${mint()}; Path=/; Max-Age=63072000`,
+            `csrftoken=${mint()}; Path=/; SameSite=Lax`,
+          ],
+        },
+      );
+    }
     // The stores near the caller's IP: `city` is sent and ignored. `open=no` does filter, so a check can show it.
     if (p === "/api/stores")
       return json(res, 200, {

@@ -433,6 +433,33 @@ export function signInCookies(
   );
 }
 
+/**
+ * Cookies every visitor is given, signed in or not, that carry no account: analytics, consent, bot
+ * management, CSRF tokens, and Google's signed-out preference cookies. Only positive evidence belongs
+ * here: never a login cookie (Google's SID, HSID, SSID, APISID, SAPISID and __Secure-*PSID* stay out).
+ */
+export const ANONYMOUS_COOKIE =
+  /^(_ga|_ga_[\w-]+|_gid|_gat|_gat_[\w-]+|_fbp|CONSENT|SOCS|OptanonConsent|OptanonAlertBoxClosed|euconsent(-v\d+)?|__cf_bm|_cfuvid|cf_clearance|csrftoken|XSRF-TOKEN|_csrf|NID|AEC|1P_JAR|__Secure-ENID)$/;
+
+/**
+ * Whether a cookie of this name may carry the user's account. A name is anonymous only on positive
+ * evidence (`ANONYMOUS_COOKIE`, or a name a signed-out visit to the site is given, `guest`); an unknown
+ * name may carry one, and a pinned login name always does.
+ */
+export function mayCarryAccount(name: string, loginCookies: string[] = [], guest: string[] = []): boolean {
+  return loginCookies.includes(name) || !(guest.includes(name) || ANONYMOUS_COOKIE.test(name));
+}
+
+/** The live, non-empty cookies that may carry the user's account (`mayCarryAccount`). */
+export function accountCookies(
+  cookies: StoredCookie[],
+  loginCookies?: string[],
+  guest?: string[],
+  now = Date.now(),
+): StoredCookie[] {
+  return cookies.filter((c) => !expired(c, now) && c.value && mayCarryAccount(c.name, loginCookies, guest));
+}
+
 export function loggedIn(
   cookies: StoredCookie[],
   loginCookies?: string[],
