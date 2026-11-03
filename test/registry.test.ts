@@ -258,10 +258,21 @@ test("the shared rules refuse what a hostile or careless spec could do with some
       spec({}, { params: [{ name: "q", pattern: "^(a|a)*$" }] }),
       /quantifies a group with overlapping alternatives/,
     ],
+    [
+      "overlapping alternatives repeated an exact number of times",
+      spec({}, { params: [{ name: "q", pattern: "^(a|a){30}$" }] }),
+      /quantifies a group with overlapping alternatives/,
+    ],
+    [
+      "overlapping alternatives inside a repeated group",
+      spec({}, { params: [{ name: "q", pattern: "^(?:(a|a))*$" }] }),
+      /quantifies a group with overlapping alternatives/,
+    ],
     ["a long description", spec({}, { description: "x".repeat(501) }), /description is 501 characters/],
   ];
   for (const [what, s, re] of refused) assert.match(errors(s).join("\n"), re, what);
-  assert.deepEqual(errors(spec({}, { params: [{ name: "q", pattern: "^(jpg|png|gif)$" }] })), []);
+  for (const pattern of ["^(jpg|png|gif)$", "^(a|aa)?$", "^(?<=x)(a|b)*$", "^(?<y>a|b)+$"])
+    assert.deepEqual(errors(spec({}, { params: [{ name: "q", pattern }] })), [], pattern);
   assert.match(errors(spec(), "n".repeat(9000)).join(), /notes are 9000 bytes/);
   const field = spec(
     {},
