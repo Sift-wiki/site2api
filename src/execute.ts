@@ -72,6 +72,7 @@ import {
   lastHealAt,
   loadSite,
   markStale,
+  PACE_JITTER,
   RATE_COOL_MS,
   type Resolved,
   rememberedTier,
@@ -221,6 +222,8 @@ export interface CallResult {
 type Result = Omit<CallResult, "ms">;
 
 const HEAL_GUARD_MS = 10 * 60_000;
+/** A call-only call's least interval: its shortest jittered gap between two sends is still a second. */
+const CALL_ONLY_INTERVAL_MS = 1000 / (1 - PACE_JITTER);
 // A write is retried only when the server certainly did not run it; timeouts and 5xx are ambiguous.
 const NOT_EXECUTED = new Set([400, 401, 403, 404]);
 /**
@@ -255,7 +258,10 @@ interface Ctx {
  */
 const unconfirmed = (site: Site, op: Operation) => site.shared?.by === "agent" && op.version?.status === "candidate";
 
-/** Shared by offline host planning and execution. A remembered tier never overrides a lower cap. */
+/**
+ * A call's starting tier and its cap. A remembered escalation is a speed hint, not a requirement:
+ * under a lower cap, the call starts at the op's own tier.
+ */
 export function callTiers(site: Site, op: Operation, maxTier: Tier = 3, remembered?: Tier) {
   const cap = unconfirmed(site, op) ? (Math.min(maxTier, 2) as Tier) : maxTier;
   const tier = Math.max(op.minTier, remembered !== undefined && remembered <= cap ? remembered : 1) as Tier;
@@ -276,7 +282,7 @@ const needsHuman = (site: string, notes: string[]): Result => ({
   retry: "after_fix",
 });
 
-/** Shared by host planning and run(), including the human-only approval for agent-pulled candidates. */
+/** The answer to a call that needs a tier above its cap; an `unconfirmed` op's tier 3 needs a human, not a cap. */
 export function tierBlocked(
   site: Site,
   op: Operation,
@@ -323,16 +329,16 @@ const NO_SESSION: Session = { cookies: [], values: {} };
  * serves no such op to anyone but its uploader until a maintainer reviewed it (a POST read, a slot
  * holding a cookie or session ref), and the seeded POST reads need theirs (airbnb search).
  */
-export function bareCall(ctx: Pick<Site, "shared">, op: Operation): boolean {
+export function bareCall(site: Pick<Site, "shared">, op: Operation): boolean {
   // An unreviewed candidate is a public read by the registry's rules, so it needs no session; and a
   // GET can do harm with the user's cookies too (a one-click account action), whoever pulled it.
-  if (ctx.shared && op.version?.status === "candidate") return true;
-  if (ctx.shared?.by !== "agent") return false;
+  if (site.shared && op.version?.status === "candidate") return true;
+  if (site.shared?.by !== "agent") return false;
   const method = op.request.method.toUpperCase();
   return method !== "GET" && method !== "HEAD";
 }
 
-/** The session this request may send, with no file writes. Planning uses exactly the same filter. */
+/** The session a call of `op` may send (none when `bareCall`), filtered in memory: no file is written. */
 export function callSession(site: Pick<Site, "shared">, op: Operation, session: Session, theirs = false): Session {
   if (bareCall(site, op)) return NO_SESSION;
   return theirs ? boundSession(session) : session;
@@ -599,7 +605,7 @@ async function tryTier(ctx: Ctx, op: Operation, tier: Tier): Promise<Attempt> {
       return notes.length ? { ...a, note: notes.join("; ") } : a;
     }
     const none = bareCall(ctx, op);
-    const session = callSession({ shared: ctx.shared }, op, loadSession(ctx.site));
+    const session = none ? NO_SESSION : loadSession(ctx.site);
     let r: Sent | PageFetchResult;
     if (tier === 1) {
       const sent = await sendDerived(op, ctx.args, session, {
@@ -943,7 +949,7 @@ async function onDrift(ctx: Ctx, site: Site, op: Operation, a: Attempt): Promise
   return fail(b, { reason: `${b.reason}; heal failed: ${h.reason}`, ...dropped(b) });
 }
 
-/** @internal Shared local-only resolution and error classes for call() and the host planner. */
+/** The site and op a call names, from local files only, or the failure a call answers without sending. */
 export function resolveCall(
   siteName: string,
   opName: string,
@@ -1159,12 +1165,10 @@ async function run(
   how: { theirs: boolean; source?: Resolved["source"]; proof?: boolean },
   t0 = Date.now(),
 ): Promise<CallResult> {
-  // reserveSend jitters by as little as 0.7; even that slot must be at least one second.
-  if (opts.callOnly)
-    opts = {
-      ...opts,
-      minIntervalMs: Math.max(1000 / 0.7, Number.isFinite(opts.minIntervalMs) ? (opts.minIntervalMs ?? 0) : 0),
-    };
+  if (opts.callOnly) {
+    const asked = opts.minIntervalMs ?? 0;
+    opts = { ...opts, minIntervalMs: Math.max(CALL_ONLY_INTERVAL_MS, Number.isFinite(asked) ? asked : 0) };
+  }
   const log: Attempt[] = [];
   const siteName = site.name;
   const { theirs, proof } = how;
@@ -1176,10 +1180,6 @@ async function run(
   let held: CoolDown | undefined;
   const done = async (r: Result): Promise<CallResult> => {
     let f = finish(r, op, siteName, log);
-    if (opts.callOnly && op.readOnly && f.class === "drift") {
-      f.next = `ask the user to run: api-anything heal ${siteName} ${op.name}`;
-      if (f.nextCall?.action === "relearn") f.nextCall = { action: "heal", site: siteName, op: op.name };
-    }
     // A forced call the site answered ends the cool-down: before its readback, which may start another.
     if (f.ok && opts.ignoreCoolDown && log.length) clearCoolDown(siteName);
     // log: something was sent this call (a ledger hold-back sends nothing, and reads nothing back)
@@ -1547,7 +1547,7 @@ export async function heal(
     site: siteName,
     args,
     opts,
-    maxTier: capped ? (Math.min(opts.maxTier ?? 3, 2) as Tier) : (opts.maxTier ?? 3),
+    maxTier: callTiers(site, op, opts.maxTier).maxTier,
     log,
     shared: site.shared,
     unconfirmed: capped,
