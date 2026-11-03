@@ -7,7 +7,7 @@ import { readdirSync } from "node:fs";
 import { join } from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { closeBrowser } from "./browser.js";
-import { setAt } from "./codec.js";
+import { setAt, templateRefs } from "./codec.js";
 import { describeOperation, type OperationDescription } from "./describe.js";
 import { siteOf } from "./domain.js";
 import {
@@ -224,25 +224,60 @@ const refused = (r: Omit<CallResult, "ms">, op?: Operation, site?: string): Call
   result: { ...finish(r, op, site, []), ms: 0 },
 });
 
+/**
+ * The session a preview is built from: `effective`, the one the call may send, as placeholders. Any
+ * response can set, rotate or drop a cookie, and a browser run captures a session value the session
+ * lacks, so every cookie: ref, and every session: ref `stored` holds no value for, shows its placeholder
+ * whether or not the value is there yet. A stored value the call's filters leave out stays out.
+ */
+function previewSession(op: Operation, effective: Session, stored: Session, bare: boolean): Session {
+  const shown = placeholders(effective);
+  if (bare) return shown;
+  let domain: string;
+  try {
+    domain = new URL(op.request.url).hostname.toLowerCase();
+  } catch {
+    return shown; // buildRequest reports the URL
+  }
+  const refs = op.slots.flatMap((s) => [...(s.ref ? [s.ref] : []), ...(s.template ? templateRefs(s.template) : [])]);
+  const named = (kind: string) =>
+    new Set(refs.flatMap((ref) => (ref.startsWith(`${kind}:`) ? [ref.slice(kind.length + 1)] : [])));
+  const absent = [...named("session")].filter((name) => !Object.hasOwn(stored.values, name));
+  return {
+    ...shown,
+    values: { ...shown.values, ...Object.fromEntries(absent.map((name) => [name, `<${name}>`])) },
+    cookies: [...named("cookie")].map((name) => ({
+      name,
+      value: `<${name}>`,
+      domain,
+      path: "/",
+      expires: -1,
+      httpOnly: false,
+      secure: false,
+    })),
+  };
+}
+
 /** The request as a host shows it: placeholders for credentials, generated values and looked-up values. */
 function previewRequest(
   site: Site,
   op: Operation,
   args: Record<string, unknown>,
-  session: Session,
+  sessions: { effective: Session; stored: Session },
   tier: Tier,
   hide: (text: string) => string,
 ): Request {
-  let req = buildRequest(op, args, placeholders(session), "host-preview");
+  const bare = bareCall(site, op);
+  let req = buildRequest(op, args, previewSession(op, sessions.effective, sessions.stored, bare), "host-preview");
   for (const slot of op.slots) {
     if (slot.gen) req = setAt(req, slot.at, "<generated:uuid>");
     if (slot.from) req = setAt(req, slot.at, `<derived:${slot.path}>`);
   }
-  if (tier >= 2) {
-    delete req.headers.cookie;
-    // The page, not the per-site jar, chooses cookies. Do not imply the jar's account will be used.
-    if (tier === 3 || !bareCall(site, op)) req.headers.cookie = "<browser-profile cookies>";
-  }
+  // Which cookies go is the jar's or the page's at send time, not the plan's: anonymous ones come with
+  // every response, and `signedIn` says whether a login is among them. At tier 2 or 3 the page, not the
+  // per-site jar, chooses them, so the jar's account is not implied either.
+  delete req.headers.cookie;
+  if (!bare || tier === 3) req.headers.cookie = tier === 1 ? "<per-site jar cookies>" : "<browser-profile cookies>";
   return {
     method: hide(req.method),
     url: hide(req.url),
@@ -318,7 +353,7 @@ export function planCall(
     // A caller's arg or a stored literal can echo a live value outside a credential slot.
     const live = captureLive({ cookies: session.cookies, storage: session.values });
     const hide = (text: string) => redact(text, live, { named: true });
-    const request = previewRequest(found.site, found.op, args, effective, tier, hide);
+    const request = previewRequest(found.site, found.op, args, { effective, stored: session }, tier, hide);
     const trigger = tier === 3 ? previewTrigger(found.op, args, hide) : undefined;
     return {
       ok: true,

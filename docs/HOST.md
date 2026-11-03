@@ -74,16 +74,25 @@ hostname. An omitted URL does not drop its site from discovery. These are discov
 exhaustive list of resources or redirects a page can load.
 
 `planCall` validates args and headers without sending, and answers bad args, an unreadable session
-or a tier above the cap as `call()` would, in the same order. Its credential placeholders are CLI
-`--dry`'s, with a further live-value redaction pass for copies in arguments or literals. It applies
-execution's session filters without saving them: unbound values in someone else's spec and all
-session credentials disallowed for an agent-pulled operation are absent in both preview and send.
-Generated UUID slots show `<generated:uuid>` and lookup-derived slots show `<derived:path>`.
+or a tier above the cap as `call()` would, in the same order. Credentials show as CLI `--dry`'s
+`<name>` placeholders, with a further live-value redaction pass for copies in arguments or
+literals. It applies execution's session filters without saving them: unbound values in someone
+else's spec and all session credentials disallowed for an agent-pulled operation are absent in both
+preview and send. Generated UUID slots show `<generated:uuid>` and lookup-derived slots show
+`<derived:path>`.
 Planning never sends a lookup and cannot know its eventual value.
 
-At tier 1, `request` previews the materialized request. At tier 2, it previews the page fetch, with
+Session state is shown by where it comes from, not by what the session holds now: any response can
+set, rotate or drop a cookie, and a browser run captures a session value the session lacks. Every
+`cookie:` ref shows `<name>` whether or not the jar holds that cookie yet, and so does every
+`session:` ref with no stored value; at send time a ref with no value is left out as before. A
+stored value the call's filters leave out stays out of the preview. The Cookie header is a
+placeholder. At tier 1, `request` previews the materialized request, with
+`cookie: "<per-site jar cookies>"` whenever the call may send the jar's cookies (whatever the jar
+holds now, none included). At tier 2, it previews the page fetch, with
 `cookie: "<browser-profile cookies>"` instead of the per-site jar when profile cookies may go.
 The browser chooses those cookies; the jar does not identify the account that will be used.
+Whether a login is among the cookies is `signedIn`'s answer.
 At tier 3, `request` is only the stored template for context. The site page sends the request;
 `trigger` shows the filled URL, optional `softFrom`, and UI steps that will run, with live values
 redacted. It also shows recorded `confirms` as `{count, steps}` and `companions` as request
@@ -96,14 +105,19 @@ Neither browser tier is an exact wire-request or account-identity preview.
 
 The fingerprint binds the tier and cap, the entire installed spec and source, args, the redacted
 request and the displayed trigger. This also catches changed write flags, triggers, readbacks and
-trust metadata.
+trust metadata. A call's own anonymous cookies and the session values its browser run captures
+change none of it, nor `signedIn`: the plan for the same args before and after such a call compares
+equal. Three things a call does can still change it: a new remembered tier; a browser tier left
+running until `closeHost()`, whose lock makes `signedIn` fail closed; and a captured value of six
+or more characters that also appears in the args or the request, which redaction then replaces.
 
 `callPlanned` re-plans synchronously before `call()`. A fresh plan that differs from the approved
 one in any field (the fingerprint, the shown request or trigger, `signedIn`) returns
-`class: "refused"` without sending, with `write: "not_sent"` for writes. Credential
-rotation under the same placeholders does not by itself invalidate approval. Keep the plan in
-trusted host memory; it is not a signed token for accepting arbitrary plans from an untrusted
-client. `args` are execution inputs and may contain caller-provided secrets; `request` and `trigger`
+`class: "refused"` without sending, with `write: "not_sent"` for writes. Credential rotation under
+the same placeholders, and anonymous cookies set or dropped, do not by themselves invalidate
+approval; a login does, through `signedIn`. Keep the plan in trusted host memory; it is not a
+signed token for accepting arbitrary plans from an untrusted client. `args` are execution inputs
+and may contain caller-provided secrets; `request` and `trigger`
 are redacted display text. Do not log the whole plan.
 If re-planning itself fails, its original input/error/blocked result is returned, including its
 reason and recovery step, rather than an approval-mismatch message.

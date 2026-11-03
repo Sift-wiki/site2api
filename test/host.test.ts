@@ -13,7 +13,7 @@ import { answerShare } from "../src/identity.js";
 import { registryName } from "../src/publish.js";
 import { settle } from "../src/report.js";
 import { scanSecrets } from "../src/secrets.js";
-import { loadSession, saveSession, sessionFile } from "../src/session.js";
+import { loadSession, mergeCapture, saveSession, sessionFile } from "../src/session.js";
 import { parseSite, type Site } from "../src/spec.js";
 import {
   cooling,
@@ -231,6 +231,99 @@ test("a login on another site of the same registrable domain counts where the sh
   assert.deepEqual(fixture.calls, []);
 });
 
+test("a signed-out read's own anonymous cookies leave the next plan unchanged; a login still refuses a write", async () => {
+  saveSite({
+    ...site,
+    operations: [
+      {
+        ...site.operations[0]!,
+        request: {
+          method: "GET",
+          url: `${fixture.url}/api/visitor-search?q=alice`,
+          headers: { "x-csrf-token": "" },
+        },
+        slots: [
+          { param: "q", at: ["query:q"] },
+          { ref: "cookie:csrftoken", at: ["header:x-csrf-token"] },
+        ],
+      },
+      site.operations[1]!,
+      site.operations[2]!,
+    ],
+  });
+  // The default cap: the shared profile is reachable, as for an embedding host's reads.
+  const plan = (op: string, args: Record<string, unknown>) => {
+    const p = planCall("fixture", op, args);
+    assert.ok(p.ok, JSON.stringify(p));
+    return p;
+  };
+  const approved = plan("search", { q: "sfo" });
+  assert.equal(approved.signedIn, false);
+  const first = await callPlanned(approved, { minIntervalMs: 0 });
+  assert.equal(first.ok, true, JSON.stringify(first));
+  const jar = loadSession("fixture").cookies;
+  assert.deepEqual(jar.map((c) => c.name).sort(), ["CONSENT", "NID", "_ga", "csrftoken"]);
+  assert.deepEqual(plan("search", { q: "sfo" }), approved, "the same plan, fingerprint and signedIn");
+  assert.equal(hostSite("fixture")?.site.signedIn, false);
+  const second = await callPlanned(approved, { minIntervalMs: 0 });
+  assert.equal(second.ok, true, JSON.stringify(second));
+  const sent = fixture.calls.at(-1)!.headers;
+  assert.equal(sent["x-csrf-token"], jar.find((c) => c.name === "csrftoken")?.value, "the cookie ref still goes");
+  assert.match(String(sent.cookie), /NID=511=/, "the jar's anonymous cookies still go");
+  assert.deepEqual(plan("search", { q: "sfo" }), approved, "rotated values change nothing either");
+
+  const write = plan("addTodo", { title: "after anonymous cookies" });
+  assert.equal(write.signedIn, false);
+  const anonymous = loadSession("fixture");
+  saveSession("fixture", {
+    ...anonymous,
+    cookies: [...anonymous.cookies, cookie("sessionid", "signed-in-meanwhile", { httpOnly: true })],
+  });
+  const refused = await callPlanned(write, { allowWrites: true, minIntervalMs: 0 });
+  assert.equal(refused.class, "refused", JSON.stringify(refused));
+  assert.equal(refused.write, "not_sent");
+  assert.equal(fixture.calls.filter((c) => c.method === "POST").length, 0);
+  saveSession("fixture", anonymous);
+  const applied = await callPlanned(write, { allowWrites: true, minIntervalMs: 0 });
+  assert.equal(applied.ok, true, JSON.stringify(applied));
+  assert.equal(applied.write, "applied");
+  assert.equal(fixture.calls.filter((c) => c.method === "POST").length, 1);
+});
+
+test("a session: ref shows its placeholder before a tier-3 run first captures its value", () => {
+  const op = site.operations[0]!;
+  saveSite({
+    ...site,
+    operations: [
+      {
+        ...op,
+        minTier: 3,
+        request: { ...op.request, headers: { "x-guest-token": "" } },
+        slots: [...op.slots, { ref: "session:x-guest-token", at: ["header:x-guest-token"] }],
+      },
+    ],
+  });
+  const before = planCall("fixture", "search");
+  assert.ok(before.ok, JSON.stringify(before));
+  assert.equal(before.tier, 3);
+  assert.equal(before.request.headers["x-guest-token"], "<x-guest-token>");
+  // What a read's tier-3 run stores: the page's anonymous cookies and the op's session value.
+  mergeCapture("fixture", [cookie("NID", "511=set-by-the-page")], {
+    from: op.request.url,
+    values: { "x-guest-token": "1700000000123456789" },
+  });
+  assert.deepEqual(planCall("fixture", "search"), before);
+  saveSession("fixture", {
+    cookies: [],
+    values: { "x-guest-token": "1700000000123456789" },
+    valueHosts: { "x-guest-token": "elsewhere.test" },
+  });
+  const elsewhere = planCall("fixture", "search");
+  assert.ok(elsewhere.ok);
+  assert.equal(elsewhere.request.headers["x-guest-token"], undefined, "a stored value the call cannot send");
+  assert.deepEqual(fixture.calls, []);
+});
+
 test("planning rejects unknown site/op, missing, unknown and bad args without sending", async () => {
   const plans = [
     planCall("missing", "search"),
@@ -292,7 +385,7 @@ test("planning redacts cookie/session values and encoded copies; fingerprints bi
   });
   const a = planned("search");
   assert.deepEqual(a.args, { q: "alice" });
-  assert.equal(a.request.headers.cookie, "auth=<auth>");
+  assert.equal(a.request.headers.cookie, "<per-site jar cookies>");
   assert.equal(a.request.headers.authorization, "<bearer>");
   assert.deepEqual(scanSecrets(a.request, loadSession("fixture")).secrets, []);
   assert.equal(planned("search").fingerprint, a.fingerprint);
