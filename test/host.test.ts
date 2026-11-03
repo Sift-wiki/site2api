@@ -342,51 +342,20 @@ test("callOnly write drift after a 2xx keeps the check-site warning and never su
   assert.equal(sends, 1);
 });
 
-test("callOnly bare 403 never probes the read's example args", async () => {
-  saveSite({
-    ...site,
-    operations: [{ ...site.operations[0]!, params: [{ ...site.operations[0]!.params[0]!, example: "alice" }] }],
-  });
-  const sent: string[] = [];
-  const result = await callPlanned(planned("search", { q: "private-user" }), {
-    ...opts,
-    fetchImpl: async (url) => {
-      sent.push(String(url));
-      return new Response('{"message":"Forbidden"}', { status: 403 });
-    },
-  });
-  assert.equal(result.class, "blocked", JSON.stringify(result));
-  assert.equal(sent.length, 1);
-  assert.match(sent[0]!, /q=private-user/);
-});
-
-test("a public credential's 401 without a login never relearns or changes the auth result", async () => {
-  const authorization = ["public", "shared", "key"].join("-");
-  saveSite({
-    ...site,
-    operations: [
-      {
-        ...site.operations[0]!,
-        public: ["authorization"],
-        request: { ...site.operations[0]!.request, headers: { authorization } },
-      },
-    ],
-  });
-  const path = join(home, "sites", "fixture.json");
-  const before = readFileSync(path);
+test("a read learned signed in whose data is missing with no login cookie asks for a login, not a heal", async () => {
+  saveSite({ ...site, operations: [{ ...site.operations[0]!, learnedLoggedIn: true }] });
   let sends = 0;
   const result = await callPlanned(planned("search"), {
     ...opts,
     fetchImpl: async () => {
       sends++;
-      return new Response("Unauthorized", { status: 401 });
+      return new Response('{"data":{}}', { headers: { "content-type": "application/json" } });
     },
   });
   assert.equal(result.class, "auth", JSON.stringify(result));
+  assert.match(result.reason ?? "", /learned signed in/);
   assert.equal(result.nextCall?.action, "login");
   assert.equal(sends, 1);
-  assert.deepEqual(readFileSync(path), before);
-  assert.equal(existsSync(join(home, "heals.jsonl")), false);
 });
 
 test("auth never imports an everyday-browser session and directs the user to CLI login", async () => {

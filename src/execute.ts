@@ -781,14 +781,6 @@ async function onDrift(ctx: Ctx, site: Site, op: Operation, a: Attempt): Promise
     ...extra,
   });
 
-  if (ctx.opts.callOnly)
-    return fail(
-      a,
-      op.readOnly
-        ? { next: `ask the user to run: api-anything heal ${ctx.site} ${op.name}`, nextCall: { action: "heal" } }
-        : {},
-    );
-
   // An op learned signed in, called with no login cookie: the site hides the data from guests; it did not move.
   if (a.missing && op.learnedLoggedIn && !loggedIn(loadSession(ctx.site).cookies, site.loginCookies)) {
     return fail(
@@ -796,6 +788,15 @@ async function onDrift(ctx: Ctx, site: Site, op: Operation, a: Attempt): Promise
       { reason: `${a.reason}; the op was learned signed in and the session has no login cookie` },
     );
   }
+
+  // Everything below sends again or heals, and a call-only call does neither.
+  if (ctx.opts.callOnly)
+    return fail(
+      a,
+      op.readOnly
+        ? { next: `ask the user to run: api-anything heal ${ctx.site} ${op.name}`, nextCall: { action: "heal" } }
+        : {},
+    );
 
   // A server that sometimes answers without the data (Google's fallback page, issue #21) answers a second
   // try: before the args are blamed or a browser heals, the same request goes once more.
