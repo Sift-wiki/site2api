@@ -28,13 +28,24 @@ export function packProblems(files: string[]): string[] {
   const skill = readdirSync(join(ROOT, "skills", "api-anything"), { recursive: true, withFileTypes: true })
     .filter((e) => e.isFile())
     .map((e) => join(e.parentPath, e.name).slice(ROOT.length).split("\\").join("/"));
-  const need = ["package.json", "dist/cli.js", "dist/index.js", "dist/index.d.ts", SKILL, ...skill];
+  const need = [
+    "package.json",
+    "dist/cli.js",
+    "dist/index.js",
+    "dist/index.d.ts",
+    "dist/host.js",
+    "dist/host.d.ts",
+    "src/host.ts",
+    "src/execute.ts",
+    SKILL,
+    ...skill,
+  ];
   return [
     ...need.filter((f) => !has.has(f)).map((f) => `missing ${f}`),
     ...bundledSites()
       .filter((s) => !has.has(`sites/${s}.json`))
       .map((s) => `missing sites/${s}.json`),
-    ...files.filter((f) => /^(test|src|bench)\//.test(f)).map((f) => `ships ${f}`),
+    ...files.filter((f) => /^(test|bench)\//.test(f)).map((f) => `ships ${f}`),
   ];
 }
 

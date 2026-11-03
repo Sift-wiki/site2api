@@ -7,7 +7,7 @@ import { packProblems } from "./smoke-pack.js";
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
 
-test("the package ships dist, every bundled spec and the skill, and no source or tests", {
+test("the package ships dist, Bun source, every bundled spec and the skill, and no tests", {
   // npm ci builds dist (prepare); npm run smoke:pack builds, installs and runs the tarball in CI
   skip: !existsSync(new URL("../dist/cli.js", import.meta.url)) && "dist is not built",
 }, () => {

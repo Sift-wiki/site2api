@@ -14,10 +14,16 @@
     ".": {
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
+    },
+    "./host": {
+      "types": "./dist/host.d.ts",
+      "bun": "./src/host.ts",
+      "default": "./dist/host.js"
     }
   },
   "files": [
     "dist",
+    "src",
     "sites",
     "skills",
     "README.md",

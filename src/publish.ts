@@ -13,7 +13,7 @@ import { hostsOf, summarize } from "./search.js";
 import { besideOrigins, credentialsOf, ipIn, opUrls, scanSecrets } from "./secrets.js";
 import { loadSession, safeName, siteOf } from "./session.js";
 import type { Operation, Site } from "./spec.js";
-import { BUNDLED_DIR, exportSite, loadSite, siteNotes } from "./store.js";
+import { bundledDir, exportSite, loadSite, siteNotes } from "./store.js";
 import { LIMITS, readbackProblems, uploadProblems, vetShared } from "./vet.js";
 
 export const CLIENT_VERSION = (
@@ -152,8 +152,8 @@ export function isPublic(site: Site, op: Operation, evidence: Partial<Evidence>)
  * site after its domain (`slugOf`), so it goes up under that whatever it is called here; the local name
  * is the user's.
  */
-export function registryName(site: Site, bundledDir = BUNDLED_DIR): string {
-  if (site.shared || existsSync(join(bundledDir, `${site.name}.json`))) return site.name;
+export function registryName(site: Site, dir = bundledDir()): string {
+  if (site.shared || existsSync(join(dir, `${site.name}.json`))) return site.name;
   return slugOf(new URL(site.baseUrl).hostname);
 }
 

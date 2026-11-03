@@ -46,10 +46,7 @@ import {
   withDefaults,
 } from "./http.js";
 import { loadSettings } from "./identity.js";
-import { reimportIfBrowser } from "./login.js";
 import { derive, LookupFailed, sendDerived } from "./lookup.js";
-import { adopt, servedNow } from "./registry.js";
-import { afterCall, queueReport } from "./report.js";
 import { type ResultCursor, type ResultView, resultView, viewProblem } from "./results.js";
 import { redact } from "./secrets.js";
 import {
@@ -89,6 +86,13 @@ import { proofOp } from "./vet.js";
 export type Tier = 1 | 2 | 3;
 
 export interface CallOptions {
+  /**
+   * Call installed operations only: no learning/healing, registry traffic, reports, background work,
+   * or everyday-browser cookie import. Specs stay unchanged; auth and drift point to CLI commands.
+   * Keeps the transport ladder, own-profile sessions, ledger/readback and local call state.
+   * Pacing cannot be lowered below one second, including jitter.
+   */
+  callOnly?: boolean;
   /** Shape the classified, extracted answer, never the site's arguments or stored recipe. */
   view?: ResultView;
   /** required for any readOnly:false op, at every entry point */
@@ -696,9 +700,12 @@ async function refreshCookies(ctx: Ctx, op: Operation, tier: Tier): Promise<bool
 }
 
 /** The version that answered in place of a drifted one worked: its report, beside the old one's failure. */
-function queueOk(hash: string, a: Attempt): void {
+async function queueOk(hash: string, a: Attempt): Promise<void> {
   try {
-    if (loadSettings().share) queueReport({ hash, outcome: "ok", tier: a.tier });
+    if (loadSettings().share) {
+      const { queueReport } = await import("./report.js");
+      queueReport({ hash, outcome: "ok", tier: a.tier });
+    }
   } catch {
     // a lost report, never a lost answer
   }
@@ -715,6 +722,12 @@ async function onDrift(ctx: Ctx, site: Site, op: Operation, a: Attempt): Promise
     ...(b.server ? { server: true as const } : {}),
     ...extra,
   });
+
+  if (ctx.opts.callOnly)
+    return fail(a, {
+      next: `ask the user to run: api-anything heal ${ctx.site} ${op.name}`,
+      nextCall: { action: "heal" },
+    });
 
   // An op learned signed in, called with no login cookie: the site hides the data from guests; it did not move.
   if (a.missing && op.learnedLoggedIn && !loggedIn(loadSession(ctx.site).cookies, site.loginCookies)) {
@@ -775,6 +788,7 @@ async function onDrift(ctx: Ctx, site: Site, op: Operation, a: Attempt): Promise
   // Another install may have repaired this version already, or it degraded and the registry serves the next
   // best: that version is one request, a heal is a browser run.
   if (op.readOnly && op.version) {
+    const { adopt, servedNow } = await import("./registry.js");
     const next = await servedNow(ctx.site, op).catch(() => undefined);
     // at the tier the replacement asks for, if the caller allows it: attempt() itself climbs no tier
     const tier = Math.max(a.tier, next?.minTier ?? 1) as Tier;
@@ -783,7 +797,7 @@ async function onDrift(ctx: Ctx, site: Site, op: Operation, a: Attempt): Promise
       if (b.class === "ok") {
         adopt(ctx.site, op, next);
         ctx.opts.onAnswered?.(next);
-        queueOk(next.version.hash, b);
+        await queueOk(next.version.hash, b);
         return success(b, {
           healed: true,
           heal: { strategy: "registry", changes: templateChanges(op, next) },
@@ -875,7 +889,8 @@ async function onDrift(ctx: Ctx, site: Site, op: Operation, a: Attempt): Promise
   return fail(b, { reason: `${b.reason}; heal failed: ${h.reason}`, ...dropped(b) });
 }
 
-function resolve(
+/** @internal Shared local-only resolution and error classes for call() and the host planner. */
+export function resolveCall(
   siteName: string,
   opName: string,
 ): { site: Site; op: Operation; theirs: boolean; source: Resolved["source"] } | Result {
@@ -1071,7 +1086,7 @@ export async function call(
       retry: "after_fix",
       ms: Date.now() - t0,
     };
-  const found = resolve(siteName, opName);
+  const found = resolveCall(siteName, opName);
   if ("ok" in found) return { ...finish(found, undefined, undefined, []), ms: Date.now() - t0 };
   opts.onAnswered?.(found.op);
   return run(found.site, found.op, args, opts, { theirs: found.theirs, source: found.source }, t0);
@@ -1090,6 +1105,12 @@ async function run(
   how: { theirs: boolean; source?: Resolved["source"]; proof?: boolean },
   t0 = Date.now(),
 ): Promise<CallResult> {
+  // reserveSend jitters by as little as 0.7; even that slot must be at least one second.
+  if (opts.callOnly)
+    opts = {
+      ...opts,
+      minIntervalMs: Math.max(1000 / 0.7, Number.isFinite(opts.minIntervalMs) ? (opts.minIntervalMs ?? 0) : 0),
+    };
   const log: Attempt[] = [];
   const siteName = site.name;
   const { theirs, proof } = how;
@@ -1101,6 +1122,10 @@ async function run(
   let held: CoolDown | undefined;
   const done = async (r: Result): Promise<CallResult> => {
     let f = finish(r, op, siteName, log);
+    if (opts.callOnly && f.class === "drift") {
+      f.next = `ask the user to run: api-anything heal ${siteName} ${op.name}`;
+      if (f.nextCall?.action === "relearn") f.nextCall = { action: "heal", site: siteName, op: op.name };
+    }
     // A forced call the site answered ends the cool-down: before its readback, which may start another.
     if (f.ok && opts.ignoreCoolDown && log.length) clearCoolDown(siteName);
     // log: something was sent this call (a ledger hold-back sends nothing, and reads nothing back)
@@ -1126,11 +1151,13 @@ async function run(
         ...(out.healed ? { healed: true as const } : {}),
         ...(out.write ? { write: out.write } : {}),
       });
-    if (how.source && !proof && !held)
+    if (how.source && !proof && !held && !opts.callOnly) {
+      const { afterCall } = await import("./report.js");
       afterCall(siteName, op, how.source, out, {
         fetchImpl: opts.fetchImpl,
         minIntervalMs: opts.minIntervalMs,
       });
+    }
     if (out.ok && !proof && out.data !== undefined) {
       const viewed = resultView(out.data, opts.view);
       if (viewed.truncated && out.nextPage !== undefined)
@@ -1185,6 +1212,8 @@ async function run(
   let signIn: { text: string; step: NextCall } | undefined;
   const reimport = async () => {
     authStep = 1;
+    if (opts.callOnly) return false;
+    const { reimportIfBrowser } = await import("./login.js");
     const r = await reimportIfBrowser(siteName, op.request.url, site.loginCookies);
     signIn =
       r.signIn && r.profile ? { text: r.signIn, step: { action: "sign_in_browser", profile: r.profile } } : undefined;
@@ -1325,7 +1354,7 @@ async function run(
     }
     // A bare 403 is a wall or a refusal of this one entity (a private profile): if the example args
     // answer through the same tier, the args are the problem, and a browser run would not help.
-    if (a.class === "blocked" && a.missing && !write && !examplesChecked) {
+    if (a.class === "blocked" && a.missing && !write && !examplesChecked && !opts.callOnly) {
       examplesChecked = true;
       const examples = exampleArgs(op);
       if (
@@ -1384,6 +1413,7 @@ async function run(
       // run the trigger as learning does, the write intercepted and never sent, to refresh it; retry once.
       if (
         !op.readOnly &&
+        !opts.callOnly &&
         ctx.maxTier >= 3 &&
         browserAvailable() &&
         op.slots.some((s) => s.ref?.startsWith("session:"))
@@ -1413,7 +1443,7 @@ async function run(
     }
     // A credential marked public (a web app's shared bearer) answers auth when the site rotated it,
     // which no login fixes: re-learn it from the page, as for drift.
-    if (a.class === "auth" && op.readOnly && op.public?.length && noLogin() && !proof)
+    if (a.class === "auth" && op.readOnly && op.public?.length && noLogin() && !proof && !opts.callOnly)
       return done(await onDrift(ctx, site, op, { ...a, class: "drift" }));
     return fail();
   }
@@ -1442,7 +1472,15 @@ export async function heal(
       ms: Date.now() - t0,
     };
   };
-  const found = resolve(siteName, opName);
+  if (opts.callOnly)
+    return done({
+      ok: false,
+      class: "refused",
+      reason: "callOnly does not heal operations",
+      next: `ask the user to run: api-anything heal ${siteName} ${opName}`,
+      nextCall: { action: "heal" },
+    });
+  const found = resolveCall(siteName, opName);
   if ("ok" in found) return done(found);
   const { site, op, theirs } = found;
   resolved = op;
