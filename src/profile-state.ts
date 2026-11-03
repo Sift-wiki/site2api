@@ -15,16 +15,27 @@ function present(path: string, nonempty = false): boolean {
   }
 }
 
+// Chrome picks between these by its own migration state, so a stale database can sit beside the live one: read every one.
+const COOKIE_DBS = [
+  ["Default", "Network", "Cookies"],
+  ["Default", "Cookies"],
+];
+
 /** Any cookie on one of the hosts' sites counts, even a guest or expired one; so does a profile it cannot read. */
 export function profileSignedIn(hosts: string[]): boolean {
   const dir = profileDir();
   if (!present(dir)) return false;
-  const file = join(dir, "Default", "Network", "Cookies");
-  // A running Chrome may not have flushed new cookies yet, and a pending journal or WAL holds ones the file lacks.
-  if (present(join(dir, "SingletonLock")) || present(`${file}-wal`, true) || present(`${file}-journal`, true))
-    return true;
-  if (!present(file)) return true;
+  // A running Chrome may not have flushed new cookies yet.
+  if (present(join(dir, "SingletonLock"))) return true;
   const domains = new Set(hosts.map(siteOf));
+  const files = COOKIE_DBS.map((parts) => join(dir, ...parts)).filter((file) => present(file));
+  if (!files.length) return true;
+  return files.some((file) => holdsCookie(file, domains));
+}
+
+function holdsCookie(file: string, domains: Set<string>): boolean {
+  // A pending journal or WAL holds cookies the file lacks.
+  if (present(`${file}-wal`, true) || present(`${file}-journal`, true)) return true;
   try {
     // SQLite creates -shm and -wal beside a WAL-mode database even read-only: its header says so, unopened.
     const header = Buffer.alloc(20);

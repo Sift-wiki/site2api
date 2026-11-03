@@ -783,6 +783,19 @@ test("signedIn checks own-profile cookie names across registrable domains withou
   assert.deepEqual(fixture.calls, []);
 });
 
+test("signedIn reads both cookie database locations, since a stale one can sit beside the live one", () => {
+  profileDb().close();
+  const legacy = profileDb("Default/Cookies");
+  legacy.prepare("INSERT INTO cookies VALUES(?, ?)").run(".127.0.0.1", "sid");
+  legacy.close();
+  assert.equal(hostSite("fixture")?.site.signedIn, true, "a cookie in the legacy database counts");
+  rmSync(join(home, "profile", "Default", "Network"), { recursive: true });
+  const empty = new DatabaseSync(join(home, "profile", "Default/Cookies"));
+  empty.exec("DELETE FROM cookies");
+  empty.close();
+  assert.equal(hostSite("fixture")?.site.signedIn, false, "an empty legacy-only database is read, not assumed");
+});
+
 test("planning a WAL-mode profile never creates shared-memory or WAL files in the profile", () => {
   const db = profileDb();
   db.exec("PRAGMA journal_mode=WAL");
