@@ -101,7 +101,14 @@ export function viewProblem(view: ResultView | undefined): string | undefined {
 // A view must not drop items whose selected fields are absent: offsets name the original items.
 const project = (value: unknown, fields?: string[]): unknown => (fields ? pick(value, fields, true) : value);
 
-function slice(value: unknown, opts: GetResultOptions): ResultSlice & { next?: number; format?: "json" } {
+// A call-only host offers no get_result or maxChars, so its note names only what a caller can change.
+const HOST_HINT = "pass fields to keep fewer fields per item, or narrow the arguments";
+
+function slice(
+  value: unknown,
+  opts: GetResultOptions,
+  hint = "use fields/maxChars to shape output",
+): ResultSlice & { next?: number; format?: "json" } {
   const max = opts.maxChars ?? 20_000;
   const offset = opts.offset ?? 0;
   if (opts.format === "json") {
@@ -115,7 +122,7 @@ function slice(value: unknown, opts: GetResultOptions): ResultSlice & { next?: n
     };
   }
   const rest = Array.isArray(value) ? value.slice(offset) : value;
-  const capped = capOutput(rest, max, "use fields/maxChars to shape output");
+  const capped = capOutput(rest, max, hint);
   if (!capped.truncated) return capped;
   if (Array.isArray(rest) && Array.isArray(capped.data)) {
     const n = capped.data.length;
@@ -146,8 +153,13 @@ function cursor(id: string, r: ReturnType<typeof slice>, view: ResultView): Resu
 }
 
 /** Call only after classification, extraction, and any write readback have finished. */
-export function resultView(value: unknown, view: ResultView = {}, now = Date.now()): ResultSlice {
-  const r = slice(project(value, view.fields), view);
+export function resultView(value: unknown, view: ResultView = {}, now = Date.now(), callOnly = false): ResultSlice {
+  const r = slice(project(value, view.fields), view, callOnly ? HOST_HINT : undefined);
+  // Nothing continues a call-only answer, so none is kept for it.
+  if (callOnly) {
+    const { next: _next, format: _format, ...out } = r;
+    return out;
+  }
   if (!r.truncated && !existsSync(file())) return { data: r.data };
   try {
     return withLock(file(), () => {

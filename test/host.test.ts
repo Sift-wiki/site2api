@@ -724,6 +724,16 @@ test("callOnly keeps truncation and rate cool-downs and refuses sending during a
   const list = await callPlanned(planned("search"), opts);
   assert.equal(list.ok, true, JSON.stringify(list));
   assert.ok(list.truncated);
+  // A host has no get_result or maxChars: the note names only fields and the arguments, and nothing is kept.
+  assert.match(list.truncated, /pass fields to keep fewer fields per item, or narrow the arguments$/);
+  assert.doesNotMatch(list.truncated, /get_result|maxChars/);
+  assert.equal(list.resultId, undefined);
+  assert.equal(list.more, undefined);
+  assert.equal(existsSync(join(home, "results.json")), false);
+  const picked = await callPlanned(planned("search"), { ...opts, view: { fields: ["id"] } });
+  assert.equal(picked.ok, true, JSON.stringify(picked));
+  assert.ok(Array.isArray(picked.data) && picked.data.length > (list.data as unknown[]).length);
+  assert.deepEqual(Object.keys((picked.data as Record<string, unknown>[])[0]!), ["id"]);
   // Use a separate site so the fixture's previous limited calls cannot affect this test.
   saveSite({
     ...site,

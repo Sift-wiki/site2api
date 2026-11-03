@@ -1233,7 +1233,7 @@ async function run(
       });
     }
     if (out.ok && !proof && out.data !== undefined) {
-      const viewed = resultView(out.data, opts.view);
+      const viewed = resultView(out.data, opts.view, undefined, opts.callOnly);
       if (viewed.truncated && out.nextPage !== undefined)
         viewed.truncated += "; nextPage starts after the last item of this page, cut or not; more stays on this page";
       return { ...out, ...viewed };

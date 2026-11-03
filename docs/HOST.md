@@ -163,7 +163,9 @@ are redacted display text. Do not log the whole plan.
 If re-planning itself fails, its original input/error/blocked result is returned, including its
 reason and recovery step, rather than an approval-mismatch message.
 
-The only call options are `allowWrites`, `maxTier`, `timeoutMs`, `fetchImpl` and `minIntervalMs`.
+The only call options are `allowWrites`, `maxTier`, `timeoutMs`, `fetchImpl`, `minIntervalMs` and
+`view`. `view` (`fields`, `maxChars`) shapes only the answer after extraction, never the request, so
+it is not part of the plan or its approval.
 An omitted `maxTier` reuses the plan's cap; changing it requires re-planning and approval.
 The host must grant `allowWrites` separately for an approved write. There is no force, again,
 idempotency override, or operation-learning option. Pacing is at least one second per site,
@@ -180,7 +182,10 @@ Host calls always set `CallOptions.callOnly`. Direct library callers can also se
   read was learned signed in and no login cookie is stored: that is `auth`, as for `call()`.
   A write's drift asks for `api-anything add <site> <op> ... --write`, never `heal`.
 - Site spec files remain byte-identical. Calls still update local sessions, pacing, cool-downs,
-  remembered tiers, the write ledger, call log and capped-result storage.
+  remembered tiers, the write ledger and call log.
+- An answer over the cap is cut as for `call()`, but none is kept: there is no `resultId`, `more` or
+  `get_result` to continue it. The `truncated` note names only what the host can change: `view.fields`
+  or the arguments.
 - The HTTP, page-fetch and own-profile trigger-run tiers remain available. Those transports may
   make the operation's derived lookups and readback requests. Browser tiers load the site's pages
   and resources as before. No example-argument probes are sent in call-only mode.
