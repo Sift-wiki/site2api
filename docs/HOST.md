@@ -30,14 +30,19 @@ SHA-256 `fingerprint`. At tier 3 it also includes `trigger`.
 the operation's `minTier` or a remembered escalation within the cap. A remembered tier above the
 cap is ignored, never used to lower `minTier`. An operation requiring a tier above the cap returns
 a `blocked` result, not a callable plan. The existing unconfirmed-operation cap also applies.
+Blocked plans use the same recovery step as `call()`: ordinary caps ask to raise the tier;
+an agent-pulled candidate needing tier 3 asks for a human's review and CLI pull, not a higher cap.
 
 `signedIn` is a caution, not proof of a valid login. Any stored cookie or session value counts,
 even an expired, empty or guest value. If the call can use browser tiers, planning also checks
 api-anything's own Chrome profile for cookie names on the site's registrable domains, including
 request, lookup, trigger and inline readback domains. It reads only `host_key` and `name` from
 the profile's Cookies SQLite database, read-only, without decryption or Keychain access.
-A running, locked, unreadable or incomplete existing profile counts as signed in, as does an
-uncheckpointed cookie journal. A nonexistent profile does not. No everyday-browser profile is
+A running, locked, unreadable or incomplete existing profile counts as signed in, as does a
+non-empty cookie journal or WAL. Empty sidecars do not count. A WAL-mode database also counts
+conservatively, detected from its file header without opening SQLite, so planning never creates
+`-shm` or `-wal` files in the profile. Other databases are opened read-only, with SQLite's
+experimental warning suppressed. A nonexistent profile does not. No everyday-browser profile is
 opened. `hostSites()` and `hostSite()` use the default cap of 3; a plan with `maxTier: 1` does
 not inspect the profile. A write planned at tier 1 cannot climb, but its readback can still use the
 approved cap. When a URL's origin cannot be resolved offline, any cookie in the own profile counts
@@ -63,7 +68,12 @@ At tier 1, `request` previews the materialized request. At tier 2, it previews t
 The browser chooses those cookies; the jar does not identify the account that will be used.
 At tier 3, `request` is only the stored template for context. The site page sends the request;
 `trigger` shows the filled URL, optional `softFrom`, and UI steps that will run, with live values
-redacted. The host must show that trigger as well as the tier before obtaining write approval.
+redacted. It also shows recorded `confirms` as `{count, steps}` and `companions` as request
+matches, including method, host, path and optional operation name, with live values redacted.
+Confirm steps are zero-based; `-1` means before the first step. Each recorded confirm may be
+accepted once; its digest binds the question without exposing its text.
+The host must show that trigger, including confirms and companions, as well as the tier before
+obtaining write approval.
 Neither browser tier is an exact wire-request or account-identity preview.
 
 The fingerprint binds the tier and cap, the entire installed spec and source, args, the template
@@ -102,6 +112,10 @@ Host calls always set `CallOptions.callOnly`. Direct library callers can also se
 - A write stays at its planned starting tier. Any failure returns without a transport escalation,
   cookie-refresh resend, intercept recapture or other retry, even after a definite non-execution.
   A read can still climb within the approved cap and refresh cookies/session values.
+- A tier-3 write must have a `companions` list, even if empty, and a non-empty `match`.
+  Planning and direct call-only execution refuse older or incomplete specs with
+  `class: "refused"` and `write: "not_sent"`, before any browser run or write-ledger entry.
+  The recovery step asks the user to re-learn with `api-anything add <site> <op> ... --write`.
 - Write permission, send-once rules, duplicate refusal, readback, private-address checks and result
   truncation are unchanged. A write that may have run still directs the caller to check the site
   before any retry, rather than treating a heal or login as permission to repeat it.

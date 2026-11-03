@@ -21,10 +21,10 @@ try {
     entry,
     `
 import assert from "node:assert/strict";
-import { mkdirSync } from "node:fs";
+import { mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { hostSites, hostSite, closeHost, setBundledDir } from "api-anything/host";
+import { hostSites, hostSite, planCall, closeHost, setBundledDir } from "api-anything/host";
 if (!process.env.COMPILED) {
   assert.match(import.meta.resolve("api-anything/host"), /src\\/host\\.ts$/);
 } else {
@@ -37,14 +37,35 @@ assert.ok(sites.every(s => s.source === "bundled"));
 assert.ok(hostSite("hacker-news").operations.length > 0);
 const profile = join(process.env.API_ANYTHING_HOME, "profile", "Default", "Network");
 mkdirSync(profile, { recursive: true });
-const db = new DatabaseSync(join(profile, "Cookies"));
+const cookieFile = join(profile, "Cookies");
+const db = new DatabaseSync(cookieFile);
 db.exec("CREATE TABLE cookies(host_key TEXT, name TEXT)");
-assert.equal(hostSite("hacker-news").site.signedIn, false);
-db.prepare("INSERT INTO cookies VALUES(?, ?)").run(".news.ycombinator.com", "synthetic-cookie");
 db.close();
+writeFileSync(cookieFile + "-journal", "");
+const before = readdirSync(profile).sort();
+assert.equal(hostSite("hacker-news").site.signedIn, false);
+const emptyPlan = planCall("hacker-news", "frontPage");
+assert.ok(emptyPlan.ok, JSON.stringify(emptyPlan));
+assert.equal(emptyPlan.signedIn, false);
+assert.deepEqual(readdirSync(profile).sort(), before);
+const edit = new DatabaseSync(cookieFile);
+edit.prepare("INSERT INTO cookies VALUES(?, ?)").run(".news.ycombinator.com", "synthetic-cookie");
+edit.close();
 assert.equal(hostSite("hacker-news").site.signedIn, true);
+const wal = new DatabaseSync(cookieFile);
+wal.exec("DELETE FROM cookies; PRAGMA journal_mode=WAL");
+wal.close();
+const walFiles = readdirSync(profile).sort();
+const walBytes = readFileSync(cookieFile);
+assert.equal(walBytes[18], 2);
+const plan = planCall("hacker-news", "frontPage");
+assert.ok(plan.ok, JSON.stringify(plan));
+assert.equal(plan.signedIn, true);
+assert.equal(hostSite("hacker-news").site.signedIn, true);
+assert.deepEqual(readdirSync(profile).sort(), walFiles);
+assert.deepEqual(readFileSync(cookieFile), walBytes);
 await closeHost();
-console.log(JSON.stringify({ runtime: Bun.version, compiled: !!process.env.COMPILED, sites: sites.length, profileChecks: 2 }));
+console.log(JSON.stringify({ runtime: Bun.version, compiled: !!process.env.COMPILED, sites: sites.length, profileChecks: 5 }));
 `,
   );
   const env = { ...process.env, API_ANYTHING_HOME: join(scratch, "home") };

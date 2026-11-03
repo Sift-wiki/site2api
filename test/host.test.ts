@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -664,6 +665,41 @@ test("plans bind their tier and cap, including remembered tiers and caps below m
   assert.deepEqual(fixture.calls, []);
 });
 
+test("tier-cap planning returns the same recovery step as call for ordinary and unconfirmed operations", async () => {
+  for (const agent of [false, true]) {
+    saveSite(
+      parseSite({
+        ...site,
+        name: "external",
+        baseUrl: "https://example.com",
+        ...(agent
+          ? { shared: { from: `${registry.url}/v1/sites/external`, sha256: "0".repeat(64), by: "agent" } }
+          : {}),
+        operations: [
+          {
+            ...site.operations[0]!,
+            minTier: 3,
+            request: { method: "GET", url: "https://example.com/api/search?q=alice", headers: {} },
+            match: { method: "GET", host: "example.com", path: "/api/search" },
+            trigger: { url: "https://example.com/search?q={q}" },
+            ...(agent ? { version: { hash: "b".repeat(64), status: "candidate" } } : {}),
+          },
+        ],
+      }),
+    );
+    for (const maxTier of agent ? ([2, 3] as const) : ([2] as const)) {
+      const plan = planCall("external", "search", {}, { maxTier });
+      assert.equal(plan.ok, false);
+      if (plan.ok) throw new Error("expected a tier-cap refusal");
+      const result = await call("external", "search", {}, { maxTier, callOnly: true });
+      assert.deepEqual(plan.result, { ...result, ms: 0 });
+      assert.equal(plan.result.nextCall?.action, agent && maxTier === 3 ? "report" : "raise_tier");
+      if (!agent) assert.doesNotMatch(plan.result.next ?? "", /unconfirmed/);
+    }
+  }
+  assert.deepEqual(fixture.calls, []);
+});
+
 test("tier-3 plans fill and redact the URL, soft navigation and steps", () => {
   const token = ["Secret", "Token", "Abcd", "ef123456789"].join("");
   saveSession("fixture", { cookies: [], values: { token } });
@@ -695,6 +731,40 @@ test("tier-3 plans fill and redact the URL, soft navigation and steps", () => {
   assert.match(plan.trigger.url, /session:token/);
 });
 
+test("tier-3 write plans show confirm counts and steps plus redacted companion matches", async () => {
+  const token = ["Synthetic", "Companion", "Value123456789"].join("");
+  saveSession("fixture", { cookies: [], values: { token } });
+  const trigger = {
+    url: `${fixture.url}/todos/{title}`,
+    steps: [{ action: "click" as const, selector: "#send" }],
+    confirms: [
+      { step: -1, digest: "a".repeat(64) },
+      { step: 0, digest: "b".repeat(64) },
+      { step: 0, digest: "c".repeat(64) },
+    ],
+    companions: [{ method: "POST", host: `api.${token}.test`, path: `/cart/${token}`, operationName: token }],
+  };
+  saveSite({
+    ...site,
+    operations: [{ ...site.operations[2]!, minTier: 3, match: { method: "POST", path: "/api/todos" }, trigger }],
+  });
+  const plan = planCall("fixture", "addTodo", { title: "approved todo" });
+  assert.ok(plan.ok, JSON.stringify(plan));
+  assert.deepEqual(plan.trigger?.confirms, { count: 3, steps: [-1, 0, 0] });
+  assert.equal(plan.trigger?.companions?.[0]?.method, "POST");
+  for (const field of ["host", "path", "operationName"] as const)
+    assert.match(plan.trigger?.companions?.[0]?.[field] ?? "", /session:token/);
+  assert.doesNotMatch(JSON.stringify(plan.trigger), new RegExp(token));
+  assert.deepEqual(scanSecrets(plan.trigger, loadSession("fixture")).secrets, []);
+  const changed = structuredClone(plan);
+  assert.ok(changed.trigger);
+  changed.trigger.companions = [];
+  const result = await callPlanned(changed, { allowWrites: true });
+  assert.equal(result.class, "refused");
+  assert.equal(result.write, "not_sent");
+  assert.deepEqual(fixture.calls, []);
+});
+
 function profileDb(relative = "Default/Network/Cookies") {
   const path = join(home, "profile", relative);
   mkdirSync(join(path, ".."), { recursive: true });
@@ -708,8 +778,11 @@ test("signedIn checks own-profile cookie names across registrable domains withou
   db.prepare("INSERT INTO cookies VALUES(?, ?)").run(".other.test", "sid");
   db.close();
   const path = join(home, "profile", "Default/Network/Cookies");
+  writeFileSync(`${path}-journal`, "");
+  const files = readdirSync(join(home, "profile"), { recursive: true }).sort();
   const before = readFileSync(path);
   assert.equal(hostSite("fixture")?.site.signedIn, false);
+  assert.deepEqual(readdirSync(join(home, "profile"), { recursive: true }).sort(), files);
   const edit = new DatabaseSync(path);
   edit.prepare("INSERT INTO cookies VALUES(?, ?)").run("127.0.0.1", "guest");
   edit.prepare("INSERT INTO cookies VALUES(?, ?)").run(".api.example.co.uk", "expired");
@@ -727,6 +800,7 @@ test("signedIn checks own-profile cookie names across registrable domains withou
     ],
   });
   const stored = readFileSync(path);
+  const storedFiles = readdirSync(join(home, "profile"), { recursive: true }).sort();
   assert.notDeepEqual(stored, before);
   assert.equal(hostSite("fixture")?.site.signedIn, true, "a missing per-site session cannot hide profile cookies");
   assert.equal(hostSite("sibling")?.site.signedIn, true);
@@ -735,7 +809,49 @@ test("signedIn checks own-profile cookie names across registrable domains withou
   assert.equal(browser.signedIn, true, "a read may climb from tier 1");
   assert.equal(planned("search").signedIn, false, "maxTier 1 never consults the profile");
   assert.deepEqual(readFileSync(path), stored);
+  assert.deepEqual(readdirSync(join(home, "profile"), { recursive: true }).sort(), storedFiles);
   assert.deepEqual(fixture.calls, []);
+});
+
+test("planning a WAL-mode profile never creates shared-memory or WAL files in the profile", () => {
+  const db = profileDb();
+  db.exec("PRAGMA journal_mode=WAL");
+  db.close();
+  const profile = join(home, "profile");
+  const path = join(profile, "Default/Network/Cookies");
+  const before = readFileSync(path);
+  const files = readdirSync(profile, { recursive: true }).sort();
+  assert.equal(before[18], 2, "the fixture retains SQLite's WAL header after closing");
+  const plan = planCall("fixture", "search");
+  assert.ok(plan.ok, JSON.stringify(plan));
+  assert.equal(plan.signedIn, true, "WAL mode is conservatively signed in without opening SQLite");
+  assert.equal(hostSite("fixture")?.site.signedIn, true);
+  assert.deepEqual(readFileSync(path), before);
+  assert.deepEqual(readdirSync(profile, { recursive: true }).sort(), files);
+  assert.deepEqual(fixture.calls, []);
+});
+
+test("loading SQLite for host planning suppresses only its experimental warning", () => {
+  profileDb().close();
+  const result = spawnSync(
+    process.execPath,
+    [
+      "--import",
+      "tsx",
+      "--input-type=module",
+      "--eval",
+      `import assert from "node:assert/strict";
+       import { planCall } from ${JSON.stringify(new URL("../src/host.ts", import.meta.url).href)};
+       const plan = planCall("fixture", "search");
+       assert.ok(plan.ok);
+       assert.equal(plan.signedIn, false);
+       process.emitWarning("synthetic host warning");`,
+    ],
+    { encoding: "utf8", env: { ...process.env, NODE_NO_WARNINGS: "", NODE_OPTIONS: "" } },
+  );
+  assert.equal(result.status, 0, result.stderr);
+  assert.doesNotMatch(result.stderr, /SQLite is an experimental/);
+  assert.match(result.stderr, /synthetic host warning/);
 });
 
 test("signedIn fails closed for a locked or malformed own profile, but ignores it at maxTier 1", () => {

@@ -11,11 +11,13 @@ import {
   type CallOptions,
   type CallResult,
   call,
+  callOnlyWriteRefusal,
   callSession,
   callTiers,
   finish,
   resolveCall,
   type Tier,
+  tierBlocked,
 } from "./execute.js";
 import { fillTrigger } from "./heal.js";
 import { buildRequest, unknownArgs, withDefaults } from "./http.js";
@@ -60,8 +62,8 @@ export type CallPlan =
       args: Record<string, unknown>;
       /** Like CLI --dry: credentials are placeholders. UUIDs and derived values are placeholders too. */
       request: Request;
-      /** At tier 3 the page runs this filled, redacted trigger, not the request template. */
-      trigger?: Trigger;
+      /** Tier-3 steps, companion matches, and the count/step indices of confirms the page may accept. */
+      trigger?: Omit<Trigger, "confirms"> & { confirms?: { count: number; steps: number[] } };
       /** SHA-256 binding args, spec, preview, tier and cap to this approval. */
       fingerprint: string;
     }
@@ -218,22 +220,12 @@ export function planCall(
       return {
         ok: false,
         result: {
-          ...finish(
-            {
-              ok: false,
-              class: "blocked",
-              tier,
-              reason: `needs tier ${tier}, capped at ${maxTier}`,
-              next: "allow a higher tier, or ask the user to review an unconfirmed operation before pulling it",
-              nextCall: { action: "raise_tier", tier },
-            },
-            found.op,
-            found.site.name,
-            [],
-          ),
+          ...finish(tierBlocked(found.site, found.op, { tier, maxTier }, opts.maxTier), found.op, found.site.name, []),
           ms: 0,
         },
       };
+    const unsafeWrite = callOnlyWriteRefusal(found.site.name, found.op, tier);
+    if (unsafeWrite) return { ok: false, result: { ...finish(unsafeWrite, found.op, found.site.name, []), ms: 0 } };
     args = structuredClone(withDefaults(found.op, args));
     const effective = callSession(found.site, found.op, session, found.theirs);
     // Validate live headers too: replacing a credential first could hide a BadHeader refusal.
@@ -263,8 +255,7 @@ export function planCall(
       ...(req.body !== undefined ? { body: hide(req.body) } : {}),
     };
     const filled = tier === 3 ? fillTrigger(found.op.trigger, args) : undefined;
-    const trigger: Trigger | undefined = filled && {
-      ...filled,
+    const trigger: Extract<CallPlan, { ok: true }>["trigger"] = filled && {
       url: hide(filled.url),
       ...(filled.softFrom ? { softFrom: hide(filled.softFrom) } : {}),
       ...(filled.steps
@@ -274,6 +265,21 @@ export function planCall(
               ...(s.selector !== undefined ? { selector: hide(s.selector) } : {}),
               ...(s.value !== undefined ? { value: hide(s.value) } : {}),
             })),
+          }
+        : {}),
+      ...(found.op.trigger.confirms
+        ? {
+            confirms: {
+              count: found.op.trigger.confirms.length,
+              steps: found.op.trigger.confirms.map((c) => c.step),
+            },
+          }
+        : {}),
+      ...(found.op.trigger.companions
+        ? {
+            companions: found.op.trigger.companions.map((c) =>
+              Object.fromEntries(Object.entries(c).map(([k, v]) => [k, hide(v)])),
+            ),
           }
         : {}),
     };

@@ -1,16 +1,31 @@
 /** Offline sign-in caution for api-anything's own Chrome profile. Never reads cookie values. */
-import { lstatSync, statSync } from "node:fs";
+import { closeSync, lstatSync, openSync, readSync, statSync } from "node:fs";
 import { createRequire } from "node:module";
 import { join } from "node:path";
 import { siteOf } from "./domain.js";
 import { profileDir } from "./heal.js";
 
-function presentOrUnreadable(path: string): boolean {
+function presentOrUnreadable(path: string, nonempty = false): boolean {
   try {
-    lstatSync(path);
-    return true;
+    const stat = lstatSync(path);
+    return !nonempty || !stat.isFile() || stat.size > 0;
   } catch (e) {
     return !(e instanceof Error && "code" in e && e.code === "ENOENT");
+  }
+}
+
+function openCookies(file: string) {
+  const emitWarning = process.emitWarning;
+  try {
+    // As in import.ts, silence only SQLite's first-use warning, before the lazy require.
+    process.emitWarning = (warning, ...args) => {
+      const message = typeof warning === "string" ? warning : warning.message;
+      if (!message.includes("SQLite is an experimental")) Reflect.apply(emitWarning, process, [warning, ...args]);
+    };
+    const { DatabaseSync } = createRequire(import.meta.url)("node:sqlite") as typeof import("node:sqlite");
+    return new DatabaseSync(file, { readOnly: true });
+  } finally {
+    process.emitWarning = emitWarning;
   }
 }
 
@@ -36,11 +51,18 @@ export function profileSignedIn(hosts: string[]): boolean {
     }
     found = true;
     // Do not create SQLite shared-memory files or overlook uncheckpointed cookies.
-    if (presentOrUnreadable(`${file}-wal`) || presentOrUnreadable(`${file}-journal`)) return true;
+    if (presentOrUnreadable(`${file}-wal`, true) || presentOrUnreadable(`${file}-journal`, true)) return true;
     try {
-      // Lazy so Bun and compiled hosts need no SQLite support until a profile exists.
-      const { DatabaseSync } = createRequire(import.meta.url)("node:sqlite") as typeof import("node:sqlite");
-      const db = new DatabaseSync(file, { readOnly: true });
+      // SQLite can create -shm/-wal even read-only in WAL mode. Read its header, never open that DB.
+      const fd = openSync(file, "r");
+      try {
+        const header = Buffer.alloc(20);
+        if (readSync(fd, header, 0, header.length, 0) < header.length || header[18] === 2 || header[19] === 2)
+          return true;
+      } finally {
+        closeSync(fd);
+      }
+      const db = openCookies(file);
       try {
         for (const row of db.prepare("SELECT host_key, name FROM cookies").iterate()) {
           if (typeof row.host_key !== "string" || typeof row.name !== "string") return true;

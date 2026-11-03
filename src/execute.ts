@@ -276,6 +276,44 @@ const needsHuman = (site: string, notes: string[]): Result => ({
   retry: "after_fix",
 });
 
+/** Shared by host planning and run(), including the human-only approval for agent-pulled candidates. */
+export function tierBlocked(
+  site: Site,
+  op: Operation,
+  tiers: ReturnType<typeof callTiers>,
+  requestedMaxTier: Tier = 3,
+  notes: string[] = [],
+): Result {
+  const { tier, maxTier } = tiers;
+  if (unconfirmed(site, op) && tier === 3 && requestedMaxTier >= 3) return needsHuman(site.name, notes);
+  return {
+    ok: false,
+    class: "blocked",
+    tier,
+    reason: [...notes, `needs tier ${tier}, capped at ${maxTier}`].join("; "),
+    next: `allow a higher tier (--max-tier ${tier})`,
+    nextCall: { action: "raise_tier", tier },
+  };
+}
+
+/** Old write specs can send unbounded side effects at tier 3; call-only approval cannot cover those. */
+export function callOnlyWriteRefusal(site: string, op: Operation, tier: Tier): Result | undefined {
+  if (op.readOnly || tier !== 3) return undefined;
+  const missing = [
+    ...(op.trigger.companions === undefined ? ["no recorded companions list"] : []),
+    ...(!Object.keys(op.match).length ? ["an empty match"] : []),
+  ];
+  if (!missing.length) return undefined;
+  return {
+    ok: false,
+    class: "refused",
+    tier,
+    reason: `tier-3 write has ${missing.join(" and ")}; nothing was sent`,
+    next: `ask the user to re-learn the write with the CLI: api-anything add ${site} ${op.name} ... --write`,
+    nextCall: { action: "relearn" },
+  };
+}
+
 const NO_SESSION: Session = { cookies: [], values: {} };
 
 /**
@@ -1219,6 +1257,13 @@ async function run(
         : nextFor("input", siteName, op);
     return done({ ok: false, class: "input", reason: (e as Error).message, next });
   }
+  const capped = unconfirmed(site, op);
+  // a proof's op is named by a label, not one the site holds
+  const remembered = proof ? undefined : rememberedTier(siteName, op.name);
+  const tiers = callTiers(site, op, opts.maxTier, remembered);
+  let tier = tiers.tier;
+  const unsafeWrite = opts.callOnly && callOnlyWriteRefusal(siteName, op, tier);
+  if (unsafeWrite) return done(unsafeWrite);
   // A site that said stop is not asked again until its wait is over: before the write's ledger, as nothing is sent.
   held = opts.ignoreCoolDown ? undefined : cooling(siteName);
   if (held) return done(cooled(held, siteName));
@@ -1288,16 +1333,11 @@ async function run(
       return false;
     }
   };
-  const capped = unconfirmed(site, op);
-  // a proof's op is named by a label, not one the site holds
-  const remembered = proof ? undefined : rememberedTier(siteName, op.name);
-  const tiers = callTiers(site, op, opts.maxTier, remembered);
-  let tier = tiers.tier;
   const ctx: Ctx = {
     site: siteName,
     args,
     opts,
-    maxTier: opts.callOnly && write ? (Math.min(tier, tiers.maxTier) as Tier) : tiers.maxTier,
+    maxTier: tiers.maxTier,
     log,
     shared: site.shared,
     unconfirmed: capped,
@@ -1309,17 +1349,7 @@ async function run(
   let examplesChecked = false;
   let plainTried = false;
   for (;;) {
-    if (tier > ctx.maxTier) {
-      if (capped && tier === 3 && (opts.maxTier ?? 3) >= 3) return done(needsHuman(siteName, notes));
-      return done({
-        ok: false,
-        class: "blocked",
-        tier,
-        reason: [...notes, `needs tier ${tier}, capped at ${ctx.maxTier}`].join("; "),
-        next: `allow a higher tier (--max-tier ${tier})`,
-        nextCall: { action: "raise_tier", tier },
-      });
-    }
+    if (tier > ctx.maxTier) return done(tierBlocked(site, op, { tier, maxTier: ctx.maxTier }, opts.maxTier, notes));
     if (tier > 1 && !browserAvailable()) {
       return done({
         ok: false,
@@ -1430,7 +1460,6 @@ async function run(
       // run the trigger as learning does, the write intercepted and never sent, to refresh it; retry once.
       if (
         !op.readOnly &&
-        !opts.callOnly &&
         ctx.maxTier >= 3 &&
         browserAvailable() &&
         op.slots.some((s) => s.ref?.startsWith("session:"))

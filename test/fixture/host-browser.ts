@@ -114,8 +114,9 @@ beforeEach(() => {
         name: "write",
         readOnly: false,
         request: { method: "POST", url: `${base}/api/create`, headers: { authorization: "" }, body: "{}" },
+        match: { method: "POST", host: "127.0.0.1", path: "/api/create" },
         slots: [{ ref: "session:bearer", at: ["header:authorization"] }],
-        trigger: { url: `${base}/compose`, steps: [{ action: "click", selector: "#send" }] },
+        trigger: { url: `${base}/compose`, steps: [{ action: "click", selector: "#send" }], companions: [] },
       },
     ],
   });
@@ -231,6 +232,37 @@ test("a tier-3 write auth failure may have applied and is never repeated or refr
   assert.equal(sends, 0);
   assert.equal(cookieReads, 0);
 });
+
+for (const missing of ["companions", "match"] as const) {
+  test(`callOnly refuses a tier-3 write with no ${missing} before any transport or ledger entry`, async () => {
+    const op = { ...site.operations[1]!, minTier: 3 as const };
+    saveSite({ ...site, operations: [op] });
+    const approved = plan("write");
+    const { companions: _companions, ...oldTrigger } = op.trigger;
+    saveSite({
+      ...site,
+      operations: [{ ...op, ...(missing === "match" ? { match: {} } : { trigger: oldTrigger }) }],
+    });
+    const before = original();
+    const blocked = planCall("fixture", "write");
+    assert.equal(blocked.ok, false);
+    if (blocked.ok) throw new Error("expected an incomplete write to be refused");
+    assert.equal(blocked.result.class, "refused");
+    assert.equal(blocked.result.write, "not_sent");
+    assert.match(blocked.result.reason ?? "", new RegExp(missing));
+    assert.match(blocked.result.next ?? "", /re-learn.*api-anything add fixture write.*--write/);
+    assert.equal(blocked.result.nextCall?.action, "relearn");
+    const result = await call("fixture", "write", {}, { callOnly: true, allowWrites: true });
+    assert.deepEqual(blocked.result, { ...result, ms: 0 });
+    assert.deepEqual(await callPlanned(approved, { allowWrites: true }), blocked.result);
+    assert.deepEqual(triggerCalls, []);
+    assert.deepEqual(pageCalls, []);
+    assert.equal(sends, 0);
+    assert.equal(cookieReads, 0);
+    assert.equal(existsSync(join(home, "writes.json")), false);
+    assert.deepEqual(original(), before);
+  });
+}
 
 test("a callOnly read can refresh profile cookies and run tier 3 without healing", async () => {
   const op = site.operations[0]!;
