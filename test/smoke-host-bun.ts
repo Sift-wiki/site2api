@@ -1,6 +1,6 @@
 /**
- * Offline package-resolution and compiled-host smoke check. Run with:
- * BUN=~/.local/share/bun-1.4.4/bun node --import tsx test/smoke-host-bun.ts
+ * Offline package-resolution and compiled-host smoke check (docs/HOST.md). Run with
+ * `node --import tsx test/smoke-host-bun.ts`; set BUN to a Bun that is not on PATH.
  */
 import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
@@ -65,7 +65,7 @@ assert.equal(hostSite("hacker-news").site.signedIn, true);
 assert.deepEqual(readdirSync(profile).sort(), walFiles);
 assert.deepEqual(readFileSync(cookieFile), walBytes);
 await closeHost();
-console.log(JSON.stringify({ runtime: Bun.version, compiled: !!process.env.COMPILED, sites: sites.length, profileChecks: 5 }));
+console.log(JSON.stringify({ runtime: Bun.version, compiled: !!process.env.COMPILED, sites: sites.length }));
 `,
   );
   const env = { ...process.env, API_ANYTHING_HOME: join(scratch, "home") };

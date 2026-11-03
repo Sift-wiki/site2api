@@ -36,7 +36,8 @@ holds the evidence behind it, including the api-anything bugs that must not come
 | `src/setup.ts` | `setup`: connect the MCP server and the skill to each agent, the key, the one question |
 | `src/skill.ts` | the skill folder's copies: install, the stamp, and refreshing an untouched older copy |
 | `src/login.ts`, `src/import.ts` | sign in by importing the everyday browser's cookies; re-import on `auth` |
-| `src/cli.ts`, `src/mcp.ts`, `src/mcp-learn.ts`, `src/index.ts` | entry points; `mcp-learn.ts` is the MCP `learn_site` tool |
+| `src/cli.ts`, `src/mcp.ts`, `src/mcp-learn.ts`, `src/index.ts`, `src/host.ts` | entry points; `mcp-learn.ts` is the MCP `learn_site` tool; `host.ts` is `api-anything/host`, call-only (docs/HOST.md) |
+| `src/profile-state.ts`, `src/sqlite.ts` | whether api-anything's own Chrome profile holds a site's cookie, offline; node:sqlite opened read-only |
 | `src/jobs.ts` | an MCP call still running at its deadline answers with a job; identical calls join it |
 | `src/clients.ts` | `mcp --print-config`: how each MCP client adds the server, with absolute paths |
 | `registry/` | the registry service: a Cloudflare Worker with D1 (docs/REGISTRY.md) |
