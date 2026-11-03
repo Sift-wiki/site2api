@@ -253,9 +253,15 @@ test("the shared rules refuse what a hostile or careless spec could do with some
     ["a match of anything", spec({}, { match: { method: "POST" } }), /match names no host, path or operationName/],
     ["a command in a name", spec({}, { name: "search; rm -rf ~ #" }), /operation name .* is not a letter/],
     ["a catastrophic regex", spec({}, { params: [{ name: "q", pattern: "^(a+)+$" }] }), /nests a quantifier/],
+    [
+      "a regex that backtracks without nesting",
+      spec({}, { params: [{ name: "q", pattern: "^(a|a)*$" }] }),
+      /quantifies a group with overlapping alternatives/,
+    ],
     ["a long description", spec({}, { description: "x".repeat(501) }), /description is 501 characters/],
   ];
   for (const [what, s, re] of refused) assert.match(errors(s).join("\n"), re, what);
+  assert.deepEqual(errors(spec({}, { params: [{ name: "q", pattern: "^(jpg|png|gif)$" }] })), []);
   assert.match(errors(spec(), "n".repeat(9000)).join(), /notes are 9000 bytes/);
   const field = spec(
     {},
@@ -731,6 +737,11 @@ test("the shared rules check paging: a param of the read that goes in a slot, an
       "a regex that backtracks",
       spec({}, { params: optional, paging: { param: "q", next: "next~(a+)+$" } }),
       /paging next regex \/\(a\+\)\+\$\/ nests a quantifier/,
+    ],
+    [
+      "a regex that backtracks across alternatives",
+      spec({}, { params: optional, paging: { param: "q", next: "next~(a|aa)+$" } }),
+      /paging next regex \/\(a\|aa\)\+\$\/ quantifies a group with overlapping alternatives/,
     ],
     [
       "a long regex",
