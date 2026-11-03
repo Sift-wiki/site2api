@@ -291,9 +291,6 @@ export async function closeBrowser(): Promise<void> {
   if (c) await closeContext(c.ctx);
 }
 
-/** Whether this process has the browser open now: reading its cookies then launches nothing. */
-export const browserOpen = (): boolean => current !== undefined;
-
 /**
  * Close the browser now if no call is using it, and wait for it to exit. A host plans from the profile on
  * disk, which a running browser locks (so plans fail closed to signed in) and has not flushed.

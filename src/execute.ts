@@ -6,7 +6,6 @@
 import { randomBytes } from "node:crypto";
 import {
   browserAvailable,
-  browserOpen,
   type PageFetchResult,
   PageUnreachable,
   ProfileInUse,
@@ -56,7 +55,6 @@ import {
   loadSession,
   loggedIn,
   mergeCapture,
-  noteGuestCookies,
   type Session,
   saveSession,
   sessionFile,
@@ -1214,14 +1212,6 @@ async function run(
     if (f.next) f.next = hide(f.next, sessions);
     if (f.heal) f.heal = { ...f.heal, changes: f.heal.changes.map((c) => hide(c, sessions)) };
     if (ledger) settleWrite(ledger, f.write ?? "may_have_applied", f);
-    if (f.class === "auth" && jar && log.length) {
-      // A browser this call left open (a page fetch, a trigger run, a cookie refresh) holds what those
-      // signed-out page loads were given: read it from the open context, with no page load.
-      const browser = browserOpen()
-        ? await profileCookies({ url: op.request.url, profileDir: profileDir() }).catch(() => [])
-        : [];
-      noteGuestCookies(siteName, jar, site.loginCookies, browser);
-    }
     // a proof's rate limit or block is the site's, as any call's
     coolAfter(siteName, op, f, log);
     const out = { ...f, ms: Date.now() - t0 };
@@ -1245,7 +1235,7 @@ async function run(
     if (out.ok && !proof && out.data !== undefined) {
       const viewed = resultView(out.data, opts.view, undefined, opts.callOnly);
       if (viewed.truncated && out.nextPage !== undefined)
-        viewed.truncated += "; nextPage starts after the last item of this page, cut or not; more stays on this page";
+        viewed.truncated += `; nextPage starts after the last item of this page, cut or not${opts.callOnly ? "" : "; more stays on this page"}`;
       return { ...out, ...viewed };
     }
     return out;

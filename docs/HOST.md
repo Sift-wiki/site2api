@@ -66,12 +66,10 @@ cookie with an unknown name counts as an account. It is true when any of these h
      exist does not count.
 
 A cookie name is known to be anonymous, in the jar and in the profile alike, when it is in the
-session's `guestCookies` or on one shared list, `ANONYMOUS_COOKIE` in `src/session.ts`.
-`guestCookies` are the names a signed-out visit to the site was given. `login` records them, and so
-does any call the site answers `auth` while no login is on record: the names that call newly
-picked up, in the jar or in the profile its browser runs left open, are a signed-out visitor's by the
-site's own answer. A name the jar held before the call, or one pinned in `loginCookies`, is never
-recorded, and a later login sets `source`, which counts whatever the cookies are. The shared list:
+session's `guestCookies` (the names a signed-out visit to the site was given, recorded by `login`)
+or on one shared list, `ANONYMOUS_COOKIE` in `src/session.ts`. A call never records guests: not even
+an `auth` answer proves its cookies a visitor's, since a 401 can issue a session cookie another
+operation then accepts. The shared list:
 
 - analytics: `_ga`, `_ga_<id>`, `_gid`, `_gat`, `_gat_<id>`, `_fbp`
 - consent: `CONSENT`, `SOCS`, `OptanonConsent`, `OptanonAlertBoxClosed`, `euconsent`, `euconsent-v<n>`
@@ -88,10 +86,10 @@ since a pulled spec could pin a name that is never set.
 
 Nothing else counts: known-anonymous cookies, expired or empty jar cookies, and stored values no
 request of the call fills leave `signedIn` false. So a signed-out call that is given only such
-cookies, as Google gives `NID`, `AEC` and `SOCS`, leaves the next plan as it was, and so does an
-`auth` answer that sets cookies of its own (LinkedIn's `bcookie` and `lidc`). A successful signed-out
-response that sets any other cookie (a framework's visitor session such as `JSESSIONID`) turns the
-next plan signed in, once, by design: nothing in that answer says the cookie is not a login.
+cookies, as Google gives `NID`, `AEC` and `SOCS`, leaves the next plan as it was. Any answer that
+sets another cookie, successful or `auth` (a framework's visitor session such as `JSESSIONID`,
+LinkedIn's `bcookie` and `lidc` on its 401), turns the next plan signed in, by design: nothing in the
+answer proves the cookie is not a login.
 `hostSites()` and `hostSite()` answer for the whole site: any of its operations, each at its starting
 tier under the default cap of 3. A plan with `maxTier: 1` for a site with no session value does not
 look at the profile or at other sites' logins.
