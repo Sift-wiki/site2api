@@ -66,8 +66,12 @@ cookie with an unknown name counts as an account. It is true when any of these h
      exist does not count.
 
 A cookie name is known to be anonymous, in the jar and in the profile alike, when it is in the
-session's `guestCookies` (the names a signed-out visit to the site was given, recorded by `login`)
-or on one shared list, `ANONYMOUS_COOKIE` in `src/session.ts`:
+session's `guestCookies` or on one shared list, `ANONYMOUS_COOKIE` in `src/session.ts`.
+`guestCookies` are the names a signed-out visit to the site was given. `login` records them, and so
+does any call the site answers `auth` while no login is on record: the names that call newly
+picked up, in the jar or in the profile its browser runs left open, are a signed-out visitor's by the
+site's own answer. A name the jar held before the call, or one pinned in `loginCookies`, is never
+recorded, and a later login sets `source`, which counts whatever the cookies are. The shared list:
 
 - analytics: `_ga`, `_ga_<id>`, `_gid`, `_gat`, `_gat_<id>`, `_fbp`
 - consent: `CONSENT`, `SOCS`, `OptanonConsent`, `OptanonAlertBoxClosed`, `euconsent`, `euconsent-v<n>`
@@ -84,9 +88,10 @@ since a pulled spec could pin a name that is never set.
 
 Nothing else counts: known-anonymous cookies, expired or empty jar cookies, and stored values no
 request of the call fills leave `signedIn` false. So a signed-out call that is given only such
-cookies, as Google gives `NID`, `AEC` and `SOCS`, leaves the next plan as it was. A signed-out
-response that sets any other cookie (a framework's visitor session such as `JSESSIONID`, which a
-login would have recorded in `guestCookies`) turns the next plan signed in, once, by design.
+cookies, as Google gives `NID`, `AEC` and `SOCS`, leaves the next plan as it was, and so does an
+`auth` answer that sets cookies of its own (LinkedIn's `bcookie` and `lidc`). A successful signed-out
+response that sets any other cookie (a framework's visitor session such as `JSESSIONID`) turns the
+next plan signed in, once, by design: nothing in that answer says the cookie is not a login.
 `hostSites()` and `hostSite()` answer for the whole site: any of its operations, each at its starting
 tier under the default cap of 3. A plan with `maxTier: 1` for a site with no session value does not
 look at the profile or at other sites' logins.
@@ -145,11 +150,11 @@ the page fills it itself. What a call does can still change the plan:
   request then shows and which makes `signedIn` true;
 - a captured value of six or more characters that also appears in the args or the request, which
   redaction then replaces;
-- the browser a tier-2 or tier-3 run starts. It closes itself about 3 s after its last use
-  (`IDLE_CLOSE_MS` in `src/browser.ts`), or at `closeHost()`, and while it runs its `SingletonLock`
-  makes every plan that can reach the profile fail closed to `signedIn: true`. A plan approved
-  before the browser started and called while it runs, or the reverse, is refused by
-  `callPlanned`. Planning does not wait for the browser to close, so plan again once it has.
+- a browser still running. While one runs, its `SingletonLock` makes every plan that can reach the
+  profile fail closed to `signedIn: true`. So `callPlanned` closes the browser its call started as
+  soon as no other call in the process uses it, and waits for it to exit before returning: the next
+  plan reads a released, flushed profile. While calls overlap, the browser stays up, and a plan made
+  meanwhile is signed in until the last of them returns.
 
 `callPlanned` re-plans synchronously before `call()`. A fresh plan that differs from the approved
 one in any field (the fingerprint, the shown request or trigger, `signedIn`) returns
@@ -204,8 +209,8 @@ Own-profile cookie refresh for reads and a read's tier-3 run may refresh session
 normal transport can still record cookies from the response, and its readback is a separate read,
 not a retry of the write.
 
-`closeHost()` closes the shared browser, which otherwise closes itself about 3 s after its last
-use. Host calls create no background jobs to drain.
+`closeHost()` closes the shared browser. A host call already closes it when it is the last user, so
+this matters only for calls still running. Host calls create no background jobs to drain.
 Finish outstanding calls before closing; this is not a write-cancellation API.
 
 ## Bun and compiled hosts

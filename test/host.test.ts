@@ -290,6 +290,60 @@ test("a signed-out read's own anonymous cookies leave the next plan unchanged; a
   assert.equal(fixture.calls.filter((c) => c.method === "POST").length, 1);
 });
 
+test("cookies a signed-out answer sets are a guest's: the next plan stays anonymous, a real login still counts", async () => {
+  const members = {
+    ...site.operations[0]!,
+    name: "company",
+    request: { method: "GET", url: `${fixture.url}/api/members-only`, headers: {} },
+    slots: [],
+    params: [],
+  };
+  saveSite({ ...site, loginCookies: ["li_at"], operations: [members, site.operations[1]!] });
+  const plan = () => {
+    const p = planCall("fixture", "company", {});
+    assert.ok(p.ok, JSON.stringify(p));
+    return p;
+  };
+  const approved = plan();
+  assert.equal(approved.signedIn, false);
+  // LinkedIn answers a signed-out read 401 and sets browser-id and routing cookies no list knows.
+  const first = await callPlanned(approved, { minIntervalMs: 0 });
+  assert.equal(first.class, "auth", JSON.stringify(first));
+  const s = loadSession("fixture");
+  assert.deepEqual(s.cookies.map((c) => c.name).sort(), ["bcookie", "lidc"]);
+  // Its 401 sent the read on to the browser, whose signed-out page load left the page's ct0 in the profile.
+  assert.deepEqual(s.guestCookies?.sort(), ["bcookie", "ct0", "lidc"]);
+  assert.deepEqual(plan(), approved, "the retry, or a parallel call approved before, still matches");
+  assert.equal(hostSite("fixture")?.site.signedIn, false);
+  // A sign-in afterwards is still one: its cookie was not set by the signed-out answer.
+  saveSession("fixture", { ...s, cookies: [...s.cookies, cookie("li_at", "signed-in-later", { httpOnly: true })] });
+  assert.equal(plan().signedIn, true);
+});
+
+test("a signed-out answer never recasts a cookie the jar already held, a pinned login, or a login on record", async () => {
+  const members = {
+    ...site.operations[0]!,
+    name: "company",
+    request: { method: "GET", url: `${fixture.url}/api/members-only`, headers: {} },
+    slots: [],
+    params: [],
+  };
+  saveSite({ ...site, loginCookies: ["lidc"], operations: [members] });
+  // A cookie-only session from before `source` existed: the site rotates bcookie on its 401.
+  saveSession("fixture", { cookies: [cookie("bcookie", "held-before", { httpOnly: true })], values: {} });
+  const plan = planCall("fixture", "company", {});
+  assert.ok(plan.ok);
+  assert.equal(plan.signedIn, true);
+  const first = await callPlanned(plan, { minIntervalMs: 0 });
+  assert.equal(first.class, "auth", JSON.stringify(first));
+  assert.equal(loadSession("fixture").guestCookies, undefined, "bcookie was held, lidc is pinned");
+  saveSession("fixture", { cookies: [], values: {}, source: "window" });
+  const recorded = planCall("fixture", "company", {});
+  assert.ok(recorded.ok);
+  await callPlanned(recorded, { minIntervalMs: 0 });
+  assert.equal(loadSession("fixture").guestCookies, undefined, "a login on record learns no guests");
+});
+
 // Hacker News's login cookie is `user` (`<name>&<hash>`); Java, PHP and Express name theirs JSESSIONID,
 // PHPSESSID and connect.sid; Google's account cookies are the SID family.
 const ACCOUNT_COOKIES = [

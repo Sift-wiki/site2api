@@ -6,7 +6,7 @@ import { createHash } from "node:crypto";
 import { readdirSync } from "node:fs";
 import { join } from "node:path";
 import { isDeepStrictEqual } from "node:util";
-import { closeBrowser } from "./browser.js";
+import { closeBrowser, closeIdleBrowser } from "./browser.js";
 import { setAt, templateRefs } from "./codec.js";
 import { describeOperation, type OperationDescription } from "./describe.js";
 import { siteOf } from "./domain.js";
@@ -458,15 +458,20 @@ export async function callPlanned(plan: ReadyPlan, opts: HostCallOptions = {}): 
       next: "plan and approve the current request before calling",
       ms: 0,
     };
-  return call(fresh.site, fresh.op, fresh.args, {
-    allowWrites: opts.allowWrites,
-    maxTier: fresh.maxTier,
-    timeoutMs: opts.timeoutMs,
-    fetchImpl: opts.fetchImpl,
-    minIntervalMs: opts.minIntervalMs,
-    ...(opts.view ? { view: opts.view } : {}),
-    callOnly: true,
-  });
+  try {
+    return await call(fresh.site, fresh.op, fresh.args, {
+      allowWrites: opts.allowWrites,
+      maxTier: fresh.maxTier,
+      timeoutMs: opts.timeoutMs,
+      fetchImpl: opts.fetchImpl,
+      minIntervalMs: opts.minIntervalMs,
+      ...(opts.view ? { view: opts.view } : {}),
+      callOnly: true,
+    });
+  } finally {
+    // The next plan reads the profile; a browser left idle would lock it and flip signedIn for seconds.
+    await closeIdleBrowser();
+  }
 }
 
 /** Close the shared browser so the process can exit. Host calls never queue background work. */

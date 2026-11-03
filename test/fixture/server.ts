@@ -571,6 +571,14 @@ document.getElementById("gql").onclick=()=>fetch("/api/gql",{method:"POST",heade
       return json(res, 200, {
         data: { results: [`${u.searchParams.get("q")} one`, `${u.searchParams.get("q")} two`] },
       });
+    // A members-only read that answers a signed-out visitor 401 and still gives it browser-id and
+    // routing cookies under names no list knows, as LinkedIn's bcookie and lidc.
+    if (p === "/api/members-only") {
+      if (jar.li_at) return json(res, 200, { data: { employees: 6244 } });
+      return send(res, 401, "application/json; charset=utf-8", JSON.stringify({ error: "sign in required" }), {
+        "set-cookie": [`bcookie="v=2&${mint()}"; Path=/; Max-Age=31536000`, `lidc="b=VB${mint().slice(0, 6)}"; Path=/`],
+      });
+    }
     // A signed-out search that gives every visitor anonymous cookies, renewed on each answer, as Google
     // gives NID: a preference id, a consent state, analytics, and a CSRF token page JS echoes in a header.
     if (p === "/api/visitor-search") {

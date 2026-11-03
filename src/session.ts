@@ -217,6 +217,29 @@ export function saveSession(site: string, s: Session, urls: (string | undefined)
   return sealed;
 }
 
+/**
+ * After the site answered a call as signed out (`auth`), the cookie names that call newly picked up, in
+ * the jar or from its browser runs (`browser`: what they left in the profile), are what a signed-out visit
+ * is given: record them as `guestCookies`, as `login` does, so they are not mistaken for a sign-in.
+ * `before`: the jar as the call found it. A name it already held, or one the spec pins as a login, is
+ * never added, so a rotated sign-in cookie cannot be recast as a guest's; a login on record adds nothing,
+ * and any later login sets one.
+ */
+export function noteGuestCookies(
+  site: string,
+  before: Session,
+  loginCookies: string[] = [],
+  browser: StoredCookie[] = [],
+): void {
+  withLock(sessionFile(site), () => {
+    const s = loadSession(site);
+    if (s.source || before.source) return;
+    const held = new Set([...before.cookies.map((c) => c.name), ...loginCookies]);
+    const fresh = [...s.cookies, ...browser].map((c) => c.name).filter((name) => !held.has(name));
+    if (fresh.length) saveSession(site, { ...s, guestCookies: [...new Set([...(s.guestCookies ?? []), ...fresh])] });
+  });
+}
+
 const expired = (c: StoredCookie, now: number) => c.expires > 0 && c.expires * 1000 <= now;
 
 /**
