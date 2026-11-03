@@ -18,7 +18,7 @@ import { call, heal } from "../../src/execute.js";
 import { addOperation, rescan } from "../../src/heal.js";
 import { loadSession, saveSession } from "../../src/session.js";
 import { type Operation, parseSite } from "../../src/spec.js";
-import { BUNDLED_DIR, loadSite, markStale, saveSite, staleMark } from "../../src/store.js";
+import { bundledDir, loadSite, markStale, saveSite, staleMark } from "../../src/store.js";
 
 const HOME = mkdtempSync(join(tmpdir(), "api-anything-edge-heal-"));
 process.env.API_ANYTHING_HOME = HOME;
@@ -766,7 +766,7 @@ describe("heal without a browser (maxTier 1)", () => {
   });
 
   test("heal of a bundled spec writes a user copy that wins afterwards; the bundled file is untouched", async () => {
-    const bundled = join(BUNDLED_DIR, "x.json");
+    const bundled = join(bundledDir(), "x.json");
     const before = createHash("sha256").update(readFileSync(bundled)).digest("hex");
     const op = loadSite("x")!.site.operations.find((o) => o.name === "getUser")!;
     assert.equal(loadSite("x")!.source, "bundled");

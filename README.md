@@ -313,6 +313,10 @@ await call("my-site", "postComment", { text: "Ship it" }, { allowWrites: true })
 `npm install api-anything`. [`examples/reading-list.mjs`](examples/reading-list.mjs) builds a
 five-book table from Goodreads with no model and no browser.
 
+Agent hosts that only call installed operations can use [`api-anything/host`](docs/HOST.md).
+It provides local discovery, redacted approval plans and call-only execution without learning,
+cookie import or registry traffic. Bun can import its TypeScript source without a build step.
+
 </details>
 
 ## Teach it a new site

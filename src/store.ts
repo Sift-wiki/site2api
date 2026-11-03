@@ -36,7 +36,13 @@ import { ensureDir, home, loadSession, readJson, safeName, withLock, writePrivat
 import { type Operation, parseSite, type Site } from "./spec.js";
 import { vetShared } from "./vet.js";
 
-export const BUNDLED_DIR = fileURLToPath(new URL("../sites", import.meta.url));
+let bundledOverride: string | undefined;
+/** Resolve lazily: a compiled host supplies its extracted specs before the first load. */
+export const bundledDir = () => bundledOverride ?? fileURLToPath(new URL("../sites", import.meta.url));
+/** Override the bundled directory for every default spec and notes lookup in this process. */
+export function setBundledDir(dir: string): void {
+  bundledOverride = dir;
+}
 export const userSitesDir = () => join(home(), "sites");
 /** Specs `pull` fetched from the registry: someone else's, so checked again on every load. */
 export const registryDir = () => join(home(), "registry");
@@ -54,10 +60,10 @@ const specDirs = (bundledDir: string) =>
     [bundledDir, "bundled"],
   ] as const;
 
-export function loadSite(name: string, bundledDir = BUNDLED_DIR): Resolved | undefined {
+export function loadSite(name: string, directory = bundledDir()): Resolved | undefined {
   name = safeName(name);
   const file = `${name}.json`;
-  for (const [dir, source] of specDirs(bundledDir)) {
+  for (const [dir, source] of specDirs(directory)) {
     const path = join(dir, file);
     if (!existsSync(path)) continue;
     try {
@@ -87,7 +93,7 @@ export function siteNotes(
   name: string,
   o: { bundledDir?: string; from?: Resolved["source"] } = {},
 ): string | undefined {
-  for (const [dir, source] of specDirs(o.bundledDir ?? BUNDLED_DIR)) {
+  for (const [dir, source] of specDirs(o.bundledDir ?? bundledDir())) {
     if (o.from && source !== o.from) continue;
     const text = notesAt(join(dir, `${safeName(name)}.md`));
     if (text === undefined) continue;
@@ -99,9 +105,9 @@ export function siteNotes(
 
 const notesAt = (path: string) => (existsSync(path) ? readFileSync(path, "utf8") : undefined);
 
-export function listSites(bundledDir = BUNDLED_DIR): string[] {
+export function listSites(directory = bundledDir()): string[] {
   const names = new Set<string>();
-  for (const [dir] of specDirs(bundledDir)) {
+  for (const [dir] of specDirs(directory)) {
     if (!existsSync(dir)) continue;
     for (const f of readdirSync(dir)) if (f.endsWith(".json")) names.add(f.slice(0, -5));
   }

@@ -1895,6 +1895,13 @@ independent alternative.
   The description builder is shared with MCP's input schema; the link helper returns complete
   `{site, op, args}` without executing, validating/coercing values, or granting permission for a
   write. A later `call` still enforces every arg and write rule.
+- Embedded hosts: `api-anything/host` exposes local-only discovery (`hostSites`, `hostSite`),
+  redacted request planning (`planCall`), approval-bound execution (`callPlanned`), `setBundledDir`
+  for a compiled host's extracted specs, and `closeHost`. Every host call sets `callOnly`: no
+  learning, healing, everyday-browser import, registry traffic, reporting or background work.
+  Installed specs remain unchanged. The transport ladder, own-profile sessions, write ledger and
+  readback, pacing, cool-downs, local logs and result caps stay in use. See [HOST.md](HOST.md) for
+  approval binding, dynamic-value placeholders and the Bun export condition.
 
 ## Non-goals (v1)
 
