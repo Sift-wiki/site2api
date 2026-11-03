@@ -288,6 +288,15 @@ export function boundSession(s: Session): Session {
   return { ...s, values: Object.fromEntries(Object.entries(s.values).filter(([k]) => s.valueHosts?.[k])) };
 }
 
+/** The session with `<name>` in place of every cookie and value: a request built with it is safe to show. */
+export function placeholders(s: Session): Session {
+  return {
+    ...s,
+    cookies: s.cookies.map((c) => ({ ...c, value: `<${c.name}>` })),
+    values: Object.fromEntries(Object.keys(s.values).map((k) => [k, `<${k}>`])),
+  };
+}
+
 /** Record the origins of an operation just saved as the site's own (`Session.origins`). */
 export function recordOrigins(site: string, urls: (string | undefined)[]): void {
   withLock(sessionFile(site), () => {

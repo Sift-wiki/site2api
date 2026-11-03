@@ -275,6 +275,7 @@ test("changed spec, trigger, write flag, readback, arguments or preview refuses 
   for (const changed of [
     { ...plan, args: { title: "another task" } },
     { ...plan, request: { ...plan.request, body: "not what was planned" } },
+    { ...plan, signedIn: !plan.signedIn },
   ])
     assert.equal((await callPlanned(changed, { ...opts, allowWrites: true })).class, "refused");
   assert.deepEqual(fixture.calls, []);
@@ -944,7 +945,21 @@ test("callPlanned returns the fresh planning failure for invalid specs and corru
   writeFileSync(sessionFile("fixture"), "null");
   fresh = planCall("fixture", "search", {}, opts);
   assert.equal(fresh.ok, false);
-  if (!fresh.ok) assert.deepEqual(await callPlanned(plan, opts), fresh.result);
+  if (!fresh.ok) {
+    assert.deepEqual(await callPlanned(plan, opts), fresh.result);
+    const direct = await call("fixture", "search", {}, { ...opts, callOnly: true });
+    assert.deepEqual(fresh.result, { ...direct, ms: 0 }, "a corrupt session gets call()'s answer and next step");
+  }
+  assert.deepEqual(fixture.calls, []);
+});
+
+test("planning answers bad args before a tier cap, as call does", async () => {
+  saveSite({ ...site, operations: [{ ...site.operations[2]!, minTier: 2 }] });
+  const plan = planCall("fixture", "addTodo", { title: "no" }, opts);
+  const result = await call("fixture", "addTodo", { title: "no" }, { ...opts, callOnly: true, allowWrites: true });
+  assert.equal(result.class, "input");
+  assert.equal(plan.ok, false);
+  if (!plan.ok) assert.deepEqual(plan.result, { ...result, ms: 0 });
   assert.deepEqual(fixture.calls, []);
 });
 
