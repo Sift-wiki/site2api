@@ -26,12 +26,13 @@ import {
   unsendable,
 } from "./execute.js";
 import { fillTrigger } from "./heal.js";
-import { buildRequest, unknownArgs, withDefaults } from "./http.js";
+import { buildRequest, filledValues, unknownArgs, withDefaults } from "./http.js";
 import { profileSignedIn } from "./profile-state.js";
 import { captureLive, redact } from "./secrets.js";
-import { home, loadSession, placeholders, type Session, signInCookies } from "./session.js";
+import { accountCookies, home, loadSession, placeholders, type Session } from "./session.js";
 import type { Operation, Request, Site, Trigger } from "./spec.js";
 import { listSites, loadSite, type Resolved, rememberedTier, siteNotes } from "./store.js";
+import type { StoredCookie } from "./types.js";
 
 /** A callable operation and the trigger-page prefixes a host can match against browser URLs. */
 export interface HostOperation {
@@ -47,7 +48,7 @@ export interface HostSite {
   name: string;
   source: "user" | "bundled" | "pulled";
   hosts: string[];
-  /** Evidence of a login, never the mere presence of cookies (docs/HOST.md). */
+  /** Whether a call may run under the user's account; anonymity needs positive evidence (docs/HOST.md). */
   signedIn: boolean;
   operations: HostOperation[];
 }
@@ -159,14 +160,46 @@ function loginDomains(): Set<string> {
   return domains;
 }
 
+/** A write's readback read as it is sent: the read op it names, or its inline read under the write's version. */
+function readbackOf(site: Site, op: Operation): Operation | undefined {
+  const rb = op.readback;
+  if (!rb) return undefined;
+  return "op" in rb
+    ? site.operations.find((o) => o.name === rb.op)
+    : { ...op, request: rb.read.request, slots: rb.read.slots };
+}
+
+/** What a call may send from the stored session: jar cookies, and the names of the stored values it fills. */
+interface Sendable {
+  cookies: StoredCookie[];
+  values: string[];
+}
+
 /**
- * Whether the call may run under the user's account, from evidence of a login only: an anonymous cookie a
- * signed-out response sets (NID, consent, analytics, CSRF) is none, so a call's own Set-Cookie never turns
- * the next plan signed in. `browser`: the call can reach api-anything's own Chrome profile.
+ * What a call of `op` starting at `tier` may send from `session`, after execution's filters
+ * (`callSession`): every jar cookie, since a redirect or a lookup can carry any of them, and the stored
+ * values its request and a write's readback read fill. A tier-3 run's page fills its own values, so a call
+ * that starts there sends none of the stored ones; the readback is a call of its own.
  */
-function signedIn(s: Session, site: Site, browser: boolean, logins?: Set<string>): boolean {
-  // A login on record, as call() judges one before it calls a guest's answer `auth`.
-  if (s.source || signInCookies(s.cookies, site.loginCookies, s.guestCookies).length > 0) return true;
+function sendable(site: Site, op: Operation, session: Session, theirs: boolean, tier: Tier): Sendable {
+  const read = readbackOf(site, op);
+  const own = callSession(site, op, session, theirs);
+  const back = read && callSession(site, read, session, theirs);
+  return {
+    cookies: [...own.cookies, ...(back?.cookies ?? [])],
+    values: [...(tier < 3 ? filledValues(op, own) : []), ...(read && back ? filledValues(read, back) : [])],
+  };
+}
+
+/**
+ * Whether the call may run under the user's account. Anonymity needs positive evidence: a login on
+ * record, a stored value the request fills, or any live cookie whose name is not known to be anonymous
+ * (`accountCookies`) makes it true, so an unknown cookie name counts and a guest's NID does not.
+ * `sent`: what the call may send from `s`. `browser`: the call can reach api-anything's own Chrome profile.
+ */
+function signedIn(s: Session, site: Site, sent: Sendable, browser: boolean, logins?: Set<string>): boolean {
+  if (s.source || sent.values.length > 0) return true;
+  if (accountCookies(sent.cookies, site.loginCookies, s.guestCookies).length > 0) return true;
   // Session values are captured in the own profile, so they carry whatever sign-in it holds.
   if (!browser && Object.keys(s.values).length === 0) return false;
   const urls = siteUrls(site);
@@ -174,16 +207,29 @@ function signedIn(s: Session, site: Site, browser: boolean, logins?: Set<string>
   const hosts = urls.some((url) => !staticUrl(url)) ? [] : hostnames(urls);
   const domains = logins ?? loginDomains();
   if (hosts.length ? hosts.some((host) => domains.has(siteOf(host))) : domains.size > 0) return true;
-  return profileSignedIn(hosts, site.loginCookies);
+  return profileSignedIn(hosts, site.loginCookies, s.guestCookies);
 }
 
 function summary(r: Resolved, logins: Set<string>): HostSite {
+  const { site } = r;
+  const session = loadSession(site.name);
+  const theirs = r.source !== "user" || !!site.shared;
+  const sent = site.operations.map((op) => {
+    const { tier } = callTiers(site, op, undefined, rememberedTier(site.name, op.name));
+    return sendable(site, op, session, theirs, tier);
+  });
   return {
-    name: r.site.name,
+    name: site.name,
     source: r.source === "registry" ? "pulled" : r.source,
-    hosts: hostnames(siteUrls(r.site)),
-    signedIn: signedIn(loadSession(r.site.name), r.site, r.site.operations.length > 0, logins),
-    operations: r.site.operations.map((op) => ({
+    hosts: hostnames(siteUrls(site)),
+    signedIn: signedIn(
+      session,
+      site,
+      { cookies: sent.flatMap((s) => s.cookies), values: sent.flatMap((s) => s.values) },
+      site.operations.length > 0,
+      logins,
+    ),
+    operations: site.operations.map((op) => ({
       name: op.name,
       readOnly: op.readOnly,
       ...(op.description ? { description: op.description } : {}),
@@ -226,11 +272,14 @@ const refused = (r: Omit<CallResult, "ms">, op?: Operation, site?: string): Call
 
 /**
  * The session a preview is built from: `effective`, the one the call may send, as placeholders. Any
- * response can set, rotate or drop a cookie, and a browser run captures a session value the session
- * lacks, so every cookie: ref, and every session: ref `stored` holds no value for, shows its placeholder
- * whether or not the value is there yet. A stored value the call's filters leave out stays out.
+ * response can set, rotate or drop a cookie, so every cookie: ref shows its placeholder whether or not the
+ * jar holds it yet; whether one may carry an account is `signedIn`'s answer. At tiers 1 and 2 a session:
+ * ref shows its placeholder only when a stored value fills it and is left out otherwise, as at send time,
+ * so a value stored after approval changes the plan. At tier 3 the page fills session: refs itself, so
+ * every one `stored` holds no value for shows its placeholder too. A stored value the filters leave out
+ * stays out.
  */
-function previewSession(op: Operation, effective: Session, stored: Session, bare: boolean): Session {
+function previewSession(op: Operation, effective: Session, stored: Session, bare: boolean, tier: Tier): Session {
   const shown = placeholders(effective);
   if (bare) return shown;
   let domain: string;
@@ -242,7 +291,7 @@ function previewSession(op: Operation, effective: Session, stored: Session, bare
   const refs = op.slots.flatMap((s) => [...(s.ref ? [s.ref] : []), ...(s.template ? templateRefs(s.template) : [])]);
   const named = (kind: string) =>
     new Set(refs.flatMap((ref) => (ref.startsWith(`${kind}:`) ? [ref.slice(kind.length + 1)] : [])));
-  const absent = [...named("session")].filter((name) => !Object.hasOwn(stored.values, name));
+  const absent = tier === 3 ? [...named("session")].filter((name) => !Object.hasOwn(stored.values, name)) : [];
   return {
     ...shown,
     values: { ...shown.values, ...Object.fromEntries(absent.map((name) => [name, `<${name}>`])) },
@@ -268,7 +317,7 @@ function previewRequest(
   hide: (text: string) => string,
 ): Request {
   const bare = bareCall(site, op);
-  let req = buildRequest(op, args, previewSession(op, sessions.effective, sessions.stored, bare), "host-preview");
+  let req = buildRequest(op, args, previewSession(op, sessions.effective, sessions.stored, bare, tier), "host-preview");
   for (const slot of op.slots) {
     if (slot.gen) req = setAt(req, slot.at, "<generated:uuid>");
     if (slot.from) req = setAt(req, slot.at, `<derived:${slot.path}>`);
@@ -364,6 +413,7 @@ export function planCall(
       signedIn: signedIn(
         session,
         found.site,
+        sendable(found.site, found.op, session, found.theirs, tier),
         tier >= 2 || (maxTier >= 2 && (found.op.readOnly || !!found.op.readback)),
       ),
       tier,

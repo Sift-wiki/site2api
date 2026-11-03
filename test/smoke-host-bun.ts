@@ -53,9 +53,10 @@ const insert = (name) => {
   edit.prepare("INSERT INTO cookies VALUES(?, ?)").run(".news.ycombinator.com", name);
   edit.close();
 };
-insert("synthetic-visitor-cookie");
+insert("_ga");
+insert("__cf_bm");
 assert.equal(hostSite("hacker-news").site.signedIn, false);
-insert("user_session");
+insert("user");
 assert.equal(hostSite("hacker-news").site.signedIn, true);
 const wal = new DatabaseSync(cookieFile);
 wal.exec("DELETE FROM cookies; PRAGMA journal_mode=WAL");

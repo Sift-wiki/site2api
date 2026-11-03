@@ -33,16 +33,22 @@ a `blocked` result, not a callable plan. The existing unconfirmed-operation cap 
 Blocked plans use the same recovery step as `call()`: ordinary caps ask to raise the tier;
 an agent-pulled candidate needing tier 3 asks for a human's review and CLI pull, not a higher cap.
 
-`signedIn` means the call may run under the user's account. It is answered from evidence of a
-login, never from the mere presence of a cookie, and it is a caution, not proof that the login is
-still valid. It is true when:
+`signedIn` means the call may run under the user's account. It is a caution, not proof that a login
+is still valid, and it is conservative: a call counts as anonymous only on positive evidence, so a
+cookie with an unknown name counts as an account. It is true when any of these holds:
 
-1. The site has a login on record, as `call()` judges one before it calls a guest's answer `auth`:
-   its session has a `source` (set by `api-anything login`: a browser import, `--window` or
-   `--cookies`), or its jar holds a live, non-empty sign-in cookie (`signInCookies`): one of the
-   spec's `loginCookies` when it pins them, else `logged_in=yes` or a name like `sessionid`, `sid`,
-   `*_session` or `__Secure-1PSID` (`AUTH_COOKIE`) that is not in the session's `guestCookies`.
-2. The call can reach a browser tier (it starts there, or a read or a write's readback may climb
+1. The site's session has a `source`: a login on record, set by `api-anything login` (a browser
+   import, `--window` or `--cookies`).
+2. The call fills a stored, non-empty session value into a request it sends: a `session:` ref of the
+   operation's request when the call starts at tier 1 or 2, or of a write's readback read. Execution's
+   session filters apply first, as at send time: a value bound to another host, an unbound value in
+   someone else's spec, and every value of an agent-pulled call that goes without the session do not
+   count. The `source` does not matter. A call that starts at tier 3 sends no stored value (the page
+   fills its own), so there only the profile check below applies.
+3. The jar the call may send (none when the call goes without the session) holds a live, non-empty
+   cookie whose name is not known to be anonymous. Every jar cookie counts, not only those for the
+   request's URL, since a redirect, a lookup or a readback can carry any of them.
+4. The call can reach a browser tier (it starts there, or a read or a write's readback may climb
    within the cap), or the site holds a session value (session values are captured in api-anything's
    own Chrome profile), and that profile may carry a sign-in for one of the site's registrable
    domains: those of its request, lookup, trigger and inline readback hosts, or any domain when one
@@ -50,20 +56,40 @@ still valid. It is true when:
    - any site has a login on record (`source`) for one of those domains: its cookies' domains, its
      spec's hosts, or its name (`login <domain>` names a site after its host). A login puts its
      cookies into the profile every site on the domain shares.
-   - the profile holds a cookie on one of those domains whose name is a sign-in name (`AUTH_COOKIE`
-     or the spec's `loginCookies`), expired or not. Planning reads only the host and name of each
-     cookie in `Default/Network/Cookies` and `Default/Cookies`, never a value, and opens no
-     everyday-browser profile and no Keychain.
-   - planning cannot read the profile: a running Chrome, a non-empty journal or WAL, a WAL-mode
-     database (opening one would create `-shm` and `-wal` files in the profile, so it is not
-     opened), a missing database, a lock or an unknown schema. A profile that does not exist does
-     not count.
+   - the profile holds a cookie on one of those domains whose name is not known to be anonymous,
+     expired or not. Planning reads only the host and name of each cookie in
+     `Default/Network/Cookies` and `Default/Cookies`, never a value (so an empty one counts too),
+     and opens no everyday-browser profile and no Keychain.
+   - planning cannot read the profile: a running Chrome (its `SingletonLock`), a non-empty journal
+     or WAL, a WAL-mode database (opening one would create `-shm` and `-wal` files in the profile,
+     so it is not opened), a missing database, a lock or an unknown schema. A profile that does not
+     exist does not count.
 
-Nothing else counts. Anonymous cookies a signed-out response sets (Google's `NID`, consent,
-analytics and CSRF cookies), expired or empty ones, and session values with no login behind them
-leave `signedIn` false, so a call's own `Set-Cookie` does not turn the next plan signed in.
-`hostSites()` and `hostSite()` use the default cap of 3; a plan with `maxTier: 1` for a site with no
-session value does not look at the profile or at other sites' logins.
+A cookie name is known to be anonymous, in the jar and in the profile alike, when it is in the
+session's `guestCookies` (the names a signed-out visit to the site was given, recorded by `login`)
+or on one shared list, `ANONYMOUS_COOKIE` in `src/session.ts`:
+
+- analytics: `_ga`, `_ga_<id>`, `_gid`, `_gat`, `_gat_<id>`, `_fbp`
+- consent: `CONSENT`, `SOCS`, `OptanonConsent`, `OptanonAlertBoxClosed`, `euconsent`, `euconsent-v<n>`
+- bot management: `__cf_bm`, `_cfuvid`, `cf_clearance`
+- CSRF: `csrftoken`, `XSRF-TOKEN`, `_csrf`
+- Google's signed-out cookies: `NID`, `AEC`, `1P_JAR`, `__Secure-ENID`
+
+The list holds only names every visitor is given whatever their account. A login cookie never
+belongs on it: Google's `SID`, `HSID`, `SSID`, `APISID`, `SAPISID` and `__Secure-*PSID*` count, as do
+Hacker News's `user`, the framework sessions `JSESSIONID`, `PHPSESSID`, `connect.sid` and
+`session`, `sid` of any length, and `logged_in`. A name the spec pins in `loginCookies` always
+counts, even one on the list or in `guestCookies`; pinning never makes another name anonymous,
+since a pulled spec could pin a name that is never set.
+
+Nothing else counts: known-anonymous cookies, expired or empty jar cookies, and stored values no
+request of the call fills leave `signedIn` false. So a signed-out call that is given only such
+cookies, as Google gives `NID`, `AEC` and `SOCS`, leaves the next plan as it was. A signed-out
+response that sets any other cookie (a framework's visitor session such as `JSESSIONID`, which a
+login would have recorded in `guestCookies`) turns the next plan signed in, once, by design.
+`hostSites()` and `hostSite()` answer for the whole site: any of its operations, each at its starting
+tier under the default cap of 3. A plan with `maxTier: 1` for a site with no session value does not
+look at the profile or at other sites' logins.
 
 `hosts` lists known HTTP(S) hostnames from the base URL, requests, derived lookups, trigger URLs,
 soft-navigation pages, `goto` steps, and inline readbacks and their lookups/triggers.
@@ -82,10 +108,12 @@ preview and send. Generated UUID slots show `<generated:uuid>` and lookup-derive
 `<derived:path>`.
 Planning never sends a lookup and cannot know its eventual value.
 
-Session state is shown by where it comes from, not by what the session holds now: any response can
-set, rotate or drop a cookie, and a browser run captures a session value the session lacks. Every
-`cookie:` ref shows `<name>` whether or not the jar holds that cookie yet, and so does every
-`session:` ref with no stored value; at send time a ref with no value is left out as before. A
+Every `cookie:` ref shows `<name>` whether or not the jar holds that cookie yet: any response can
+set, rotate or drop a cookie, and whether one may carry an account is `signedIn`'s answer. At tiers
+1 and 2 a `session:` ref shows `<name>` only when a stored value fills it; with none it is left out
+as at send time (a header slot is dropped, a template's hole is empty), so a value stored after
+approval, a bearer for instance, changes `request` and the fingerprint as well as `signedIn`. At
+tier 3 the page fills `session:` refs itself, so one with no stored value shows `<name>` too. A
 stored value the call's filters leave out stays out of the preview. The Cookie header is a
 placeholder. At tier 1, `request` previews the materialized request, with
 `cookie: "<per-site jar cookies>"` whenever the call may send the jar's cookies (whatever the jar
@@ -105,17 +133,28 @@ Neither browser tier is an exact wire-request or account-identity preview.
 
 The fingerprint binds the tier and cap, the entire installed spec and source, args, the redacted
 request and the displayed trigger. This also catches changed write flags, triggers, readbacks and
-trust metadata. A call's own anonymous cookies and the session values its browser run captures
-change none of it, nor `signedIn`: the plan for the same args before and after such a call compares
-equal. Three things a call does can still change it: a new remembered tier; a browser tier left
-running until `closeHost()`, whose lock makes `signedIn` fail closed; and a captured value of six
-or more characters that also appears in the args or the request, which redaction then replaces.
+trust metadata. A call's own known-anonymous cookies change none of it, nor `signedIn`, and neither
+do the session values a tier-3 run captures for a plan that starts at tier 3: the plan for the same
+args before and after such a call compares equal. What a call does can still change it:
+
+- a new remembered tier;
+- a response that sets a cookie not known to be anonymous, which makes `signedIn` true;
+- a session value a browser run captures for an operation whose plan starts at tier 1 or 2, which the
+  request then shows and which makes `signedIn` true;
+- a captured value of six or more characters that also appears in the args or the request, which
+  redaction then replaces;
+- the browser a tier-2 or tier-3 run starts. It closes itself about 3 s after its last use
+  (`IDLE_CLOSE_MS` in `src/browser.ts`), or at `closeHost()`, and while it runs its `SingletonLock`
+  makes every plan that can reach the profile fail closed to `signedIn: true`. A plan approved
+  before the browser started and called while it runs, or the reverse, is refused by
+  `callPlanned`. Planning does not wait for the browser to close, so plan again once it has.
 
 `callPlanned` re-plans synchronously before `call()`. A fresh plan that differs from the approved
 one in any field (the fingerprint, the shown request or trigger, `signedIn`) returns
 `class: "refused"` without sending, with `write: "not_sent"` for writes. Credential rotation under
-the same placeholders, and anonymous cookies set or dropped, do not by themselves invalidate
-approval; a login does, through `signedIn`. Keep the plan in trusted host memory; it is not a
+the same placeholders, and known-anonymous cookies set or dropped, do not by themselves invalidate
+approval. A login, a cookie that may carry an account and a stored value the request fills do,
+through `signedIn` and, for a value, the request. Keep the plan in trusted host memory; it is not a
 signed token for accepting arbitrary plans from an untrusted client. `args` are execution inputs
 and may contain caller-provided secrets; `request` and `trigger`
 are redacted display text. Do not log the whole plan.
@@ -158,7 +197,8 @@ Own-profile cookie refresh for reads and a read's tier-3 run may refresh session
 normal transport can still record cookies from the response, and its readback is a separate read,
 not a retry of the write.
 
-`closeHost()` closes the shared browser. Host calls create no background jobs to drain.
+`closeHost()` closes the shared browser, which otherwise closes itself about 3 s after its last
+use. Host calls create no background jobs to drain.
 Finish outstanding calls before closing; this is not a write-cancellation API.
 
 ## Bun and compiled hosts

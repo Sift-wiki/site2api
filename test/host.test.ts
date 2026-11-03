@@ -150,7 +150,7 @@ const cookie = (name: string, value: string, more: Partial<StoredCookie> = {}): 
   ...more,
 });
 
-test("signedIn is a login on record: a source or a sign-in cookie, never anonymous cookies or values", () => {
+test("signedIn is a login on record or a cookie that may carry one, never known-anonymous cookies or unsent values", () => {
   const signedIn = () => hostSite("fixture")?.site.signedIn;
   const anonymous = [
     cookie("NID", "511=anonymous-preference-id"),
@@ -181,7 +181,7 @@ test("signedIn is a login on record: a source or a sign-in cookie, never anonymo
   saveSession("fixture", { cookies: [cookie("member", "pinned-login")], values: {} });
   assert.equal(signedIn(), true, "a pinned loginCookies name");
   saveSession("fixture", { cookies: [cookie("sessionid", "not-the-pinned-name")], values: {} });
-  assert.equal(signedIn(), false, "pinned loginCookies decide alone, as for call()");
+  assert.equal(signedIn(), true, "a pinned list adds names, never makes another one anonymous");
 });
 
 test("a login on another site of the same registrable domain counts where the shared profile is reachable", () => {
@@ -288,6 +288,137 @@ test("a signed-out read's own anonymous cookies leave the next plan unchanged; a
   assert.equal(applied.ok, true, JSON.stringify(applied));
   assert.equal(applied.write, "applied");
   assert.equal(fixture.calls.filter((c) => c.method === "POST").length, 1);
+});
+
+// Hacker News's login cookie is `user` (`<name>&<hash>`); Java, PHP and Express name theirs JSESSIONID,
+// PHPSESSID and connect.sid; Google's account cookies are the SID family.
+const ACCOUNT_COOKIES = [
+  cookie("user", "alice&Ab3dE5fG7hI9jK1lM3nO5pQ7rS9tU1v"),
+  cookie("JSESSIONID", "node0abc123def456ghi789.node0"),
+  cookie("PHPSESSID", "q2v6l9n3k1m8p4r7s5t0u2w4x6"),
+  cookie("connect.sid", "s%3Aabc123.def456"),
+  cookie("session", "eyJ1c2VyIjoiYWxpY2UifQ.abc"),
+  cookie("sid", "abc123"),
+  cookie("logged_in", "yes"),
+  ...[
+    "SID",
+    "HSID",
+    "SSID",
+    "APISID",
+    "SAPISID",
+    "__Secure-1PSID",
+    "__Secure-3PSID",
+    "__Secure-1PAPISID",
+    "__Secure-3PAPISID",
+    "__Secure-1PSIDTS",
+    "__Secure-3PSIDCC",
+  ].map((name) => cookie(name, "g.a000-synthetic-account-value")),
+];
+const ANONYMOUS_COOKIES = [
+  "NID",
+  "AEC",
+  "SOCS",
+  "CONSENT",
+  "1P_JAR",
+  "__Secure-ENID",
+  "_ga",
+  "_ga_ABC123XYZ",
+  "_gid",
+  "_gat",
+  "_gat_UA-12345-1",
+  "_fbp",
+  "OptanonConsent",
+  "OptanonAlertBoxClosed",
+  "euconsent-v2",
+  "__cf_bm",
+  "_cfuvid",
+  "cf_clearance",
+  "csrftoken",
+  "XSRF-TOKEN",
+  "_csrf",
+].map((name) => cookie(name, "anonymous-visitor-value"));
+
+test("any live jar cookie counts as signed in unless its name is known to be anonymous", async () => {
+  const signedIn = () => planned("search").signedIn; // maxTier 1: the jar alone
+  saveSession("fixture", { cookies: ANONYMOUS_COOKIES, values: {} });
+  assert.equal(signedIn(), false, "analytics, consent, bot-management, CSRF and Google's signed-out cookies");
+  assert.equal(hostSite("fixture")?.site.signedIn, false);
+  for (const login of ACCOUNT_COOKIES) {
+    saveSession("fixture", { cookies: [...ANONYMOUS_COOKIES, login], values: {} });
+    assert.equal(signedIn(), true, login.name);
+  }
+  saveSession("fixture", { cookies: [cookie("an-unknown-name", "x")], values: {} });
+  assert.equal(signedIn(), true, "an unknown name is no evidence of anonymity");
+  saveSession("fixture", { cookies: [ACCOUNT_COOKIES[1]!], values: {}, guestCookies: ["JSESSIONID"] });
+  assert.equal(signedIn(), false, "a name a signed-out visit to the site was given");
+  saveSite({ ...site, loginCookies: ["JSESSIONID"] });
+  assert.equal(signedIn(), true, "a pinned login name counts even when a guest is given it");
+  saveSite({ ...site, loginCookies: ["member"] });
+  saveSession("fixture", { cookies: [ACCOUNT_COOKIES[0]!], values: {} });
+  assert.equal(signedIn(), true, "a pinned name never makes another name anonymous");
+  saveSite(site);
+
+  saveSession("fixture", { cookies: ANONYMOUS_COOKIES, values: {} });
+  const write = planned("addTodo", { title: "before the login" });
+  assert.equal(write.signedIn, false);
+  saveSession("fixture", { cookies: [...ANONYMOUS_COOKIES, ACCOUNT_COOKIES[0]!], values: {} });
+  const refused = await callPlanned(write, { ...opts, allowWrites: true });
+  assert.equal(refused.class, "refused", JSON.stringify(refused));
+  assert.equal(refused.write, "not_sent");
+  assert.deepEqual(fixture.calls, []);
+});
+
+test("a stored session value the request fills counts as signed in, and its arrival refuses an approved write unsent", async () => {
+  const bearer = { ref: "session:bearer", at: ["header:authorization"] };
+  const withBearer = (op: Site["operations"][number]) => ({
+    ...op,
+    request: { ...op.request, headers: { ...op.request.headers, authorization: "" } },
+    slots: [...op.slots, bearer],
+  });
+  saveSite({ ...site, operations: site.operations.map((op) => (op.name === "todos" ? op : withBearer(op))) });
+  const write = planned("addTodo", { title: "before the token" });
+  assert.equal(write.signedIn, false);
+  assert.equal(write.request.headers.authorization, undefined, "no stored value: the header is left out, as sent");
+  const token = "Bearer synthetic-account-token-123";
+  saveSession("fixture", { cookies: [], values: { bearer: token }, valueHosts: { bearer: "127.0.0.1" } });
+  const read = planned("search");
+  assert.equal(read.signedIn, true, "no source and no cookie: the bearer alone");
+  assert.equal(read.request.headers.authorization, "<bearer>");
+  assert.equal(hostSite("fixture")?.site.signedIn, true);
+  const refused = await callPlanned(write, { ...opts, allowWrites: true });
+  assert.equal(refused.class, "refused", JSON.stringify(refused));
+  assert.equal(refused.write, "not_sent");
+  assert.equal(fixture.calls.length, 0);
+  const sent = await callPlanned(read, opts);
+  assert.equal(sent.ok, true, JSON.stringify(sent));
+  assert.equal(fixture.calls[0]?.headers.authorization, token, "the plan said signed in, and the account went");
+
+  // A value the call cannot send is none: bound to another host, or empty.
+  saveSession("fixture", { cookies: [], values: { bearer: token }, valueHosts: { bearer: "elsewhere.test" } });
+  assert.equal(planned("search").signedIn, false);
+  saveSession("fixture", { cookies: [], values: { bearer: "" }, valueHosts: { bearer: "127.0.0.1" } });
+  assert.equal(planned("search").signedIn, false);
+  // A write's readback read is sent with the session too.
+  saveSite({ ...site, operations: site.operations.map((op) => (op.name === "todos" ? withBearer(op) : op)) });
+  saveSession("fixture", { cookies: [], values: { bearer: token }, valueHosts: { bearer: "127.0.0.1" } });
+  assert.equal(planned("addTodo", { title: "read back with a token" }).signedIn, true);
+});
+
+test("an own-profile cookie on the site's domains counts unless its name is known to be anonymous", () => {
+  profileDb().close();
+  const only = (name: string) => {
+    const db = new DatabaseSync(join(home, "profile", "Default/Network/Cookies"));
+    db.exec("DELETE FROM cookies");
+    db.prepare("INSERT INTO cookies VALUES(?, ?)").run("127.0.0.1", name);
+    db.close();
+    return hostSite("fixture")?.site.signedIn;
+  };
+  for (const name of ["an-unknown-name", ...ACCOUNT_COOKIES.map((c) => c.name)]) assert.equal(only(name), true, name);
+  for (const { name } of ANONYMOUS_COOKIES) assert.equal(only(name), false, name);
+  saveSession("fixture", { cookies: [], values: {}, guestCookies: ["JSESSIONID"] });
+  assert.equal(only("JSESSIONID"), false, "a name a signed-out visit to the site was given");
+  saveSite({ ...site, loginCookies: ["JSESSIONID"] });
+  assert.equal(only("JSESSIONID"), true, "a pinned login name");
 });
 
 test("a session: ref shows its placeholder before a tier-3 run first captures its value", () => {
@@ -933,6 +1064,8 @@ test("signedIn checks own-profile cookie names across registrable domains withou
     [".api.example.co.uk", "CONSENT"],
     [".api.example.co.uk", "csrftoken"],
   ]);
+  // A signed-out visit to the fixture was recorded being given `guest`.
+  saveSession("fixture", { cookies: [], values: {}, guestCookies: ["guest"] });
   saveSite({
     ...site,
     name: "sibling",
@@ -945,11 +1078,13 @@ test("signedIn checks own-profile cookie names across registrable domains withou
       },
     ],
   });
-  assert.equal(hostSite("fixture")?.site.signedIn, false, "anonymous cookie names are no sign-in");
+  assert.equal(hostSite("fixture")?.site.signedIn, false, "known-anonymous and recorded guest names are no sign-in");
   assert.equal(hostSite("sibling")?.site.signedIn, false);
   saveSite({ ...site, loginCookies: ["guest"] });
   assert.equal(hostSite("fixture")?.site.signedIn, true, "a pinned loginCookies name counts by name");
   saveSite(site);
+  rmSync(sessionFile("fixture"));
+  assert.equal(hostSite("fixture")?.site.signedIn, true, "with no recorded guest list, `guest` is an unknown name");
   insert([
     ["127.0.0.1", "sessionid"],
     [".api.example.co.uk", "__Secure-1PSID"],

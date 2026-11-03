@@ -3,7 +3,7 @@ import { closeSync, lstatSync, openSync, readSync } from "node:fs";
 import { join } from "node:path";
 import { siteOf } from "./domain.js";
 import { profileDir } from "./heal.js";
-import { AUTH_COOKIE } from "./session.js";
+import { mayCarryAccount } from "./session.js";
 import { openReadOnly } from "./sqlite.js";
 
 /** Whether `path` may be there: only ENOENT says no. `nonempty`: an empty file does not count. */
@@ -24,16 +24,16 @@ const COOKIE_DBS = [
 
 /**
  * Whether the profile may hold a sign-in on one of the hosts' sites (any site when there are none): a
- * cookie named like a login (`AUTH_COOKIE`, or one of `loginCookies`), even an expired one, or a profile
- * it cannot read. An anonymous cookie (NID, a consent or CSRF cookie) is no sign-in.
+ * cookie whose name is not known to be anonymous (`mayCarryAccount`), even an expired or empty one, since
+ * values are never read; or a profile it cannot read.
  */
-export function profileSignedIn(hosts: string[], loginCookies: string[] = []): boolean {
+export function profileSignedIn(hosts: string[], loginCookies: string[] = [], guest: string[] = []): boolean {
   const dir = profileDir();
   if (!present(dir)) return false;
   // A running Chrome may not have flushed new cookies yet.
   if (present(join(dir, "SingletonLock"))) return true;
   const domains = new Set(hosts.map(siteOf));
-  const login = (name: string) => AUTH_COOKIE.test(name) || loginCookies.includes(name);
+  const login = (name: string) => mayCarryAccount(name, loginCookies, guest);
   const files = COOKIE_DBS.map((parts) => join(dir, ...parts)).filter((file) => present(file));
   if (!files.length) return true;
   return files.some((file) => holdsLogin(file, domains, login));
