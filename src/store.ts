@@ -53,11 +53,11 @@ export interface Resolved {
   path: string;
 }
 
-const specDirs = (bundledDir: string) =>
+const specDirs = (bundled: string) =>
   [
     [userSitesDir(), "user"],
     [registryDir(), "registry"],
-    [bundledDir, "bundled"],
+    [bundled, "bundled"],
   ] as const;
 
 export function loadSite(name: string, directory = bundledDir()): Resolved | undefined {
@@ -350,15 +350,16 @@ export function clearCoolDown(site: string): void {
 
 const paceFile = () => join(home(), "pace.json");
 const ownSlots = new Map<string, number>();
+/** A gap between two sends is the interval ± this share of it: an exact period is a robot's. */
+export const PACE_JITTER = 0.3;
 
 /**
  * Reserve the next moment a request may go to `site`, and move the site's slot on by the interval
- * ±30% (an exact period is a robot's). The slots are kept in pace.json under its lock, so separate
- * processes (a CLI loop, agents in parallel) queue up too; a home that cannot be written paces this
- * process only.
+ * ±`PACE_JITTER`. The slots are kept in pace.json under its lock, so separate processes (a CLI loop,
+ * agents in parallel) queue up too; a home that cannot be written paces this process only.
  */
 export function reserveSend(site: string, intervalMs: number, now = Date.now()): number {
-  const gap = Math.round(intervalMs * (0.7 + Math.random() * 0.6));
+  const gap = Math.round(intervalMs * (1 - PACE_JITTER + Math.random() * 2 * PACE_JITTER));
   try {
     return withLock(paceFile(), () => {
       let slots: Record<string, unknown>;

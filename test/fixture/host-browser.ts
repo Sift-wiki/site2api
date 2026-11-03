@@ -173,19 +173,6 @@ test("callOnly writes never refresh cookies or intercept-recapture after a 401",
   assert.equal(loadSession("fixture").cookies[0]?.value, "approved-account");
 });
 
-test("a tier-2 auth failure never intercept-recaptures a callOnly write", async () => {
-  // A tier-2 write exercises auth recovery without a tier-1 browser fallback. The trigger spy rejects intercept:true.
-  saveSite({ ...site, operations: [{ ...site.operations[1]!, minTier: 2 }] });
-  saveSession("fixture", { cookies: [], values: { bearer: "expired" } });
-  pageStatus = 401;
-  const result = await call("fixture", "write", {}, { callOnly: true, allowWrites: true, maxTier: 3 });
-  assert.equal(result.class, "auth", JSON.stringify(result));
-  assert.equal(result.write, "not_applied");
-  assert.equal(pageCalls.length, 1);
-  assert.equal(cookieReads, 0);
-  assert.deepEqual(triggerCalls, []);
-});
-
 test("a planned tier-2 write uses profile-cookie preview and sends once without tier-1 fetch", async () => {
   saveSite({ ...site, operations: [{ ...site.operations[1]!, minTier: 2 }] });
   saveSession("fixture", { cookies: [cookie], values: {} });

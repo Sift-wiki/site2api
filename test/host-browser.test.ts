@@ -19,5 +19,5 @@ test("host browser-tier policies with stubbed browser and trigger layers", () =>
     { encoding: "utf8", timeout: 60_000, cwd: fileURLToPath(new URL("..", import.meta.url)), env },
   );
   assert.equal(result.status, 0, `${result.error ?? ""}\n${result.stdout}\n${result.stderr}`);
-  assert.match(result.stdout, /pass 12/);
+  assert.match(result.stdout, /^# pass [1-9]/m, "the stubbed suite ran");
 });

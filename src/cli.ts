@@ -47,7 +47,7 @@ import { pull, RegistryError, reportInterface, search } from "./registry.js";
 import { settle } from "./report.js";
 import { getResult, type ResultView, viewProblem } from "./results.js";
 import { captureLive, redact } from "./secrets.js";
-import { loadSession } from "./session.js";
+import { loadSession, placeholders } from "./session.js";
 import { AGENTS, type Agent, askYesNo, setup, summary } from "./setup.js";
 import { shareOps } from "./share.js";
 import { refreshSkills } from "./skill.js";
@@ -1127,13 +1127,8 @@ async function cmdCall({ v, pos }: Parsed): Promise<number> {
     if (!op) throw new Fail(`no operation "${name}" on ${site}`, `api-anything ops ${site}`);
     const unknown = unknownArgs(op, args);
     if (unknown) throw new Fail(unknown, `api-anything ops ${site}`);
-    const real = loadSession(site);
-    // Placeholders in place of every credential, so --dry output is safe to paste anywhere.
-    const redacted = {
-      cookies: real.cookies.map((c) => ({ ...c, value: `<${c.name}>` })),
-      values: Object.fromEntries(Object.keys(real.values).map((k) => [k, `<${k}>`])),
-    };
-    out({ ok: true, dry: true, request: buildRequest(op, args, redacted), ...(pulled ? { pulled: site } : {}) });
+    const request = buildRequest(op, args, placeholders(loadSession(site)));
+    out({ ok: true, dry: true, request, ...(pulled ? { pulled: site } : {}) });
     return 0;
   }
   const maxTier = v["max-tier"] ? (Number(v["max-tier"]) as Tier) : undefined;

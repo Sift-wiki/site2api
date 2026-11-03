@@ -1,6 +1,6 @@
 /**
- * Offline package-resolution and compiled-host smoke check. Run with:
- * BUN=~/.local/share/bun-1.4.4/bun node --import tsx test/smoke-host-bun.ts
+ * Offline package-resolution and compiled-host smoke check (docs/HOST.md). Run with
+ * `node --import tsx test/smoke-host-bun.ts`; set BUN to a Bun that is not on PATH.
  */
 import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
@@ -24,7 +24,7 @@ import assert from "node:assert/strict";
 import { mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { hostSites, hostSite, planCall, closeHost, setBundledDir } from "api-anything/host";
+import { callPlanned, hostSites, hostSite, planCall, closeHost, setBundledDir } from "api-anything/host";
 if (!process.env.COMPILED) {
   assert.match(import.meta.resolve("api-anything/host"), /src\\/host\\.ts$/);
 } else {
@@ -64,8 +64,33 @@ assert.equal(plan.signedIn, true);
 assert.equal(hostSite("hacker-news").site.signedIn, true);
 assert.deepEqual(readdirSync(profile).sort(), walFiles);
 assert.deepEqual(readFileSync(cookieFile), walBytes);
+// The approval comparison under Bun: a changed preview sends nothing, the approved plan sends once.
+mkdirSync(join(process.env.API_ANYTHING_HOME, "sites"), { recursive: true });
+writeFileSync(join(process.env.API_ANYTHING_HOME, "sites", "local.json"), JSON.stringify({
+  name: "local",
+  baseUrl: "http://127.0.0.1",
+  operations: [{
+    name: "read",
+    readOnly: true,
+    request: { method: "GET", url: "http://127.0.0.1/api/items", headers: {} },
+    trigger: { url: "http://127.0.0.1/items" },
+  }],
+}));
+const approved = planCall("local", "read", {}, { maxTier: 1 });
+assert.ok(approved.ok, JSON.stringify(approved));
+let sends = 0;
+const fetchImpl = async () => {
+  sends++;
+  return new Response('{"items":[1]}', { headers: { "content-type": "application/json" } });
+};
+const changed = await callPlanned({ ...approved, request: { ...approved.request, url: "http://127.0.0.1/other" } }, { fetchImpl });
+assert.equal(changed.class, "refused");
+assert.equal(sends, 0);
+const sent = await callPlanned(approved, { fetchImpl });
+assert.ok(sent.ok, JSON.stringify(sent));
+assert.equal(sends, 1);
 await closeHost();
-console.log(JSON.stringify({ runtime: Bun.version, compiled: !!process.env.COMPILED, sites: sites.length, profileChecks: 5 }));
+console.log(JSON.stringify({ runtime: Bun.version, compiled: !!process.env.COMPILED, sites: sites.length }));
 `,
   );
   const env = { ...process.env, API_ANYTHING_HOME: join(scratch, "home") };

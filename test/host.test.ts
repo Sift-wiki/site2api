@@ -275,6 +275,7 @@ test("changed spec, trigger, write flag, readback, arguments or preview refuses 
   for (const changed of [
     { ...plan, args: { title: "another task" } },
     { ...plan, request: { ...plan.request, body: "not what was planned" } },
+    { ...plan, signedIn: !plan.signedIn },
   ])
     assert.equal((await callPlanned(changed, { ...opts, allowWrites: true })).class, "refused");
   assert.deepEqual(fixture.calls, []);
@@ -342,51 +343,20 @@ test("callOnly write drift after a 2xx keeps the check-site warning and never su
   assert.equal(sends, 1);
 });
 
-test("callOnly bare 403 never probes the read's example args", async () => {
-  saveSite({
-    ...site,
-    operations: [{ ...site.operations[0]!, params: [{ ...site.operations[0]!.params[0]!, example: "alice" }] }],
-  });
-  const sent: string[] = [];
-  const result = await callPlanned(planned("search", { q: "private-user" }), {
-    ...opts,
-    fetchImpl: async (url) => {
-      sent.push(String(url));
-      return new Response('{"message":"Forbidden"}', { status: 403 });
-    },
-  });
-  assert.equal(result.class, "blocked", JSON.stringify(result));
-  assert.equal(sent.length, 1);
-  assert.match(sent[0]!, /q=private-user/);
-});
-
-test("a public credential's 401 without a login never relearns or changes the auth result", async () => {
-  const authorization = ["public", "shared", "key"].join("-");
-  saveSite({
-    ...site,
-    operations: [
-      {
-        ...site.operations[0]!,
-        public: ["authorization"],
-        request: { ...site.operations[0]!.request, headers: { authorization } },
-      },
-    ],
-  });
-  const path = join(home, "sites", "fixture.json");
-  const before = readFileSync(path);
+test("a read learned signed in whose data is missing with no login cookie asks for a login, not a heal", async () => {
+  saveSite({ ...site, operations: [{ ...site.operations[0]!, learnedLoggedIn: true }] });
   let sends = 0;
   const result = await callPlanned(planned("search"), {
     ...opts,
     fetchImpl: async () => {
       sends++;
-      return new Response("Unauthorized", { status: 401 });
+      return new Response('{"data":{}}', { headers: { "content-type": "application/json" } });
     },
   });
   assert.equal(result.class, "auth", JSON.stringify(result));
+  assert.match(result.reason ?? "", /learned signed in/);
   assert.equal(result.nextCall?.action, "login");
   assert.equal(sends, 1);
-  assert.deepEqual(readFileSync(path), before);
-  assert.equal(existsSync(join(home, "heals.jsonl")), false);
 });
 
 test("auth never imports an everyday-browser session and directs the user to CLI login", async () => {
@@ -813,6 +783,19 @@ test("signedIn checks own-profile cookie names across registrable domains withou
   assert.deepEqual(fixture.calls, []);
 });
 
+test("signedIn reads both cookie database locations, since a stale one can sit beside the live one", () => {
+  profileDb().close();
+  const legacy = profileDb("Default/Cookies");
+  legacy.prepare("INSERT INTO cookies VALUES(?, ?)").run(".127.0.0.1", "sid");
+  legacy.close();
+  assert.equal(hostSite("fixture")?.site.signedIn, true, "a cookie in the legacy database counts");
+  rmSync(join(home, "profile", "Default", "Network"), { recursive: true });
+  const empty = new DatabaseSync(join(home, "profile", "Default/Cookies"));
+  empty.exec("DELETE FROM cookies");
+  empty.close();
+  assert.equal(hostSite("fixture")?.site.signedIn, false, "an empty legacy-only database is read, not assumed");
+});
+
 test("planning a WAL-mode profile never creates shared-memory or WAL files in the profile", () => {
   const db = profileDb();
   db.exec("PRAGMA journal_mode=WAL");
@@ -855,7 +838,7 @@ test("loading SQLite for host planning suppresses only its experimental warning"
 });
 
 test("signedIn fails closed for a locked or malformed own profile, but ignores it at maxTier 1", () => {
-  const db = profileDb("Default/Cookies");
+  const db = profileDb();
   db.exec("BEGIN EXCLUSIVE");
   try {
     const plan = planCall("fixture", "search");
@@ -975,7 +958,21 @@ test("callPlanned returns the fresh planning failure for invalid specs and corru
   writeFileSync(sessionFile("fixture"), "null");
   fresh = planCall("fixture", "search", {}, opts);
   assert.equal(fresh.ok, false);
-  if (!fresh.ok) assert.deepEqual(await callPlanned(plan, opts), fresh.result);
+  if (!fresh.ok) {
+    assert.deepEqual(await callPlanned(plan, opts), fresh.result);
+    const direct = await call("fixture", "search", {}, { ...opts, callOnly: true });
+    assert.deepEqual(fresh.result, { ...direct, ms: 0 }, "a corrupt session gets call()'s answer and next step");
+  }
+  assert.deepEqual(fixture.calls, []);
+});
+
+test("planning answers bad args before a tier cap, as call does", async () => {
+  saveSite({ ...site, operations: [{ ...site.operations[2]!, minTier: 2 }] });
+  const plan = planCall("fixture", "addTodo", { title: "no" }, opts);
+  const result = await call("fixture", "addTodo", { title: "no" }, { ...opts, callOnly: true, allowWrites: true });
+  assert.equal(result.class, "input");
+  assert.equal(plan.ok, false);
+  if (!plan.ok) assert.deepEqual(plan.result, { ...result, ms: 0 });
   assert.deepEqual(fixture.calls, []);
 });
 

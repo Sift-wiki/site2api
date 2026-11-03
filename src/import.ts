@@ -14,27 +14,12 @@
 import { execFileSync } from "node:child_process";
 import { createDecipheriv, pbkdf2Sync } from "node:crypto";
 import { copyFileSync, existsSync, mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
-import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { AUTH_COOKIE, siteOf } from "./session.js";
+import { openReadOnly } from "./sqlite.js";
 import type { StoredCookie } from "./types.js";
-
-// node:sqlite is still flagged "experimental" and prints a warning on first use; drop just that one.
-const realEmitWarning = process.emitWarning.bind(process);
-process.emitWarning = ((w: unknown, ...rest: unknown[]) => {
-  const msg = typeof w === "string" ? w : (w as Error)?.message;
-  if (typeof msg === "string" && msg.includes("SQLite is an experimental")) return;
-  return (realEmitWarning as (...a: unknown[]) => void)(w, ...rest);
-}) as typeof process.emitWarning;
-
-// Loaded on first use, after the filter above: a static import would warn before this module body runs.
-let sqlite: typeof import("node:sqlite") | undefined;
-const openDb = (file: string) => {
-  sqlite ??= createRequire(import.meta.url)("node:sqlite") as typeof import("node:sqlite");
-  return new sqlite.DatabaseSync(file, { readOnly: true });
-};
 
 /** One installed browser to scan. Tests inject these via API_ANYTHING_BROWSER_ROOTS. */
 export interface BrowserRoot {
@@ -152,7 +137,7 @@ function withDb<T>(dbPath: string, fn: (db: DatabaseSync) => T): T {
     copyFileSync(dbPath, copy);
     for (const ext of ["-wal", "-journal", "-shm"])
       if (existsSync(dbPath + ext)) copyFileSync(dbPath + ext, copy + ext);
-    const db = openDb(copy);
+    const db = openReadOnly(copy);
     try {
       return fn(db);
     } finally {

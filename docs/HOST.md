@@ -34,19 +34,15 @@ Blocked plans use the same recovery step as `call()`: ordinary caps ask to raise
 an agent-pulled candidate needing tier 3 asks for a human's review and CLI pull, not a higher cap.
 
 `signedIn` is a caution, not proof of a valid login. Any stored cookie or session value counts,
-even an expired, empty or guest value. If the call can use browser tiers, planning also checks
-api-anything's own Chrome profile for cookie names on the site's registrable domains, including
-request, lookup, trigger and inline readback domains. It reads only `host_key` and `name` from
-the profile's Cookies SQLite database, read-only, without decryption or Keychain access.
-A running, locked, unreadable or incomplete existing profile counts as signed in, as does a
-non-empty cookie journal or WAL. Empty sidecars do not count. A WAL-mode database also counts
-conservatively, detected from its file header without opening SQLite, so planning never creates
-`-shm` or `-wal` files in the profile. Other databases are opened read-only, with SQLite's
-experimental warning suppressed. A nonexistent profile does not. No everyday-browser profile is
-opened. `hostSites()` and `hostSite()` use the default cap of 3; a plan with `maxTier: 1` does
-not inspect the profile. A write planned at tier 1 cannot climb, but its readback can still use the
-approved cap. When a URL's origin cannot be resolved offline, any cookie in the own profile counts
-conservatively, rather than assuming that an omitted hostname is signed out.
+even an expired, empty or guest one. When the call can reach a browser tier (it starts there, or a
+read or a write's readback may climb within the cap), planning also looks in api-anything's own
+Chrome profile for a cookie on the site's registrable domains: request, lookup, trigger and inline
+readback hosts, or any domain when one of those origins is templated. It reads the cookie hosts of
+`Default/Network/Cookies`, never a value, and opens no everyday-browser profile and no Keychain.
+What it cannot read counts as signed in: a running Chrome, a non-empty journal or WAL, a WAL-mode
+database (opening one would create `-shm` and `-wal` files in the profile, so it is not opened), a
+missing database, a lock or an unknown schema. A profile that does not exist does not count.
+`hostSites()` and `hostSite()` use the default cap of 3; a plan with `maxTier: 1` does not look.
 
 `hosts` lists known HTTP(S) hostnames from the base URL, requests, derived lookups, trigger URLs,
 soft-navigation pages, `goto` steps, and inline readbacks and their lookups/triggers.
@@ -56,8 +52,9 @@ URLs, non-HTTP(S) URLs and unparseable entries are omitted, never represented wi
 hostname. An omitted URL does not drop its site from discovery. These are discovery hints, not an
 exhaustive list of resources or redirects a page can load.
 
-`planCall` validates args and headers without sending. Its credential placeholders follow CLI
-`--dry`, with a further live-value redaction pass for copies in arguments or literals. It applies
+`planCall` validates args and headers without sending, and answers bad args, an unreadable session
+or a tier above the cap as `call()` would, in the same order. Its credential placeholders are CLI
+`--dry`'s, with a further live-value redaction pass for copies in arguments or literals. It applies
 execution's session filters without saving them: unbound values in someone else's spec and all
 session credentials disallowed for an agent-pulled operation are absent in both preview and send.
 Generated UUID slots show `<generated:uuid>` and lookup-derived slots show `<derived:path>`.
@@ -76,12 +73,13 @@ The host must show that trigger, including confirms and companions, as well as t
 obtaining write approval.
 Neither browser tier is an exact wire-request or account-identity preview.
 
-The fingerprint binds the tier and cap, the entire installed spec and source, args, the template
-hash, the redacted request and the displayed trigger. This also catches changed write flags,
-triggers, readbacks and trust metadata.
+The fingerprint binds the tier and cap, the entire installed spec and source, args, the redacted
+request and the displayed trigger. This also catches changed write flags, triggers, readbacks and
+trust metadata.
 
-`callPlanned` re-plans synchronously before `call()`. A changed fingerprint or modified preview
-returns `class: "refused"` without sending, with `write: "not_sent"` for writes. Credential
+`callPlanned` re-plans synchronously before `call()`. A fresh plan that differs from the approved
+one in any field (the fingerprint, the shown request or trigger, `signedIn`) returns
+`class: "refused"` without sending, with `write: "not_sent"` for writes. Credential
 rotation under the same placeholders does not by itself invalidate approval. Keep the plan in
 trusted host memory; it is not a signed token for accepting arbitrary plans from an untrusted
 client. `args` are execution inputs and may contain caller-provided secrets; `request` and `trigger`
@@ -102,7 +100,8 @@ Host calls always set `CallOptions.callOnly`. Direct library callers can also se
 - No rescan, recapture, operation replacement, registry adoption or bundled upgrades.
 - No registry calls, reports, sharing, verification jobs or other background work.
 - No cookie import from the user's everyday browser. An auth failure asks the user to run
-  `api-anything login <site>`. A read's drift asks for `api-anything heal <site> <op>`.
+  `api-anything login <site>`. A read's drift asks for `api-anything heal <site> <op>`, unless the
+  read was learned signed in and no login cookie is stored: that is `auth`, as for `call()`.
   A write's drift asks for `api-anything add <site> <op> ... --write`, never `heal`.
 - Site spec files remain byte-identical. Calls still update local sessions, pacing, cool-downs,
   remembered tiers, the write ledger, call log and capped-result storage.
@@ -122,8 +121,7 @@ Host calls always set `CallOptions.callOnly`. Direct library callers can also se
 
 Own-profile cookie refresh for reads and a read's tier-3 run may refresh session values. A write's
 normal transport can still record cookies from the response, and its readback is a separate read,
-not a retry of the write. These choices keep calling intact without learning or importing an
-everyday-browser session. CLI calls without `callOnly` retain their existing behavior.
+not a retry of the write.
 
 `closeHost()` closes the shared browser. Host calls create no background jobs to drain.
 Finish outstanding calls before closing; this is not a write-cancellation API.
@@ -141,8 +139,9 @@ extraction and cleanup; the library never extracts or downloads specs.
 Keep `playwright-core` external when compiling, and make it available at runtime for browser tiers.
 Its optional BiDi dependencies and browser-driver assets are not a self-contained Bun bundle.
 
-Run the offline scratch-directory source-import and compiled-binary check with:
+Run the offline scratch-directory source-import and compiled-binary check with (`BUN` names a Bun
+that is not on PATH):
 
 ```sh
-BUN=~/.local/share/bun-1.4.4/bun node --import tsx test/smoke-host-bun.ts
+node --import tsx test/smoke-host-bun.ts
 ```

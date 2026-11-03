@@ -3,10 +3,12 @@
  * and sharing remain CLI workflows. This module never installs specs or starts background work.
  */
 import { createHash } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
 import { closeBrowser } from "./browser.js";
 import { setAt } from "./codec.js";
 import { describeOperation, type OperationDescription } from "./describe.js";
 import {
+  badSession,
   bareCall,
   type CallOptions,
   type CallResult,
@@ -18,14 +20,15 @@ import {
   resolveCall,
   type Tier,
   tierBlocked,
+  unsendable,
 } from "./execute.js";
 import { fillTrigger } from "./heal.js";
 import { buildRequest, unknownArgs, withDefaults } from "./http.js";
 import { profileSignedIn } from "./profile-state.js";
 import { captureLive, redact } from "./secrets.js";
-import { loadSession, type Session } from "./session.js";
-import type { Operation, Request, Trigger } from "./spec.js";
-import { listSites, loadSite, type Resolved, rememberedTier, siteNotes, templateHash } from "./store.js";
+import { loadSession, placeholders, type Session } from "./session.js";
+import type { Operation, Request, Site, Trigger } from "./spec.js";
+import { listSites, loadSite, type Resolved, rememberedTier, siteNotes } from "./store.js";
 
 /** A callable operation and the trigger-page prefixes a host can match against browser URLs. */
 export interface HostOperation {
@@ -69,6 +72,8 @@ export type CallPlan =
     }
   | { ok: false; result: CallResult };
 
+type ReadyPlan = Extract<CallPlan, { ok: true }>;
+
 /** Host controls only transport and write permission, never healing, force or duplicate overrides. */
 export type HostCallOptions = Pick<
   CallOptions,
@@ -109,6 +114,8 @@ function urlsOf(op: Pick<Operation, "request" | "trigger" | "slots"> & Partial<P
   ];
 }
 
+const siteUrls = (site: Site) => [site.baseUrl, ...site.operations.flatMap(urlsOf)];
+
 function hostnames(urls: string[]): string[] {
   return [
     ...new Set(
@@ -120,24 +127,20 @@ function hostnames(urls: string[]): string[] {
   ];
 }
 
-const hostsOf = (r: Pick<Resolved, "site">) => hostnames([r.site.baseUrl, ...r.site.operations.flatMap(urlsOf)]);
-
-/** Unknown template origins could use any of the profile's sites; do not claim they are signed out. */
-function profileHostsOf(r: Pick<Resolved, "site">): string[] {
-  const urls = [r.site.baseUrl, ...r.site.operations.flatMap(urlsOf)];
-  return urls.some((url) => !staticUrl(url)) ? [] : hostnames(urls);
-}
-
-function signedIn(s: Session, hosts: string[], browser: boolean): boolean {
-  return s.cookies.length > 0 || Object.keys(s.values).length > 0 || (browser && profileSignedIn(hosts));
+function signedIn(s: Session, site: Site, browser: boolean): boolean {
+  if (s.cookies.length > 0 || Object.keys(s.values).length > 0) return true;
+  if (!browser) return false;
+  const urls = siteUrls(site);
+  // A templated origin could be any site in the profile: no host list, so any cookie counts.
+  return profileSignedIn(urls.some((url) => !staticUrl(url)) ? [] : hostnames(urls));
 }
 
 function summary(r: Resolved): HostSite {
   return {
     name: r.site.name,
     source: r.source === "registry" ? "pulled" : r.source,
-    hosts: hostsOf(r),
-    signedIn: signedIn(loadSession(r.site.name), profileHostsOf(r), r.site.operations.length > 0),
+    hosts: hostnames(siteUrls(r.site)),
+    signedIn: signedIn(loadSession(r.site.name), r.site, r.site.operations.length > 0),
     operations: r.site.operations.map((op) => ({
       name: op.name,
       readOnly: op.readOnly,
@@ -173,6 +176,65 @@ export function hostSite(
   };
 }
 
+const refused = (r: Omit<CallResult, "ms">, op?: Operation, site?: string): CallPlan => ({
+  ok: false,
+  result: { ...finish(r, op, site, []), ms: 0 },
+});
+
+/** The request as a host shows it: placeholders for credentials, generated values and looked-up values. */
+function previewRequest(
+  site: Site,
+  op: Operation,
+  args: Record<string, unknown>,
+  session: Session,
+  tier: Tier,
+  hide: (text: string) => string,
+): Request {
+  let req = buildRequest(op, args, placeholders(session), "host-preview");
+  for (const slot of op.slots) {
+    if (slot.gen) req = setAt(req, slot.at, "<generated:uuid>");
+    if (slot.from) req = setAt(req, slot.at, `<derived:${slot.path}>`);
+  }
+  if (tier >= 2) {
+    delete req.headers.cookie;
+    // The page, not the per-site jar, chooses cookies. Do not imply the jar's account will be used.
+    if (tier === 3 || !bareCall(site, op)) req.headers.cookie = "<browser-profile cookies>";
+  }
+  return {
+    method: hide(req.method),
+    url: hide(req.url),
+    headers: Object.fromEntries(Object.entries(req.headers).map(([k, v]) => [hide(k), hide(v)])),
+    ...(req.body !== undefined ? { body: hide(req.body) } : {}),
+  };
+}
+
+/** What a tier-3 run will do: the filled page and steps, the confirms it may accept, the companions it lets go. */
+function previewTrigger(
+  op: Operation,
+  args: Record<string, unknown>,
+  hide: (text: string) => string,
+): NonNullable<ReadyPlan["trigger"]> {
+  const { url, softFrom, steps } = fillTrigger(op.trigger, args);
+  const { confirms, companions } = op.trigger;
+  return {
+    url: hide(url),
+    ...(softFrom ? { softFrom: hide(softFrom) } : {}),
+    ...(steps
+      ? {
+          steps: steps.map((s) => ({
+            ...s,
+            ...(s.selector !== undefined ? { selector: hide(s.selector) } : {}),
+            ...(s.value !== undefined ? { value: hide(s.value) } : {}),
+          })),
+        }
+      : {}),
+    ...(confirms ? { confirms: { count: confirms.length, steps: confirms.map((c) => c.step) } } : {}),
+    ...(companions
+      ? { companions: companions.map((c) => Object.fromEntries(Object.entries(c).map(([k, v]) => [k, hide(v)]))) }
+      : {}),
+  };
+}
+
 /** Build a redacted preview and approval hash. No requests, file writes or browser launch. */
 export function planCall(
   site: string,
@@ -181,116 +243,49 @@ export function planCall(
   opts: HostPlanOptions = {},
 ): CallPlan {
   const found = resolveCall(site, op);
-  if ("ok" in found) return { ok: false, result: { ...finish(found, undefined, undefined, []), ms: 0 } };
-  const fail = (reason: string, cls: "input" | "error" = "input"): CallPlan => ({
-    ok: false,
-    result: {
-      ...finish(
-        { ok: false, class: cls, reason, next: `check the args against: api-anything ops ${found.site.name}` },
-        found.op,
-        found.site.name,
-        [],
-      ),
-      ms: 0,
-    },
-  });
+  if ("ok" in found) return refused(found);
+  const name = found.site.name;
+  const refuse = (r: Omit<CallResult, "ms">) => refused(r, found.op, name);
+  const input = (reason: string) =>
+    refuse({ ok: false, class: "input", reason, next: `check the args against: api-anything ops ${name}` });
   if (
     args === null ||
     typeof args !== "object" ||
     (Object.getPrototypeOf(args) !== Object.prototype && Object.getPrototypeOf(args) !== null)
   )
-    return fail("args must be a plain object");
-  if (opts.maxTier !== undefined && ![1, 2, 3].includes(opts.maxTier)) return fail("maxTier must be 1, 2 or 3");
+    return input("args must be a plain object");
+  if (opts.maxTier !== undefined && ![1, 2, 3].includes(opts.maxTier)) return input("maxTier must be 1, 2 or 3");
   const unknown = unknownArgs(found.op, args);
-  if (unknown) return fail(unknown);
+  if (unknown) return input(unknown);
   let session: Session;
   try {
-    session = loadSession(found.site.name);
+    session = loadSession(name);
   } catch (e) {
-    return fail(e instanceof Error ? e.message : "could not load session", "error");
+    return refuse(badSession(name, e));
   }
   try {
-    const { tier, maxTier } = callTiers(
-      found.site,
-      found.op,
-      opts.maxTier,
-      rememberedTier(found.site.name, found.op.name),
-    );
-    if (tier > maxTier)
-      return {
-        ok: false,
-        result: {
-          ...finish(tierBlocked(found.site, found.op, { tier, maxTier }, opts.maxTier), found.op, found.site.name, []),
-          ms: 0,
-        },
-      };
-    const unsafeWrite = callOnlyWriteRefusal(found.site.name, found.op, tier);
-    if (unsafeWrite) return { ok: false, result: { ...finish(unsafeWrite, found.op, found.site.name, []), ms: 0 } };
     args = structuredClone(withDefaults(found.op, args));
     const effective = callSession(found.site, found.op, session, found.theirs);
-    // Validate live headers too: replacing a credential first could hide a BadHeader refusal.
+    // Live values, as call() checks them: a placeholder in a credential's place could hide a BadHeader.
     buildRequest(found.op, args, effective, "host-preview");
-    const placeholders: Session = {
-      ...effective,
-      cookies: effective.cookies.map((c) => ({ ...c, value: `<${c.name}>` })),
-      values: Object.fromEntries(Object.keys(effective.values).map((k) => [k, `<${k}>`])),
-    };
-    let req = buildRequest(found.op, args, placeholders, "host-preview");
-    for (const slot of found.op.slots) {
-      if (slot.gen) req = setAt(req, slot.at, "<generated:uuid>");
-      if (slot.from) req = setAt(req, slot.at, `<derived:${slot.path}>`);
-    }
-    if (tier >= 2) {
-      delete req.headers.cookie;
-      // The page, not the per-site jar, chooses cookies. Do not imply the jar's account will be used.
-      if (tier === 3 || !bareCall(found.site, found.op)) req.headers.cookie = "<browser-profile cookies>";
-    }
+    const { tier, maxTier } = callTiers(found.site, found.op, opts.maxTier, rememberedTier(name, found.op.name));
+    if (tier > maxTier) return refuse(tierBlocked(found.site, found.op, { tier, maxTier }, opts.maxTier));
+    const unsafeWrite = callOnlyWriteRefusal(name, found.op, tier);
+    if (unsafeWrite) return refuse(unsafeWrite);
     // A caller's arg or a stored literal can echo a live value outside a credential slot.
     const live = captureLive({ cookies: session.cookies, storage: session.values });
     const hide = (text: string) => redact(text, live, { named: true });
-    const request: Request = {
-      method: hide(req.method),
-      url: hide(req.url),
-      headers: Object.fromEntries(Object.entries(req.headers).map(([k, v]) => [hide(k), hide(v)])),
-      ...(req.body !== undefined ? { body: hide(req.body) } : {}),
-    };
-    const filled = tier === 3 ? fillTrigger(found.op.trigger, args) : undefined;
-    const trigger: Extract<CallPlan, { ok: true }>["trigger"] = filled && {
-      url: hide(filled.url),
-      ...(filled.softFrom ? { softFrom: hide(filled.softFrom) } : {}),
-      ...(filled.steps
-        ? {
-            steps: filled.steps.map((s) => ({
-              ...s,
-              ...(s.selector !== undefined ? { selector: hide(s.selector) } : {}),
-              ...(s.value !== undefined ? { value: hide(s.value) } : {}),
-            })),
-          }
-        : {}),
-      ...(found.op.trigger.confirms
-        ? {
-            confirms: {
-              count: found.op.trigger.confirms.length,
-              steps: found.op.trigger.confirms.map((c) => c.step),
-            },
-          }
-        : {}),
-      ...(found.op.trigger.companions
-        ? {
-            companions: found.op.trigger.companions.map((c) =>
-              Object.fromEntries(Object.entries(c).map(([k, v]) => [k, hide(v)])),
-            ),
-          }
-        : {}),
-    };
+    const request = previewRequest(found.site, found.op, args, effective, tier, hide);
+    const trigger = tier === 3 ? previewTrigger(found.op, args, hide) : undefined;
     return {
       ok: true,
-      site: found.site.name,
+      site: name,
       op: found.op.name,
       readOnly: found.op.readOnly,
+      // The browser is reachable when the plan starts there, or when a read (a write's readback too) may climb.
       signedIn: signedIn(
         session,
-        profileHostsOf(found),
+        found.site,
         tier >= 2 || (maxTier >= 2 && (found.op.readOnly || !!found.op.readback)),
       ),
       tier,
@@ -298,49 +293,25 @@ export function planCall(
       args,
       request,
       ...(trigger ? { trigger } : {}),
-      // The whole spec also binds tier-3 steps, write classification, trust rules and readbacks.
+      // The whole spec also binds what the preview does not show: write flags, readbacks, trust rules.
       fingerprint: createHash("sha256")
-        .update(
-          JSON.stringify([
-            found.site.name,
-            found.op.name,
-            templateHash(found.op),
-            found.source,
-            found.site,
-            args,
-            request,
-            trigger,
-            tier,
-            maxTier,
-          ]),
-        )
+        .update(JSON.stringify([found.source, found.site, found.op.name, args, request, trigger, tier, maxTier]))
         .digest("hex"),
     };
   } catch (e) {
-    return fail(redact(e instanceof Error ? e.message : "invalid arguments", session));
+    const r = unsendable(name, found.op, e);
+    return refuse({ ...r, reason: redact(r.reason ?? "", session) });
   }
 }
 
 /**
- * Re-plan immediately before calling; any approval mismatch refuses without sending. The approved
- * preview itself must match too, so mutating its displayed request cannot bypass the fingerprint.
- * Calls only the installed op, with all write gates and duplicate-write protection intact.
+ * Re-plan immediately before calling; any difference from the approved plan, in the spec or in what
+ * was shown, refuses without sending. Calls only the installed op, with every write gate intact.
  */
-export async function callPlanned(
-  plan: Extract<CallPlan, { ok: true }>,
-  opts: HostCallOptions = {},
-): Promise<CallResult> {
+export async function callPlanned(plan: ReadyPlan, opts: HostCallOptions = {}): Promise<CallResult> {
   const fresh = planCall(plan.site, plan.op, plan.args, { maxTier: opts.maxTier ?? plan.maxTier });
   if (!fresh.ok) return fresh.result;
-  if (
-    fresh.fingerprint !== plan.fingerprint ||
-    JSON.stringify(fresh.request) !== JSON.stringify(plan.request) ||
-    JSON.stringify(fresh.trigger) !== JSON.stringify(plan.trigger) ||
-    fresh.tier !== plan.tier ||
-    fresh.maxTier !== plan.maxTier ||
-    fresh.readOnly !== plan.readOnly ||
-    fresh.signedIn !== plan.signedIn
-  )
+  if (!isDeepStrictEqual(fresh, plan))
     return {
       ok: false,
       class: "refused",
