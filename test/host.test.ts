@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { after, afterEach, before, beforeEach, test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { call, heal } from "../src/execute.js";
@@ -11,9 +12,18 @@ import { answerShare } from "../src/identity.js";
 import { registryName } from "../src/publish.js";
 import { settle } from "../src/report.js";
 import { scanSecrets } from "../src/secrets.js";
-import { loadSession, saveSession } from "../src/session.js";
+import { loadSession, saveSession, sessionFile } from "../src/session.js";
 import { parseSite, type Site } from "../src/spec.js";
-import { cooling, listSites, loadCalls, loadSite, registryDir, saveSite, siteNotes } from "../src/store.js";
+import {
+  cooling,
+  listSites,
+  loadCalls,
+  loadSite,
+  registryDir,
+  rememberTier,
+  saveSite,
+  siteNotes,
+} from "../src/store.js";
 import { type Fixture, startFixture } from "./fixture/server.js";
 
 const BUNDLED = fileURLToPath(new URL("../sites", import.meta.url));
@@ -87,7 +97,7 @@ afterEach(async () => {
 });
 
 const planned = (op: string, args?: Record<string, unknown>) => {
-  const plan = planCall("fixture", op, args);
+  const plan = planCall("fixture", op, args, opts);
   assert.equal(plan.ok, true, JSON.stringify(plan));
   if (!plan.ok) throw new Error("unreachable");
   return plan;
@@ -166,6 +176,19 @@ test("planning rejects unknown site/op, missing, unknown and bad args without se
     assert.equal(plan.ok, false);
     if (!plan.ok) assert.equal(plan.result.class, result.class);
   }
+  assert.deepEqual(fixture.calls, []);
+});
+
+test("planning rejects null, arrays, primitives and non-plain argument objects", () => {
+  for (const args of [null, [], "q=alice", 42, false, new Date(), new Map(), Object.create({ q: "alice" })]) {
+    const plan = planCall("fixture", "search", args);
+    assert.equal(plan.ok, false);
+    if (!plan.ok) {
+      assert.equal(plan.result.class, "input");
+      assert.match(plan.result.reason ?? "", /plain object/);
+    }
+  }
+  assert.ok(planCall("fixture", "search", Object.create(null)).ok);
   assert.deepEqual(fixture.calls, []);
 });
 
@@ -276,8 +299,14 @@ test("drifting callOnly reads/writes never rescan, recapture, adopt or change an
       allowWrites: true,
     });
     assert.equal(result.class, "drift", JSON.stringify(result));
-    assert.match(result.next ?? "", new RegExp(`api-anything heal fixture ${name}`));
-    assert.equal(result.nextCall?.action, "heal");
+    if (name === "search") {
+      assert.match(result.next ?? "", /api-anything heal fixture search/);
+      assert.equal(result.nextCall?.action, "heal");
+    } else {
+      assert.match(result.next ?? "", /api-anything add fixture addTodo .* --write/);
+      assert.equal(result.nextCall?.action, "relearn");
+      assert.equal(result.write, "not_applied");
+    }
     assert.equal(result.healed, undefined);
     assert.deepEqual(readFileSync(path), before);
   }
@@ -286,6 +315,77 @@ test("drifting callOnly reads/writes never rescan, recapture, adopt or change an
   const noHeal = await heal("fixture", "search", {}, { ...opts, callOnly: true });
   assert.equal(noHeal.class, "refused");
   assert.equal(fixture.calls.length, 2);
+});
+
+test("callOnly write drift after a 2xx keeps the check-site warning and never suggests heal", async () => {
+  saveSite({
+    ...site,
+    operations: [{ ...site.operations[2]!, readback: undefined, response: { format: "json", extract: "missing" } }],
+  });
+  let sends = 0;
+  const result = await callPlanned(planned("addTodo", { title: "ambiguous drift" }), {
+    ...opts,
+    allowWrites: true,
+    fetchImpl: async () => {
+      sends++;
+      return new Response('{"data":{"created":{"id":1}},"errors":[{"message":"unknown field"}]}');
+    },
+  });
+  assert.equal(result.class, "drift", JSON.stringify(result));
+  assert.equal(result.write, "may_have_applied");
+  assert.equal(result.retry, "no");
+  assert.equal(result.nextCall?.action, "check_site");
+  assert.match(result.next ?? "", /may have run: check the site first/);
+  assert.match(result.next ?? "", /api-anything add fixture addTodo .* --write/);
+  assert.doesNotMatch(result.next ?? "", /api-anything heal/);
+  assert.equal(sends, 1);
+});
+
+test("callOnly bare 403 never probes the read's example args", async () => {
+  saveSite({
+    ...site,
+    operations: [{ ...site.operations[0]!, params: [{ ...site.operations[0]!.params[0]!, example: "alice" }] }],
+  });
+  const sent: string[] = [];
+  const result = await callPlanned(planned("search", { q: "private-user" }), {
+    ...opts,
+    fetchImpl: async (url) => {
+      sent.push(String(url));
+      return new Response('{"message":"Forbidden"}', { status: 403 });
+    },
+  });
+  assert.equal(result.class, "blocked", JSON.stringify(result));
+  assert.equal(sent.length, 1);
+  assert.match(sent[0]!, /q=private-user/);
+});
+
+test("a public credential's 401 without a login never relearns or changes the auth result", async () => {
+  const authorization = ["public", "shared", "key"].join("-");
+  saveSite({
+    ...site,
+    operations: [
+      {
+        ...site.operations[0]!,
+        public: ["authorization"],
+        request: { ...site.operations[0]!.request, headers: { authorization } },
+      },
+    ],
+  });
+  const path = join(home, "sites", "fixture.json");
+  const before = readFileSync(path);
+  let sends = 0;
+  const result = await callPlanned(planned("search"), {
+    ...opts,
+    fetchImpl: async () => {
+      sends++;
+      return new Response("Unauthorized", { status: 401 });
+    },
+  });
+  assert.equal(result.class, "auth", JSON.stringify(result));
+  assert.equal(result.nextCall?.action, "login");
+  assert.equal(sends, 1);
+  assert.deepEqual(readFileSync(path), before);
+  assert.equal(existsSync(join(home, "heals.jsonl")), false);
 });
 
 test("auth never imports an everyday-browser session and directs the user to CLI login", async () => {
@@ -336,7 +436,7 @@ test("callOnly keeps truncation and rate cool-downs and refuses sending during a
       { ...site.operations[0]!, request: { method: "GET", url: `${fixture.url}/api/limited`, headers: {} } },
     ],
   });
-  const plan = planCall("limited", "search");
+  const plan = planCall("limited", "search", {}, opts);
   assert.ok(plan.ok);
   for (let i = 0; i < 3; i++) await callPlanned(plan, opts);
   assert.ok(cooling("limited"));
@@ -439,7 +539,7 @@ test("a shared operation still refuses private addresses without sending or adop
   const lookup = resolver.lookup;
   resolver.lookup = async () => [{ address: "127.0.0.1" }];
   try {
-    const plan = planCall("external", "search");
+    const plan = planCall("external", "search", {}, opts);
     assert.ok(plan.ok, JSON.stringify(plan));
     const result = await callPlanned(plan, opts);
     assert.equal(result.class, "error", JSON.stringify(result));
@@ -448,6 +548,319 @@ test("a shared operation still refuses private addresses without sending or adop
   } finally {
     resolver.lookup = lookup;
   }
+});
+
+test("planning filters unbound values for bundled specs without deleting them until execution", async () => {
+  const op = site.operations[0]!;
+  const dir = join(home, "bundled");
+  mkdirSync(dir);
+  writeFileSync(
+    join(dir, "fixture.json"),
+    JSON.stringify({
+      ...site,
+      operations: [
+        {
+          ...op,
+          request: { ...op.request, headers: { authorization: "" } },
+          slots: [...op.slots, { ref: "session:bearer", at: ["header:authorization"] }],
+        },
+      ],
+    }),
+  );
+  rmSync(join(home, "sites", "fixture.json"));
+  setBundledDir(dir);
+  saveSession("fixture", { cookies: [], values: { bearer: "unbound-value" } });
+  const before = readFileSync(sessionFile("fixture"));
+  const plan = planned("search");
+  assert.equal(plan.request.headers.authorization, undefined);
+  assert.deepEqual(readFileSync(sessionFile("fixture")), before, "planning never writes the session");
+  let authorization: string | null | undefined;
+  const result = await callPlanned(plan, {
+    ...opts,
+    fetchImpl: async (_url, init) => {
+      authorization = new Headers(init?.headers).get("authorization");
+      return new Response('{"data":{"results":["ok"]}}', { headers: { "content-type": "application/json" } });
+    },
+  });
+  assert.ok(result.ok, JSON.stringify(result));
+  assert.equal(authorization, null);
+  assert.deepEqual(loadSession("fixture").values, {});
+});
+
+test("planning and execution both omit session credentials for agent-pulled POST reads and candidates", async () => {
+  for (const candidate of [false, true]) {
+    const op = site.operations[0]!;
+    saveSite(
+      parseSite({
+        ...site,
+        name: "external",
+        baseUrl: "https://example.com",
+        shared: { from: `${registry.url}/v1/sites/external`, sha256: "0".repeat(64), by: "agent" },
+        operations: [
+          {
+            ...op,
+            request: {
+              method: candidate ? "GET" : "POST",
+              url: "https://example.com/api/search?q=alice",
+              headers: { authorization: "" },
+            },
+            slots: [...op.slots, { ref: "session:bearer", at: ["header:authorization"] }],
+            match: { method: candidate ? "GET" : "POST", host: "example.com", path: "/api/search" },
+            trigger: { url: "https://example.com/search?q={q}" },
+            ...(candidate ? { version: { hash: "b".repeat(64), status: "candidate" } } : {}),
+          },
+        ],
+      }),
+    );
+    saveSession("external", {
+      cookies: [],
+      values: { bearer: "bound-but-not-allowed" },
+      valueHosts: { bearer: "example.com" },
+    });
+    const plan = planCall("external", "search", {}, opts);
+    assert.ok(plan.ok, JSON.stringify(plan));
+    assert.equal(plan.request.headers.authorization, undefined);
+    const before = readFileSync(sessionFile("external"));
+    const lookup = resolver.lookup;
+    resolver.lookup = async () => [{ address: "203.0.113.1" }];
+    try {
+      const result = await callPlanned(plan, {
+        ...opts,
+        fetchImpl: async (_url, init) => {
+          assert.equal(new Headers(init?.headers).get("authorization"), null);
+          assert.equal(new Headers(init?.headers).get("cookie"), null);
+          return new Response('{"data":{"results":["ok"]}}');
+        },
+      });
+      assert.ok(result.ok, JSON.stringify(result));
+      assert.deepEqual(readFileSync(sessionFile("external")), before);
+    } finally {
+      resolver.lookup = lookup;
+    }
+  }
+});
+
+test("plans bind their tier and cap, including remembered tiers and caps below minTier", async () => {
+  rememberTier("fixture", "search", 3);
+  const high = planCall("fixture", "search");
+  assert.ok(high.ok);
+  assert.equal(high.tier, 3);
+  assert.equal(high.maxTier, 3);
+  assert.deepEqual(high.trigger, { url: `${fixture.url}/scoped?q=alice` });
+  const low = planned("search");
+  assert.equal(low.tier, 1, "a remembered tier above the cap is ignored");
+  assert.equal(low.trigger, undefined);
+  assert.notEqual(low.fingerprint, high.fingerprint);
+  assert.equal((await callPlanned(high, opts)).class, "refused");
+  assert.equal((await callPlanned({ ...high, tier: 2 })).class, "refused");
+  assert.equal((await callPlanned({ ...high, maxTier: 2 })).class, "refused");
+  assert.equal((await callPlanned({ ...high, trigger: { url: `${fixture.url}/different` } })).class, "refused");
+  rememberTier("fixture", "search", 2);
+  assert.equal((await callPlanned(high)).class, "refused", "a changed starting tier needs new approval");
+  saveSite({ ...site, operations: [{ ...site.operations[0]!, minTier: 3 }] });
+  const blocked = planCall("fixture", "search", {}, opts);
+  assert.equal(blocked.ok, false);
+  if (!blocked.ok) assert.equal(blocked.result.class, "blocked");
+  assert.deepEqual(fixture.calls, []);
+});
+
+test("tier-3 plans fill and redact the URL, soft navigation and steps", () => {
+  const token = ["SecretToken", "Abcdef123456789"].join("");
+  saveSession("fixture", { cookies: [], values: { token } });
+  saveSite({
+    ...site,
+    operations: [
+      {
+        ...site.operations[0]!,
+        minTier: 3,
+        trigger: {
+          url: `${fixture.url}/scoped?q={q}`,
+          softFrom: `${fixture.url}/?key=${token}`,
+          steps: [
+            { action: "fill", selector: `#${token}`, value: "{q}" },
+            { action: "goto", value: `${fixture.url}/next?q={q}` },
+            { action: "click", selector: "#submit" },
+          ],
+        },
+      },
+    ],
+  });
+  const plan = planCall("fixture", "search", { q: token });
+  assert.ok(plan.ok, JSON.stringify(plan));
+  assert.equal(plan.tier, 3);
+  assert.equal(plan.request.headers.cookie, "<browser-profile cookies>");
+  assert.ok(plan.trigger?.steps);
+  assert.deepEqual(scanSecrets(plan.trigger, loadSession("fixture")).secrets, []);
+  assert.doesNotMatch(JSON.stringify(plan.trigger), new RegExp(token));
+  assert.match(plan.trigger.url, /session:token/);
+});
+
+function profileDb(relative = "Default/Network/Cookies") {
+  const path = join(home, "profile", relative);
+  mkdirSync(join(path, ".."), { recursive: true });
+  const db = new DatabaseSync(path);
+  db.exec("CREATE TABLE cookies(host_key TEXT, name TEXT)");
+  return db;
+}
+
+test("signedIn checks own-profile cookie names across registrable domains without reading values or writing", () => {
+  const db = profileDb();
+  db.prepare("INSERT INTO cookies VALUES(?, ?)").run(".other.test", "sid");
+  db.close();
+  const path = join(home, "profile", "Default/Network/Cookies");
+  const before = readFileSync(path);
+  assert.equal(hostSite("fixture")?.site.signedIn, false);
+  const edit = new DatabaseSync(path);
+  edit.prepare("INSERT INTO cookies VALUES(?, ?)").run("127.0.0.1", "guest");
+  edit.prepare("INSERT INTO cookies VALUES(?, ?)").run(".api.example.co.uk", "expired");
+  edit.close();
+  saveSite({
+    ...site,
+    name: "sibling",
+    baseUrl: "https://www.example.co.uk",
+    operations: [
+      {
+        ...site.operations[0]!,
+        request: { ...site.operations[0]!.request, url: "https://www.example.co.uk/api/search?q=alice" },
+        trigger: { url: "https://www.example.co.uk/search?q={q}" },
+      },
+    ],
+  });
+  const stored = readFileSync(path);
+  assert.notDeepEqual(stored, before);
+  assert.equal(hostSite("fixture")?.site.signedIn, true, "a missing per-site session cannot hide profile cookies");
+  assert.equal(hostSite("sibling")?.site.signedIn, true);
+  const browser = planCall("fixture", "search");
+  assert.ok(browser.ok);
+  assert.equal(browser.signedIn, true, "a read may climb from tier 1");
+  assert.equal(planned("search").signedIn, false, "maxTier 1 never consults the profile");
+  assert.deepEqual(readFileSync(path), stored);
+  assert.deepEqual(fixture.calls, []);
+});
+
+test("signedIn fails closed for a locked or malformed own profile, but ignores it at maxTier 1", () => {
+  const db = profileDb("Default/Cookies");
+  db.exec("BEGIN EXCLUSIVE");
+  try {
+    const plan = planCall("fixture", "search");
+    assert.ok(plan.ok);
+    assert.equal(plan.signedIn, true);
+    assert.equal(planned("search").signedIn, false);
+    assert.equal(hostSite("fixture")?.site.signedIn, true);
+  } finally {
+    db.exec("ROLLBACK");
+    db.exec("DROP TABLE cookies");
+    db.close();
+  }
+  const malformed = planCall("fixture", "search");
+  assert.ok(malformed.ok);
+  assert.equal(malformed.signedIn, true, "missing schema is not proof of sign-out");
+});
+
+test("signedIn fails closed for a running profile or uncheckpointed cookies without opening SQLite", () => {
+  const db = profileDb();
+  db.close();
+  const cookieFile = join(home, "profile", "Default/Network/Cookies");
+  const before = readFileSync(cookieFile);
+  for (const marker of [`${cookieFile}-wal`, `${cookieFile}-journal`, join(home, "profile", "SingletonLock")]) {
+    writeFileSync(marker, "synthetic pending state");
+    const plan = planCall("fixture", "search");
+    assert.ok(plan.ok);
+    assert.equal(plan.signedIn, true);
+    assert.equal(hostSites().find((s) => s.name === "fixture")?.signedIn, true);
+    assert.equal(planned("search").signedIn, false);
+    assert.deepEqual(readFileSync(cookieFile), before);
+    assert.equal(existsSync(`${cookieFile}-shm`), false);
+    rmSync(marker);
+  }
+});
+
+test("an unresolved trigger origin conservatively counts any own-profile cookie, without leaking placeholder hosts", () => {
+  const db = profileDb();
+  db.prepare("INSERT INTO cookies VALUES(?, ?)").run(".another-site.test", "sid");
+  db.close();
+  saveSite({
+    ...site,
+    operations: [{ ...site.operations[0]!, trigger: { url: "{q}" } }],
+  });
+  const plan = planCall("fixture", "search", { q: "https://another-site.test/page" });
+  assert.ok(plan.ok);
+  assert.equal(plan.signedIn, true, "a read can reach a fully templated trigger on another signed-in domain");
+  assert.equal(hostSite("fixture")?.site.signedIn, true);
+  assert.deepEqual(hostSite("fixture")?.site.hosts, ["127.0.0.1"]);
+});
+
+test("discovery includes lookup and inline readback hosts, and omits invalid or templated origins only", () => {
+  saveSite(
+    parseSite({
+      ...site,
+      operations: [
+        {
+          ...site.operations[2]!,
+          request: { method: "POST", url: "https://api.example.test/write", headers: {} },
+          slots: [
+            {
+              from: { request: { method: "GET", url: "https://lookup.example.test/id", headers: {} } },
+              path: "id",
+              at: ["query:id"],
+            },
+          ],
+          trigger: { url: "https://{tenant}.example.test/write" },
+          readback: {
+            read: {
+              ...site.operations[1]!,
+              request: { method: "GET", url: "https://readback.example.test/read", headers: {} },
+              trigger: { url: "https://pages.example.test/read/{id}" },
+            },
+          },
+        },
+        { ...site.operations[0]!, trigger: { url: "{url}" } },
+        {
+          ...site.operations[1]!,
+          trigger: {
+            url: "https://pages.example.test/todos/{id}?ignored=1#fragment",
+            softFrom: "https://neutral.example.test/",
+            steps: [{ action: "goto", value: "https://next.example.test/" }],
+          },
+        },
+      ],
+    }),
+  );
+  const found = hostSite("fixture");
+  assert.ok(found);
+  assert.deepEqual(found.site.hosts, [
+    "127.0.0.1",
+    "api.example.test",
+    "lookup.example.test",
+    "readback.example.test",
+    "pages.example.test",
+    "neutral.example.test",
+    "next.example.test",
+  ]);
+  assert.deepEqual(found.site.operations[0]?.pages, []);
+  assert.deepEqual(found.site.operations[1]?.pages, []);
+  assert.deepEqual(found.site.operations[2]?.pages, ["https://pages.example.test/todos/"]);
+  assert.ok(
+    hostSites().some((s) => s.name === "fixture"),
+    "an unparseable URL never drops the whole site",
+  );
+});
+
+test("callPlanned returns the fresh planning failure for invalid specs and corrupt sessions", async () => {
+  const plan = planned("search");
+  const path = join(home, "sites", "fixture.json");
+  const before = readFileSync(path);
+  writeFileSync(path, '{"operations":');
+  let fresh = planCall("fixture", "search", {}, opts);
+  assert.equal(fresh.ok, false);
+  if (!fresh.ok) assert.deepEqual(await callPlanned(plan, opts), fresh.result);
+  writeFileSync(path, before);
+  saveSession("fixture", { cookies: [], values: {} });
+  writeFileSync(sessionFile("fixture"), "null");
+  fresh = planCall("fixture", "search", {}, opts);
+  assert.equal(fresh.ok, false);
+  if (!fresh.ok) assert.deepEqual(await callPlanned(plan, opts), fresh.result);
+  assert.deepEqual(fixture.calls, []);
 });
 
 test("setBundledDir redirects every default loader, notes and publishing name", () => {

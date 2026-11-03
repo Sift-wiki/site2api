@@ -278,9 +278,14 @@ export function mergeCapture(
 export function dropUnbound(site: string): void {
   withLock(sessionFile(site), () => {
     const s = loadSession(site);
-    const bound = Object.entries(s.values).filter(([k]) => s.valueHosts?.[k]);
-    if (bound.length < Object.keys(s.values).length) saveSession(site, { ...s, values: Object.fromEntries(bound) });
+    const bound = boundSession(s);
+    if (Object.keys(bound.values).length < Object.keys(s.values).length) saveSession(site, bound);
   });
+}
+
+/** The same filter as dropUnbound, without changing the session or writing a file. */
+export function boundSession(s: Session): Session {
+  return { ...s, values: Object.fromEntries(Object.entries(s.values).filter(([k]) => s.valueHosts?.[k])) };
 }
 
 /** Record the origins of an operation just saved as the site's own (`Session.origins`). */
