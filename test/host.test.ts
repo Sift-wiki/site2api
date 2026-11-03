@@ -290,6 +290,31 @@ test("a signed-out read's own anonymous cookies leave the next plan unchanged; a
   assert.equal(fixture.calls.filter((c) => c.method === "POST").length, 1);
 });
 
+test("an auth answer's own cookies are never taken as a guest's: the next plan is signed in", async () => {
+  const members = {
+    ...site.operations[0]!,
+    name: "company",
+    request: { method: "GET", url: `${fixture.url}/api/members-only`, headers: {} },
+    slots: [],
+    params: [],
+  };
+  saveSite({ ...site, loginCookies: ["li_at"], operations: [members] });
+  const approved = planCall("fixture", "company", {}, { maxTier: 1 });
+  assert.ok(approved.ok);
+  assert.equal(approved.signedIn, false);
+  // A 401 can still issue a session cookie the next request would carry: nothing proves it a visitor's.
+  const first = await callPlanned(approved, { minIntervalMs: 0 });
+  assert.equal(first.class, "auth", JSON.stringify(first));
+  const s = loadSession("fixture");
+  assert.deepEqual(s.cookies.map((c) => c.name).sort(), ["bcookie", "lidc"]);
+  assert.equal(s.guestCookies, undefined);
+  const next = planCall("fixture", "company", {}, { maxTier: 1 });
+  assert.ok(next.ok);
+  assert.equal(next.signedIn, true, "unknown cookies from any answer count");
+  const stale = await callPlanned(approved, { minIntervalMs: 0 });
+  assert.equal(stale.class, "refused", "an approval made before them no longer matches");
+});
+
 // Hacker News's login cookie is `user` (`<name>&<hash>`); Java, PHP and Express name theirs JSESSIONID,
 // PHPSESSID and connect.sid; Google's account cookies are the SID family.
 const ACCOUNT_COOKIES = [
@@ -724,6 +749,16 @@ test("callOnly keeps truncation and rate cool-downs and refuses sending during a
   const list = await callPlanned(planned("search"), opts);
   assert.equal(list.ok, true, JSON.stringify(list));
   assert.ok(list.truncated);
+  // A host has no get_result or maxChars: the note names only fields and the arguments, and nothing is kept.
+  assert.match(list.truncated, /pass fields to keep fewer fields per item, or narrow the arguments$/);
+  assert.doesNotMatch(list.truncated, /get_result|maxChars/);
+  assert.equal(list.resultId, undefined);
+  assert.equal(list.more, undefined);
+  assert.equal(existsSync(join(home, "results.json")), false);
+  const picked = await callPlanned(planned("search"), { ...opts, view: { fields: ["id"] } });
+  assert.equal(picked.ok, true, JSON.stringify(picked));
+  assert.ok(Array.isArray(picked.data) && picked.data.length > (list.data as unknown[]).length);
+  assert.deepEqual(Object.keys((picked.data as Record<string, unknown>[])[0]!), ["id"]);
   // Use a separate site so the fixture's previous limited calls cannot affect this test.
   saveSite({
     ...site,

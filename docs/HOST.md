@@ -67,7 +67,9 @@ cookie with an unknown name counts as an account. It is true when any of these h
 
 A cookie name is known to be anonymous, in the jar and in the profile alike, when it is in the
 session's `guestCookies` (the names a signed-out visit to the site was given, recorded by `login`)
-or on one shared list, `ANONYMOUS_COOKIE` in `src/session.ts`:
+or on one shared list, `ANONYMOUS_COOKIE` in `src/session.ts`. A call never records guests: not even
+an `auth` answer proves its cookies a visitor's, since a 401 can issue a session cookie another
+operation then accepts. The shared list:
 
 - analytics: `_ga`, `_ga_<id>`, `_gid`, `_gat`, `_gat_<id>`, `_fbp`
 - consent: `CONSENT`, `SOCS`, `OptanonConsent`, `OptanonAlertBoxClosed`, `euconsent`, `euconsent-v<n>`
@@ -84,9 +86,10 @@ since a pulled spec could pin a name that is never set.
 
 Nothing else counts: known-anonymous cookies, expired or empty jar cookies, and stored values no
 request of the call fills leave `signedIn` false. So a signed-out call that is given only such
-cookies, as Google gives `NID`, `AEC` and `SOCS`, leaves the next plan as it was. A signed-out
-response that sets any other cookie (a framework's visitor session such as `JSESSIONID`, which a
-login would have recorded in `guestCookies`) turns the next plan signed in, once, by design.
+cookies, as Google gives `NID`, `AEC` and `SOCS`, leaves the next plan as it was. Any answer that
+sets another cookie, successful or `auth` (a framework's visitor session such as `JSESSIONID`,
+LinkedIn's `bcookie` and `lidc` on its 401), turns the next plan signed in, by design: nothing in the
+answer proves the cookie is not a login.
 `hostSites()` and `hostSite()` answer for the whole site: any of its operations, each at its starting
 tier under the default cap of 3. A plan with `maxTier: 1` for a site with no session value does not
 look at the profile or at other sites' logins.
@@ -145,11 +148,11 @@ the page fills it itself. What a call does can still change the plan:
   request then shows and which makes `signedIn` true;
 - a captured value of six or more characters that also appears in the args or the request, which
   redaction then replaces;
-- the browser a tier-2 or tier-3 run starts. It closes itself about 3 s after its last use
-  (`IDLE_CLOSE_MS` in `src/browser.ts`), or at `closeHost()`, and while it runs its `SingletonLock`
-  makes every plan that can reach the profile fail closed to `signedIn: true`. A plan approved
-  before the browser started and called while it runs, or the reverse, is refused by
-  `callPlanned`. Planning does not wait for the browser to close, so plan again once it has.
+- a browser still running. While one runs, its `SingletonLock` makes every plan that can reach the
+  profile fail closed to `signedIn: true`. So `callPlanned` closes the browser its call started as
+  soon as no other call in the process uses it, and waits for it to exit before returning: the next
+  plan reads a released, flushed profile. While calls overlap, the browser stays up, and a plan made
+  meanwhile is signed in until the last of them returns.
 
 `callPlanned` re-plans synchronously before `call()`. A fresh plan that differs from the approved
 one in any field (the fingerprint, the shown request or trigger, `signedIn`) returns
@@ -163,7 +166,9 @@ are redacted display text. Do not log the whole plan.
 If re-planning itself fails, its original input/error/blocked result is returned, including its
 reason and recovery step, rather than an approval-mismatch message.
 
-The only call options are `allowWrites`, `maxTier`, `timeoutMs`, `fetchImpl` and `minIntervalMs`.
+The only call options are `allowWrites`, `maxTier`, `timeoutMs`, `fetchImpl`, `minIntervalMs` and
+`view`. `view` (`fields`, `maxChars`) shapes only the answer after extraction, never the request, so
+it is not part of the plan or its approval.
 An omitted `maxTier` reuses the plan's cap; changing it requires re-planning and approval.
 The host must grant `allowWrites` separately for an approved write. There is no force, again,
 idempotency override, or operation-learning option. Pacing is at least one second per site,
@@ -180,7 +185,10 @@ Host calls always set `CallOptions.callOnly`. Direct library callers can also se
   read was learned signed in and no login cookie is stored: that is `auth`, as for `call()`.
   A write's drift asks for `api-anything add <site> <op> ... --write`, never `heal`.
 - Site spec files remain byte-identical. Calls still update local sessions, pacing, cool-downs,
-  remembered tiers, the write ledger, call log and capped-result storage.
+  remembered tiers, the write ledger and call log.
+- An answer over the cap is cut as for `call()`, but none is kept: there is no `resultId`, `more` or
+  `get_result` to continue it. The `truncated` note names only what the host can change: `view.fields`
+  or the arguments.
 - The HTTP, page-fetch and own-profile trigger-run tiers remain available. Those transports may
   make the operation's derived lookups and readback requests. Browser tiers load the site's pages
   and resources as before. No example-argument probes are sent in call-only mode.
@@ -199,8 +207,8 @@ Own-profile cookie refresh for reads and a read's tier-3 run may refresh session
 normal transport can still record cookies from the response, and its readback is a separate read,
 not a retry of the write.
 
-`closeHost()` closes the shared browser, which otherwise closes itself about 3 s after its last
-use. Host calls create no background jobs to drain.
+`closeHost()` closes the shared browser. A host call already closes it when it is the last user, so
+this matters only for calls still running. Host calls create no background jobs to drain.
 Finish outstanding calls before closing; this is not a write-cancellation API.
 
 ## Bun and compiled hosts

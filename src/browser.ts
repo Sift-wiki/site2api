@@ -291,6 +291,17 @@ export async function closeBrowser(): Promise<void> {
   if (c) await closeContext(c.ctx);
 }
 
+/**
+ * Close the browser now if no call is using it, and wait for it to exit. A host plans from the profile on
+ * disk, which a running browser locks (so plans fail closed to signed in) and has not flushed.
+ */
+export async function closeIdleBrowser(): Promise<void> {
+  if (users === 0 && current) {
+    clearTimeout(idleTimer);
+    await closeBrowser();
+  }
+}
+
 const toStored = (c: Cookie): StoredCookie => ({
   name: c.name,
   value: c.value,

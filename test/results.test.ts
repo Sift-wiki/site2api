@@ -93,6 +93,17 @@ test("a cut fixture page is fully retrievable in order without another request; 
   assert.equal(fx.calls.length, 2);
 });
 
+test("a call-only cut page keeps its nextPage warning but names no local continuation", async () => {
+  const r = await call("result-fixture", "list", {}, { ...opts, callOnly: true });
+  assert.equal(r.ok, true);
+  assert.equal(r.nextPage, "page2");
+  assert.equal(r.resultId, undefined);
+  assert.equal(r.more, undefined);
+  assert.match(r.truncated!, /nextPage starts after the last item of this page, cut or not$/);
+  assert.doesNotMatch(r.truncated!, /get_result|maxChars|more stays/);
+  assert.equal(existsSync(join(HOME, "results.json")), false);
+});
+
 test("call views project extracted items with renamed paths, leave the spec untouched, and validate before sending", async () => {
   const spec = readFileSync(join(HOME, "sites", "result-fixture.json"), "utf8");
   const r = await call(
