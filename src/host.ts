@@ -175,11 +175,14 @@ interface Sendable {
   values: string[];
 }
 
+// A value the page itself mints for visitors (X's x-guest-token); any other captured value may be an account's.
+const GUEST_VALUE = /(^|[-_])guest([-_]|$)/i;
+
 /**
  * What a call of `op` starting at `tier` may send from `session`, after execution's filters
  * (`callSession`): every jar cookie, since a redirect or a lookup can carry any of them, and the stored
- * values its request and a write's readback read fill. A tier-3 run's page fills its own values, so a call
- * that starts there sends none of the stored ones; the readback is a call of its own.
+ * values its request and a write's readback read fill. A tier-3 run's page fills its own values, but the
+ * value it captured shows what the page holds (a bearer in its storage), so it counts unless it is a guest's.
  */
 function sendable(site: Site, op: Operation, session: Session, theirs: boolean, tier: Tier): Sendable {
   const read = readbackOf(site, op);
@@ -187,7 +190,10 @@ function sendable(site: Site, op: Operation, session: Session, theirs: boolean, 
   const back = read && callSession(site, read, session, theirs);
   return {
     cookies: [...own.cookies, ...(back?.cookies ?? [])],
-    values: [...(tier < 3 ? filledValues(op, own) : []), ...(read && back ? filledValues(read, back) : [])],
+    values: [
+      ...filledValues(op, own).filter((name) => tier < 3 || !GUEST_VALUE.test(name)),
+      ...(read && back ? filledValues(read, back) : []),
+    ],
   };
 }
 

@@ -134,8 +134,10 @@ Neither browser tier is an exact wire-request or account-identity preview.
 The fingerprint binds the tier and cap, the entire installed spec and source, args, the redacted
 request and the displayed trigger. This also catches changed write flags, triggers, readbacks and
 trust metadata. A call's own known-anonymous cookies change none of it, nor `signedIn`, and neither
-do the session values a tier-3 run captures for a plan that starts at tier 3: the plan for the same
-args before and after such a call compares equal. What a call does can still change it:
+does a guest value (a name such as `x-guest-token`) a tier-3 run captures for a plan that starts at
+tier 3: the plan for the same args before and after such a call compares equal. Any other value a
+tier-3 run captures, such as a bearer the page keeps in its storage, makes `signedIn` true even though
+the page fills it itself. What a call does can still change the plan:
 
 - a new remembered tier;
 - a response that sets a cookie not known to be anonymous, which makes `signedIn` true;

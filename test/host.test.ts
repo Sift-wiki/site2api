@@ -455,6 +455,31 @@ test("a session: ref shows its placeholder before a tier-3 run first captures it
   assert.deepEqual(fixture.calls, []);
 });
 
+test("a bearer a tier-3 page captured from its storage makes the next plan signed in, with no cookie", () => {
+  const op = site.operations[0]!;
+  saveSite({
+    ...site,
+    operations: [
+      {
+        ...op,
+        minTier: 3,
+        request: { ...op.request, headers: { authorization: "" } },
+        slots: [...op.slots, { ref: "session:authorization", at: ["header:authorization"] }],
+      },
+    ],
+  });
+  const before = planCall("fixture", "search");
+  assert.ok(before.ok, JSON.stringify(before));
+  assert.equal(before.tier, 3);
+  assert.equal(before.signedIn, false);
+  mergeCapture("fixture", [], { from: op.request.url, values: { authorization: "Bearer stored-in-local-storage" } });
+  const after = planCall("fixture", "search");
+  assert.ok(after.ok);
+  assert.equal(after.signedIn, true, "the page holds an account bearer even though it fills it itself");
+  assert.notDeepEqual(after, before, "an anonymous approval no longer matches");
+  assert.deepEqual(fixture.calls, []);
+});
+
 test("planning rejects unknown site/op, missing, unknown and bad args without sending", async () => {
   const plans = [
     planCall("missing", "search"),
