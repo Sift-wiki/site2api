@@ -509,8 +509,8 @@ answer says it is unavailable instead of returning a continuation.
   `call_operation` for that item, never the entire batch. Each item's data uses the same compact
   table representation as a single call; its retry, paging and truncation fields stay intact.
 - Each answer is JSON text, and the same object as `structuredContent`.
-- `--print-config` prints how to add the server to Claude Code, Codex, Gemini CLI, VS Code, Cursor
-  and Claude Desktop, with absolute paths. Client timeouts and fixes for common problems are in
+- `--print-config` prints how to add the server to Claude Code, Codex, Gemini CLI, VS Code, Cursor,
+  Claude Desktop and Hermes, with absolute paths. Client timeouts and fixes for common problems are in
   [QUICKSTART.md](QUICKSTART.md#client-timeouts).
 
 ### Portable operation descriptions and links

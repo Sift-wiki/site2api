@@ -22,13 +22,14 @@ export interface Entry {
 export const SERVER: Entry = { command: "npx", args: ["-y", "api-anything", "mcp"] };
 const NAME = "api-anything";
 
-export const AGENTS = ["claude-code", "codex", "cursor", "claude-desktop", "gemini", "vscode"] as const;
+export const AGENTS = ["claude-code", "codex", "cursor", "claude-desktop", "hermes", "gemini", "vscode"] as const;
 export type Agent = (typeof AGENTS)[number];
 const LABEL: Record<Agent, string> = {
   "claude-code": "Claude Code",
   codex: "Codex",
   cursor: "Cursor",
   "claude-desktop": "Claude Desktop",
+  hermes: "Hermes",
   gemini: "Gemini CLI",
   vscode: "VS Code",
 };
@@ -51,6 +52,10 @@ export const paths = {
   desktopJson: () => join(appData(), "Claude", "claude_desktop_config.json"),
   geminiJson: () => join(homedir(), ".gemini", "settings.json"),
   vscodeJson: () => join(appData(), "Code", "User", "mcp.json"),
+  // Hermes's home comes from HERMES_HOME, else ~/.hermes; personal skills live under it
+  hermesHome: () => process.env.HERMES_HOME || join(homedir(), ".hermes"),
+  hermesYaml: () => join(paths.hermesHome(), "config.yaml"),
+  hermesSkill: () => join(paths.hermesHome(), "skills", NAME, "SKILL.md"),
 };
 
 /** Claude Desktop takes skills only as an upload in its settings: it gets none here. */
@@ -58,6 +63,7 @@ const SKILL_DIR: Partial<Record<Agent, () => string>> = {
   "claude-code": paths.claudeSkill,
   codex: paths.agentsSkill,
   cursor: paths.agentsSkill,
+  hermes: paths.hermesSkill,
   gemini: paths.agentsSkill,
   vscode: paths.agentsSkill,
 };
@@ -91,6 +97,8 @@ export function detect(): Agent[] {
     // Cursor writes argv.json on first launch, Claude Desktop its config.json
     cursor: !!onPath("cursor") || any(paths.cursorJson(), join(dirname(paths.cursorJson()), "argv.json")),
     "claude-desktop": any(paths.desktopJson(), join(dirname(paths.desktopJson()), "config.json")),
+    // Hermes's gateway reads its config.yaml, present from first use
+    hermes: !!onPath("hermes") || any(paths.hermesYaml()),
     gemini: !!onPath("gemini") || any(paths.geminiJson()),
     // VS Code writes globalStorage/storage.json on first launch
     vscode:
@@ -99,8 +107,8 @@ export function detect(): Agent[] {
   return AGENTS.filter((a) => seen[a]);
 }
 
-/** `added`: connected now. `unchanged`: already exactly this. `kept`: another api-anything entry is there, left as it is. */
-type Status = "added" | "unchanged" | "kept" | "would add" | "failed";
+/** `added`: connected now. `unchanged`: already exactly this. `kept`: another api-anything entry is there, left as it is. `printed`: the config can't be edited, the entry is printed for a person to add. */
+type Status = "added" | "unchanged" | "kept" | "would add" | "printed" | "failed";
 
 export interface AgentResult {
   agent: Agent;
@@ -264,6 +272,98 @@ function claudeCodeServer(dryRun: boolean): AgentResult {
   return jsonServer("claude-code", file, dryRun);
 }
 
+/** The `api-anything` entry under the top-level `mcp_servers:` of Hermes's config.yaml, if there is one. */
+function hermesEntry(text: string): { command?: string; args?: unknown } | undefined {
+  const block = /^mcp_servers\s*:/m.exec(text);
+  if (!block) return undefined;
+  const rest = text.slice(block.index + block[0].length);
+  const body = rest.slice(0, /^\S/m.exec(rest)?.index ?? rest.length);
+  const head = /^ {2}(?:"api-anything"|api-anything):\s*$/m.exec(body);
+  if (!head) return undefined;
+  const after = body.slice(head.index + head[0].length);
+  const entryBody = after.slice(0, /^\S|^ {2}\S/m.exec(after)?.index ?? after.length);
+  const value = (k: string) => new RegExp(`^    ${k}:\\s*(.+?)\\s*$`, "m").exec(entryBody)?.[1];
+  const parse = (v: string | undefined) => {
+    const un = v?.replace(/^["']|["']$/g, "");
+    if (un === undefined) return undefined;
+    try {
+      return JSON.parse(un);
+    } catch {
+      return un;
+    }
+  };
+  return { command: parse(value("command")), args: parse(value("args")) };
+}
+
+/**
+ * Whether setup may add to a Hermes config's top-level `mcp_servers:`: a plain block, where nothing
+ * but an optional comment follows the colon and the servers sit two spaces in. Deeper indentation or
+ * an inline `{...}` is a file setup can't touch without risk; an empty block is plain.
+ */
+function plainServers(text: string): boolean {
+  const m = /^mcp_servers\s*:([^\n]*)$/m.exec(text);
+  if (!m) return true;
+  if (m[1].trim() && !m[1].trim().startsWith("#")) return false;
+  for (const line of text.slice(m.index + m[0].length).split("\n")) {
+    if (!line.trim() || line.trimStart().startsWith("#")) continue;
+    return /^ {2}\S/.test(line);
+  }
+  return true;
+}
+
+/** The entry as the lines a person pastes into the plain block, the way `--print-config` prints it. */
+function hermesEntryLines(e: Entry): string[] {
+  const lines = [
+    `  ${NAME}:`,
+    "    enabled: true",
+    `    command: ${JSON.stringify(e.command)}`,
+    `    args: ${JSON.stringify(e.args)}`,
+  ];
+  if (e.env) {
+    lines.push("    env:");
+    for (const [k, v] of Object.entries(e.env)) lines.push(`      ${k}: ${JSON.stringify(v)}`);
+  }
+  return lines;
+}
+
+/**
+ * Hermes launches its MCP servers from its gateway, a background process, so the entry uses npx by
+ * absolute path with node's directory on PATH, like the GUI apps. Written to config.yaml rather than
+ * via the hermes CLI: the gateway reads the file at startup, so editing it never touches a running
+ * process.
+ */
+function hermesServer(dryRun: boolean): AgentResult {
+  const file = paths.hermesYaml();
+  const text = existsSync(file) ? readFileSync(file, "utf8") : "";
+  const entry = guiServer();
+  const cur = hermesEntry(text);
+  if (cur)
+    return {
+      agent: "hermes",
+      mcp: same(cur, entry) ? "unchanged" : "kept",
+      file,
+      ...(same(cur, entry) ? {} : { entry: cur }),
+    };
+  if (!plainServers(text))
+    return { agent: "hermes", mcp: "printed", via: "file", file, entry: hermesEntryLines(entry).join("\n") };
+  if (dryRun) return { agent: "hermes", mcp: "would add", via: "file", file };
+  const saved = backup(file);
+  mkdirSync(dirname(file), { recursive: true });
+  const lines = hermesEntryLines(entry);
+  const block = /^mcp_servers\s*:[ \t]*(?:#.*)?$/m.exec(text);
+  let next: string;
+  if (block) {
+    const rest = text.slice(block.index + block[0].length);
+    const insertAt = block.index + block[0].length + (/^\S/m.exec(rest)?.index ?? rest.length);
+    const prefix = text.slice(0, insertAt);
+    next = `${prefix}${prefix && !prefix.endsWith("\n") ? "\n" : ""}${lines.join("\n")}\n${text.slice(insertAt)}`;
+  } else {
+    next = `${text}${text && !text.endsWith("\n") ? "\n" : ""}${text ? "\n" : ""}mcp_servers:\n${lines.join("\n")}\n`;
+  }
+  writeFileSync(file, next);
+  return { agent: "hermes", mcp: "added", via: "file", file, ...(saved ? { backup: saved } : {}) };
+}
+
 function server(agent: Agent, dryRun: boolean): AgentResult {
   switch (agent) {
     case "claude-code":
@@ -274,6 +374,8 @@ function server(agent: Agent, dryRun: boolean): AgentResult {
       return jsonServer("cursor", paths.cursorJson(), dryRun, guiServer());
     case "claude-desktop":
       return jsonServer("claude-desktop", paths.desktopJson(), dryRun, guiServer());
+    case "hermes":
+      return hermesServer(dryRun);
     case "gemini":
       // Gemini reads the command as a positional of its own, and what follows -- as its args
       return cliOrJson(
@@ -406,7 +508,12 @@ export function summary(r: SetupResult): string {
             ? "already connected"
             : a.mcp === "kept"
               ? "has another api-anything entry, left as it is"
-              : `not connected: ${a.error}`;
+              : a.mcp === "printed"
+                ? `left as it is (its mcp_servers is not a plain 2-space block); add by hand:\n${String(a.entry ?? "")
+                    .split("\n")
+                    .map((l) => `        ${l}`)
+                    .join("\n")}`
+                : `not connected: ${a.error}`;
     const skill =
       a.skill && a.skill !== "unchanged"
         ? `; skill ${SKILL_DONE[a.skill]}${a.skillNote ? ` (${a.skillNote})` : ""}`
