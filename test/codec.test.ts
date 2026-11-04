@@ -217,3 +217,18 @@ test("fillTemplate: doubled braces are literal, so a learned leaf's own {name} t
   );
   assert.equal(fillTemplate("{{{name}}}", { name: "x" }), "{x}");
 });
+
+test("a body nested past the JSON reviver's stack fails in the body's terms, not the engine's", () => {
+  // the reviver runs once per value down the whole body, so ~5000 levels overflow the stack even
+  // though JSON.parse itself handles far more: a 10 KB body a site sends is enough
+  const deep = "[".repeat(20_000) + "]".repeat(20_000);
+  assert.throws(
+    () => parseJson(deep),
+    (error: Error) => {
+      assert.ok(!(error instanceof RangeError), "an engine stack overflow is not what a caller can act on");
+      assert.match(error.message, /the body nests too deeply to parse/);
+      return true;
+    },
+  );
+  assert.doesNotThrow(() => parseJson("[".repeat(1_000) + "]".repeat(1_000)), "a body that parses still parses");
+});

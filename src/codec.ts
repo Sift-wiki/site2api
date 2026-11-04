@@ -107,13 +107,28 @@ function locate(s: string, pointer: string): [number, number] {
   return [start, jsonValueEnd(s, start)];
 }
 
+/** A body nested past the JSON reviver's stack depth: nothing here can walk it, and the depth is the answer's. */
+export class BodyTooDeep extends Error {
+  constructor() {
+    super("the body nests too deeply to parse");
+  }
+}
+
 /** JSON.parse that keeps integers beyond 2^53 as their exact digit strings. */
 export function parseJson(text: string): unknown {
-  return JSON.parse(text, (_key: string, value: unknown, ctx?: { source?: string }) =>
-    typeof value === "number" && Number.isInteger(value) && !Number.isSafeInteger(value) && ctx?.source
-      ? ctx.source
-      : value,
-  );
+  try {
+    return JSON.parse(text, (_key: string, value: unknown, ctx?: { source?: string }) =>
+      typeof value === "number" && Number.isInteger(value) && !Number.isSafeInteger(value) && ctx?.source
+        ? ctx.source
+        : value,
+    );
+  } catch (error) {
+    // The reviver runs once per value, down the whole body, so the body's nesting depth is this stack's
+    // depth: 5,000 levels overflow here while plain JSON.parse takes 100,000. Name it, so a caller can
+    // report the answer's shape instead of relaying the engine's message.
+    if (error instanceof RangeError) throw new BodyTooDeep();
+    throw error;
+  }
 }
 
 /** Encode a value as a JSON leaf, keeping its native type. bigint is written as raw digits. */
