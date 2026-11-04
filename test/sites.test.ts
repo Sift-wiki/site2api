@@ -300,6 +300,48 @@ test("google-flights top: a fallback page for good args (Google sometimes serves
   assert.equal(n, 2, "no example request, no heal");
 });
 
+test("google-flights after too many calls: Google's unusual-traffic page is rate, and the site cools down with nothing sent", async () => {
+  // trimmed from the live answer of 2026-11-04 (redirect to /sorry/index, then HTTP 429, no Retry-After); the address is a documentation one
+  const sorry =
+    `<!DOCTYPE html PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN"><html><head><meta http-equiv="content-type" content="text/html; charset=utf-8"><title>https://www.google.com/travel/flights</title></head>` +
+    `<body onload="e=document.getElementById('captcha');if(e){e.focus();} if(solveSimpleChallenge) {solveSimpleChallenge(0,0);}"><div style="font-size:13px;">` +
+    `Our systems have detected unusual traffic from your computer network.  Please try your request again later.` +
+    `<div id="infoDiv0" style="display:none;">This page appears when Google automatically detects requests coming from your computer network which appear to be in violation of the <a href="//www.google.com/policies/terms/">Terms of Service</a>. The block will expire shortly after those requests stop.</div>` +
+    `</div><div style="font-size:13px; line-break: anywhere;">IP address: 2001:db8::1<br>Time: 2026-11-04T20:42:31Z<br>URL: https://www.google.com/travel/flights<br></div></body></html>`;
+  const home = mkdtempSync(join(tmpdir(), "aa-sites-sorry-"));
+  mkdirSync(join(home, "sites"));
+  const sent: string[] = [];
+  const google = (async (u: string | URL | Request) => {
+    const url = new URL(u instanceof Request ? u.url : String(u));
+    sent.push(url.pathname);
+    if (url.pathname === "/sorry/index")
+      return new Response(sorry, { status: 429, headers: { "content-type": "text/html" } });
+    const to = `https://www.google.com/sorry/index?continue=${encodeURIComponent(url.href)}&q=x`;
+    return new Response("", { status: 302, headers: { location: to } });
+  }) as typeof fetch;
+  const opts = { fetchImpl: google, maxTier: 1 as const, minIntervalMs: 0 };
+  try {
+    process.env.API_ANYTHING_HOME = home;
+    const r = await call("google-flights", "search", { origin: "SFO", destination: "NYC", date: "2027-04-15" }, opts);
+    assert.equal(r.class, "rate", JSON.stringify(r));
+    assert.match(r.reason ?? "", /HTTP 429/);
+    assert.deepEqual(sent, ["/travel/flights", "/sorry/index"], "no example replay, no heal, no cookie refresh");
+    // the cool-down (3 minutes without a Retry-After) answers the next call at once, for every op of the site
+    const held = await call(
+      "google-flights",
+      "priceCalendar",
+      { origin: "SFO", destination: "JFK", start: "2027-04-01", end: "2027-04-30" },
+      opts,
+    );
+    assert.deepEqual([held.class, held.cooling], ["rate", true], JSON.stringify(held));
+    assert.ok(held.retryAfterMs! > 170_000 && held.retryAfterMs! <= 180_000, String(held.retryAfterMs));
+    assert.equal(sent.length, 2, "nothing sent while the site cools down");
+  } finally {
+    process.env.API_ANYTHING_HOME = HOME;
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
 // ---------------------------------------------------------------- youtube
 
 test("youtube search with the ad layout (VISITOR_INFO1_LIVE set) still returns every video and no {} items", () => {
