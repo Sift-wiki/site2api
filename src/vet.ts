@@ -101,6 +101,8 @@ const DOT: CharSet = {
   ],
   negated: true,
 };
+// a control escape is one code unit, not its letter: \n is a newline, which \s accepts
+const CONTROL: Record<string, number> = { n: 10, r: 13, t: 9, v: 11, f: 12, "0": 0 };
 const complement = (set: CharSet): CharSet => ({ ranges: set.ranges, negated: true });
 const literal = (code: number): CharSet => ({ ranges: [[code, code]] });
 
@@ -127,6 +129,9 @@ function unit(s: string, i: number): { code?: number; set?: CharSet; next: numbe
     if (e === "x" && /^[0-9a-f]{2}$/i.test(x)) return { code: Number.parseInt(x, 16), next: i + 4 };
     const u = s.slice(i + 2, i + 6);
     if (e === "u" && /^[0-9a-f]{4}$/i.test(u)) return { code: Number.parseInt(u, 16), next: i + 6 };
+    // \0 followed by a digit is an octal or backreference form, not NUL: left unread
+    if (e === "0" && /\d/.test(s[i + 2] ?? "")) return undefined;
+    if (e in CONTROL) return { code: CONTROL[e], next: i + 2 };
     if (e.length === 1) return { code: e.codePointAt(0), next: i + 2 };
     // \b, \p{...}: a boundary or a property, not one unit's set
     return undefined;

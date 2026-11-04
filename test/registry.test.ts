@@ -293,6 +293,16 @@ test("the shared rules refuse what a hostile or careless spec could do with some
       spec({}, { params: [{ name: "q", pattern: "^(?:(x[ab]|xa))+$" }] }),
       /quantifies a group with overlapping alternatives/,
     ],
+    [
+      "a control escape \\s already accepts",
+      spec({}, { params: [{ name: "q", pattern: "^(\\s|\\n)*$" }] }),
+      /quantifies a group with overlapping alternatives/,
+    ],
+    [
+      "a control escape a class names by its code unit",
+      spec({}, { params: [{ name: "q", pattern: "^([\\t ]|\\t)*$" }] }),
+      /quantifies a group with overlapping alternatives/,
+    ],
     ["a long description", spec({}, { description: "x".repeat(501) }), /description is 501 characters/],
   ];
   for (const [what, s, re] of refused) assert.match(errors(s).join("\n"), re, what);
@@ -304,6 +314,8 @@ test("the shared rules refuse what a hostile or careless spec could do with some
     "^(?<y>a|b)+$",
     "^([ab]|[cd])*$",
     "^(ab|ac)*$",
+    // \n is a newline, not the letter n
+    "^(\\n|n)*$",
   ])
     assert.deepEqual(errors(spec({}, { params: [{ name: "q", pattern }] })), [], pattern);
   assert.match(errors(spec(), "n".repeat(9000)).join(), /notes are 9000 bytes/);
