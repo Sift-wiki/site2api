@@ -268,10 +268,55 @@ test("the shared rules refuse what a hostile or careless spec could do with some
       spec({}, { params: [{ name: "q", pattern: "^(?:(a|a))*$" }] }),
       /quantifies a group with overlapping alternatives/,
     ],
+    [
+      "an alternative a character class already accepts",
+      spec({}, { params: [{ name: "q", pattern: "^([ab]|a)*$" }] }),
+      /quantifies a group with overlapping alternatives/,
+    ],
+    [
+      "an alternative a predefined class already accepts",
+      spec({}, { params: [{ name: "q", pattern: "^(\\w|a)*$" }] }),
+      /quantifies a group with overlapping alternatives/,
+    ],
+    [
+      "an alternative the dot already accepts",
+      spec({}, { params: [{ name: "q", pattern: "^(a|.)*$" }] }),
+      /quantifies a group with overlapping alternatives/,
+    ],
+    [
+      "two classes over the same characters",
+      spec({}, { params: [{ name: "q", pattern: "^([0-9]|\\d)*$" }] }),
+      /quantifies a group with overlapping alternatives/,
+    ],
+    [
+      "an alternative a class accepts, ahead of a shared tail",
+      spec({}, { params: [{ name: "q", pattern: "^(?:(x[ab]|xa))+$" }] }),
+      /quantifies a group with overlapping alternatives/,
+    ],
+    [
+      "a control escape \\s already accepts",
+      spec({}, { params: [{ name: "q", pattern: "^(\\s|\\n)*$" }] }),
+      /quantifies a group with overlapping alternatives/,
+    ],
+    [
+      "a control escape a class names by its code unit",
+      spec({}, { params: [{ name: "q", pattern: "^([\\t ]|\\t)*$" }] }),
+      /quantifies a group with overlapping alternatives/,
+    ],
     ["a long description", spec({}, { description: "x".repeat(501) }), /description is 501 characters/],
   ];
   for (const [what, s, re] of refused) assert.match(errors(s).join("\n"), re, what);
-  for (const pattern of ["^(jpg|png|gif)$", "^(a|aa)?$", "^(?<=x)(a|b)*$", "^(?<y>a|b)+$"])
+  // disjoint classes, and a shared first letter whose tails differ, are each unambiguous
+  for (const pattern of [
+    "^(jpg|png|gif)$",
+    "^(a|aa)?$",
+    "^(?<=x)(a|b)*$",
+    "^(?<y>a|b)+$",
+    "^([ab]|[cd])*$",
+    "^(ab|ac)*$",
+    // \n is a newline, not the letter n
+    "^(\\n|n)*$",
+  ])
     assert.deepEqual(errors(spec({}, { params: [{ name: "q", pattern }] })), [], pattern);
   assert.match(errors(spec(), "n".repeat(9000)).join(), /notes are 9000 bytes/);
   const field = spec(
