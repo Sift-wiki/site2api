@@ -61,6 +61,10 @@ browser identity headers and returned successfully at tier 1.
 ### Known limits
 
 The captured timedtext requests returned empty bodies, so no transcript operation was added.
+Re-probed 2026-11-04 (issue #105): the watch page's caption tracks carry `exp=xpe` and answer
+empty without the web player's proof-of-origin token. Only the Android app's player request
+returns tracks that answer plain HTTP, and the shared rules refuse what that op would need. See
+`docs/research/youtube-captions.md` for the evidence and the tier-3 route still to try.
 The watch page exposed one comment in JSON-LD, not a top-comment list with reply counts, so no
 comments operation was added.
 A live stream's search view count is in another field. Some channel upload cards omit view and
