@@ -54,6 +54,15 @@ export function printConfig(l: Launch, name = "api-anything"): string {
     `  ${servers}`,
     "Claude Desktop: merge into ~/Library/Application Support/Claude/claude_desktop_config.json (Windows: %APPDATA%\\Claude\\claude_desktop_config.json):",
     `  ${servers}`,
+    "Hermes (merge into the top-level mcp_servers block of its config.yaml, in ~/.hermes or $HERMES_HOME):",
+    `  mcp_servers:`,
+    `    ${name}:`,
+    `      enabled: true`,
+    `      command: ${JSON.stringify(l.command)}`,
+    `      args: [${l.args.map((a) => JSON.stringify(a)).join(", ")}]`,
+    ...(Object.keys(l.env).length
+      ? [`      env:`, ...Object.entries(l.env).map(([k, v]) => `        ${k}: ${JSON.stringify(v)}`)]
+      : []),
     "",
     `Restart the client afterwards. Timeouts per client, and fixes for common problems: ${DOCS}`,
   ].join("\n");

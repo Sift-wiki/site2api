@@ -333,15 +333,15 @@ const HELP: Record<string, string> = {
                   Gemini CLI, VS Code, Cursor and Claude Desktop, with absolute paths and the other
                   flags given, instead of serving
   --no-learn      hide learn_site`,
-  setup: `api-anything setup [--yes | --no-share] [--share-only] [--agents claude-code,codex,cursor,claude-desktop,gemini,vscode] [--dry-run]
+  setup: `api-anything setup [--yes | --no-share] [--share-only] [--agents claude-code,codex,cursor,claude-desktop,hermes,gemini,vscode] [--dry-run]
   Connects the MCP server (npx -y api-anything mcp) to each agent found on this machine: Claude Code,
-  Codex, Cursor, Claude Desktop, Gemini CLI, VS Code. Installs the skill for Claude Code
-  (~/.claude/skills) and for Codex, Cursor, Gemini CLI and VS Code (~/.agents/skills); Claude Desktop
-  takes skills only by upload. Checks for a Chromium browser, makes this install's key, and asks whether
-  to help build the shared catalog (default yes). Other entries in an agent's config are never changed;
-  a file is backed up to <file>.bak-api-anything before its first edit. Running it again changes
-  nothing. Afterwards, any command (the MCP server included) updates a skill copy setup installed when a
-  newer api-anything runs, unless the copy was edited.
+  Codex, Cursor, Claude Desktop, Hermes, Gemini CLI, VS Code. Installs the skill for Claude Code
+  (~/.claude/skills), for Hermes (~/.hermes/skills) and for Codex, Cursor, Gemini CLI and VS Code
+  (~/.agents/skills); Claude Desktop takes skills only by upload. Checks for a Chromium browser, makes
+  this install's key, and asks whether to help build the shared catalog (default yes). Other entries
+  in an agent's config are never changed; a file is backed up to <file>.bak-api-anything before its
+  first edit. Running it again changes nothing. Afterwards, any command (the MCP server included)
+  updates a skill copy setup installed when a newer api-anything runs, unless the copy was edited.
   --yes        share: answer the question yes without asking
   --no-share   do not share; answer the question no
   --share-only record --yes or --no-share and nothing else: no agent, skill or key is touched. learn_site
