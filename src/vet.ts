@@ -51,17 +51,168 @@ const DOCUMENT_AT = /^(json:(\/\d+)?\/query|(form|query)(\[\d+\])?:query)$/;
 // a group with a quantifier inside it, itself quantified: (a+)+, (\w*)*, (x+){2,}
 const NESTED_QUANTIFIER = /\((?:[^()\\]|\\.)*[*+}](?:[^()\\]|\\.)*\)[*+{]/;
 
-// A group whose top-level alternatives overlap (one a prefix of another; equal counts), repeated by its
-// own quantifier or an enclosing group's, backtracks exponentially on a non-matching tail with no nested
-// quantifier to catch: (a|a)*, (a|aa)+, (a|a){30}, ((a|a))*
+/** Index of the `]` that closes the class opened at `open`. */
+function classEnd(s: string, open: number): number {
+  let i = open + 1;
+  if (s[i] === "^") i++;
+  if (s[i] === "]") i++;
+  while (i < s.length && s[i] !== "]") i += s[i] === "\\" ? 2 : 1;
+  return i;
+}
+
+/** The code units one matcher unit accepts: ranges, or their complement when `negated`. */
+interface CharSet {
+  ranges: [number, number][];
+  negated?: boolean;
+}
+
+// the classes a spec reaches for in practice; \s is ECMAScript's set, a superset of "starts with a space"
+const CLASSES: Record<string, CharSet> = {
+  d: { ranges: [[48, 57]] },
+  w: {
+    ranges: [
+      [48, 57],
+      [65, 90],
+      [95, 95],
+      [97, 122],
+    ],
+  },
+  s: {
+    ranges: [
+      [9, 13],
+      [32, 32],
+      [160, 160],
+      [0x1680, 0x1680],
+      [0x2000, 0x200a],
+      [0x2028, 0x2029],
+      [0x202f, 0x202f],
+      [0x205f, 0x205f],
+      [0x3000, 0x3000],
+      [0xfeff, 0xfeff],
+    ],
+  },
+};
+// `.` without the s flag
+const DOT: CharSet = {
+  ranges: [
+    [10, 10],
+    [13, 13],
+    [0x2028, 0x2029],
+  ],
+  negated: true,
+};
+const complement = (set: CharSet): CharSet => ({ ranges: set.ranges, negated: true });
+const literal = (code: number): CharSet => ({ ranges: [[code, code]] });
+
+const covers = (ranges: [number, number][], lo: number, hi: number): boolean =>
+  ranges.some(([a, b]) => a <= lo && hi <= b);
+
+/** Whether some code unit is in both sets; two complements always share one. */
+const intersects = (a: CharSet, b: CharSet): boolean => {
+  if (a.negated && b.negated) return true;
+  if (a.negated) return b.ranges.some(([lo, hi]) => !covers(a.ranges, lo, hi));
+  if (b.negated) return a.ranges.some(([lo, hi]) => !covers(b.ranges, lo, hi));
+  return a.ranges.some(([alo, ahi]) => b.ranges.some(([blo, bhi]) => alo <= bhi && blo <= ahi));
+};
+
+/** One matcher unit at `i`: a literal code unit, or the set of a class or escape. */
+function unit(s: string, i: number): { code?: number; set?: CharSet; next: number } | undefined {
+  const c = s[i];
+  if (c === undefined) return undefined;
+  if (c === "\\") {
+    const e = s[i + 1] ?? "";
+    const known = CLASSES[e.toLowerCase()];
+    if (known) return { set: e === e.toUpperCase() ? complement(known) : known, next: i + 2 };
+    const x = s.slice(i + 2, i + 4);
+    if (e === "x" && /^[0-9a-f]{2}$/i.test(x)) return { code: Number.parseInt(x, 16), next: i + 4 };
+    const u = s.slice(i + 2, i + 6);
+    if (e === "u" && /^[0-9a-f]{4}$/i.test(u)) return { code: Number.parseInt(u, 16), next: i + 6 };
+    if (e.length === 1) return { code: e.codePointAt(0), next: i + 2 };
+    // \b, \p{...}: a boundary or a property, not one unit's set
+    return undefined;
+  }
+  if (c === "[") {
+    const end = classEnd(s, i);
+    const set = bracket(s, i, end);
+    return set && { set, next: end + 1 };
+  }
+  if (c === ".") return { set: DOT, next: i + 1 };
+  // a group, an anchor, an alternation or a quantifier is not a unit of its own
+  if (c === "(" || c === ")" || c === "|" || c === "^" || c === "$" || c === "*" || c === "+" || c === "?") {
+    return undefined;
+  }
+  if (c === "{") return undefined;
+  return { code: c.codePointAt(0), next: i + 1 };
+}
+
+/** A bracket class's set, or undefined when it holds something this reader does not model. */
+function bracket(s: string, open: number, end: number): CharSet | undefined {
+  let i = open + 1;
+  let negated = false;
+  if (s[i] === "^") {
+    negated = true;
+    i++;
+  }
+  const ranges: [number, number][] = [];
+  while (i < end) {
+    const first = unit(s, i);
+    if (!first) return undefined;
+    if (first.set) {
+      if (first.set.negated) return undefined;
+      ranges.push(...first.set.ranges);
+      i = first.next;
+      continue;
+    }
+    const dash = s[first.next] === "-" && first.next + 1 < end;
+    const last = dash ? unit(s, first.next + 1) : undefined;
+    if (last && last.code !== undefined) {
+      ranges.push([first.code!, last.code]);
+      i = last.next;
+    } else {
+      ranges.push([first.code!, first.code!]);
+      i = first.next;
+    }
+  }
+  return { ranges, negated };
+}
+
+/** One matcher atom at `i`: the set it matches (when it is one unit) and where the next atom starts. */
+function atom(s: string, i: number): { set?: CharSet; next: number } {
+  const u = unit(s, i);
+  if (!u) return { next: i + 1 };
+  let next = u.next;
+  // a quantifier repeats the same atom, so for overlap it still matches one unit
+  if (s[next] === "*" || s[next] === "+" || s[next] === "?") next++;
+  else {
+    const counted = /^\{(\d+)(,(\d*))?\}/.exec(s.slice(next));
+    if (counted) next += counted[0].length;
+  }
+  return { set: u.set ?? (u.code === undefined ? undefined : literal(u.code)), next };
+}
+
+/**
+ * Whether two alternatives can consume the same text from the same position: one is a text prefix of
+ * the other ((a|aa)), or their atoms accept a shared unit at every step ((a|a), ([ab]|a), (\w|a), (a|.)).
+ */
+function overlaps(a: string, b: string): boolean {
+  if (b.startsWith(a)) return true;
+  let i = 0;
+  let j = 0;
+  while (i < a.length && j < b.length) {
+    const x = atom(a, i);
+    const y = atom(b, j);
+    if (!x.set || !y.set || !intersects(x.set, y.set)) return false;
+    i = x.next;
+    j = y.next;
+  }
+  return i >= a.length || j >= b.length;
+}
+
+// A group whose top-level alternatives overlap (one a prefix of another; equal counts; or an
+// alternative its sibling's class already accepts), repeated by its own quantifier or an enclosing
+// group's, backtracks exponentially on a non-matching tail with no nested quantifier to catch:
+// (a|a)*, (a|aa)+, (a|a){30}, ((a|a))*, ([ab]|a)*
 function overlappingAlternation(re: string): boolean {
-  const classEnd = (s: string, open: number): number => {
-    let i = open + 1;
-    if (s[i] === "^") i++;
-    if (s[i] === "]") i++;
-    while (i < s.length && s[i] !== "]") i += s[i] === "\\" ? 2 : 1;
-    return i;
-  };
   const alternatives = (body: string): string[] => {
     const alts: string[] = [];
     let start = 0;
@@ -110,7 +261,7 @@ function overlappingAlternation(re: string): boolean {
     if (!groups.some((h) => h.repeated && h.start <= g.start && g.end <= h.end)) continue;
     const alts = alternatives(re.slice(g.start, g.end));
     for (let a = 0; a < alts.length; a++)
-      for (let b = 0; b < alts.length; b++) if (a !== b && alts[b]!.startsWith(alts[a]!)) return true;
+      for (let b = 0; b < alts.length; b++) if (a !== b && overlaps(alts[a]!, alts[b]!)) return true;
   }
   return false;
 }
