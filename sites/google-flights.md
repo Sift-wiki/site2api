@@ -10,6 +10,9 @@ No account is needed. One-way, 1 adult, economy only. No pagination.
   code comes back empty.
 - A date in the past or a place Google can't resolve makes `search` and `top` return `input`: check
   the date and places. `priceCalendar` with an empty range returns `input`.
+- Repeated use needs no cookies. Too many calls bring Google's "unusual traffic" page: the call
+  returns `rate` and the site rests. Wait `retryAfterMs`; don't refresh cookies. Send fewer calls:
+  shortlist dates with `priceCalendar`, and reuse recent answers.
 
 ## Maintainer notes
 
@@ -88,3 +91,15 @@ per item. Add them to `pick` in your copy of the spec if you need them. `priceCa
   param's `pattern` before anything is sent.
 - Prices and names follow `hl=en-US&gl=US&curr=USD` in the page URL and the calendar's
   `x-goog-ext-259736195-jspb` header. The EU consent wall was not tested.
+
+### Throttling (issue #84)
+
+Google's wall after many calls is a redirect to `/sorry/index`, which answers HTTP 429 with no
+`Retry-After` ("Our systems have detected unusual traffic from your computer network. Please try
+your request again later."), seen live on 2026-11-04. It classifies as `rate`, so the site cools
+down for 3 minutes, and every op of the site answers from the cool-down without sending
+(`test/sites.test.ts` pins this with a trimmed copy of that page). Rotating `NID`/`OTZ` does not
+help and is not needed: the ops were verified with an empty jar. Only `SOCS`, the consent record,
+could matter, behind the untested EU consent wall. A logged-out read redirected to
+`consent.google.com` is `drift` there (an unfinished step is only named for signed-in ops), so a
+report of a heal loop from the EU is the evidence to ask for.
