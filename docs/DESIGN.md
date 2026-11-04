@@ -1906,5 +1906,31 @@ independent alternative.
 ## Non-goals (v1)
 
 TLS impersonation transports, CAPTCHA solving, signature reimplementation, seroval parsing,
-a marketplace (the registry stores and counts; see Sharing specs), typed-client codegen, and Windows app-bound cookie decryption
-(login falls back to `--window` there).
+a marketplace (the registry stores and counts; see Sharing specs), typed-client codegen, Windows app-bound cookie decryption
+(login falls back to `--window` there), and local operations (below).
+
+**Local operations.** An op is a request to a site, sent by the ladder. An op that runs a program on
+the caller's machine instead is out of scope: a shell line with `{param}` holes, or a named tool that
+api-anything ships (`youtube-captions` running `yt-dlp` with an argv, issue #105). A fixed tool list
+run without `sh -c`, in a scrubbed environment, asynchronously, does remove the injection and the
+frozen MCP server. It does not fix the rest:
+
+- *The boundary.* `vetShared` can vouch for a shared spec because everything the spec makes happen is
+  a request it can read: https to a public host, a GET lookup on the op's own host, a method, regexes it
+  bounds. A tool fetches with its own client, so none of that applies to what it sends. It also skips
+  pacing, cool-downs, the classifier and the public-address check, and it runs with the caller's files.
+  A spec that picks the tool is the part vet can read; what the tool does is not.
+- *Healing.* There is no capture, trigger or tier for a tool, so drift is only a failure, and nothing
+  in a run tells drift from a rate limit or a bad arg. Every other op is judged by the same classifier
+  and sent through the same ladder, whether or not a page of its site can heal it.
+- *What the tools are for.* The tools that would earn a place, `yt-dlp` first, exist to get past what
+  a site's page does: deciphering player signatures, minting or avoiding proof-of-origin tokens. That
+  is signature reimplementation by another name.
+
+Data a site serves only to such a client stays out of the catalog until a page of the site requests
+it, so the ladder can send and heal that request. For YouTube captions, the probes behind this
+(`docs/research/youtube-captions.md`) found that the watch page's own tracks answer empty without the
+web player's token, and that only the Android app's player request answers plain HTTP. That request
+needs a POST lookup and a whole signed URL as a derived value, which the shared rules refuse, and no
+page sends it, so it could not heal either. The route that fits is a tier-3 op that turns captions on
+in the page and captures the page's own request; it is not built yet.
