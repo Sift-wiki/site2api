@@ -13,14 +13,15 @@ permissions:
   contents: read
 
 # Actions are pinned by commit SHA (a tag can be moved), and no job keeps the token in .git or restores
-# a cache: outside code reaches the self-hosted runner once a maintainer approves a fork's run.
+# a cache: outside code reaches a self-hosted runner once a maintainer approves a fork's run.
 jobs:
   check:
-    # CI_RUNS_ON=instabox runs pushes and same-repository pull requests on the self-hosted Instabox
-    # box; pull requests from forks use GitHub's runner. A fork could edit this line, so the
-    # repository requires approval before any outside contributor's workflow runs. Both machines
-    # have Google Chrome where src/browser.ts looks for it.
-    runs-on: ${{ (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && vars.CI_RUNS_ON || 'ubuntu-24.04' }}
+    # Pushes and same-repository pull requests run on a fresh Instabox machine (4 vCPU, 8 GiB) per
+    # job, or on CI_RUNS_ON when it is set; pull requests from forks use GitHub's runner. A fork
+    # could edit this line to spend Instabox credit, so the repository requires approval before any
+    # outside contributor's workflow runs. Both machines have Google Chrome where src/browser.ts
+    # looks for it.
+    runs-on: ${{ (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && (vars.CI_RUNS_ON || 'instabox-medium') || 'ubuntu-24.04' }}
     timeout-minutes: 30
     strategy:
       fail-fast: false
