@@ -2,25 +2,28 @@
  * login = get a signed-in session for a site. By default it IMPORTS cookies from the user's
  * everyday browser (they are almost always already signed in there); `--window` and `--cookies`
  * are the other two sources. This module wires the pure import (import.ts) to the session store
- * and the persistent browser profile, and re-imports on a self-healing auth failure.
+ * and the persistent browser profile, and re-imports on a self-healing auth failure. The first import
+ * of a site from a browser profile waits for a person's yes (`ImportRefused` without one).
  */
 import { readFileSync, rmSync } from "node:fs";
 import { addCookiesToProfile, browserAvailable, clearProfileCookies, login } from "./browser.js";
 import { profileDir } from "./heal.js";
 import {
   belongs,
+  chooseProfile,
   cookiesFromFile,
   type ImportedSession,
   type ImportPin,
-  importFromBrowsers,
   parsePin,
   profileLabel,
 } from "./import.js";
 import {
+  type ImportApproval,
   loadSession,
   loggedIn,
   parseSetCookie,
   renewedSignIn,
+  type Session,
   safeName,
   saveSession,
   sessionFile,
@@ -67,10 +70,63 @@ export function resolveLoginTarget(target: string): { site: string; url: string;
   return { site: host.replace(/^www\./, ""), url };
 }
 
+/**
+ * The hosts the user pre-approved for a browser import with no one at a terminal, for automation they
+ * set up themselves: `API_ANYTHING_ALLOW_IMPORT=github.com,linkedin.com`. A host counts for its whole site.
+ */
+export function importAllowed(url: string): boolean {
+  const site = hostOf(url);
+  return (process.env.API_ANYTHING_ALLOW_IMPORT ?? "")
+    .split(",")
+    .map((h) =>
+      h
+        .trim()
+        .toLowerCase()
+        .replace(/^https?:\/\//, "")
+        .replace(/[/:].*$/, ""),
+    )
+    .some((h) => !!h && siteOf(h) === site);
+}
+
+/**
+ * A browser import refused before any cookie value was read: a first import of the site (or one from
+ * another profile than the one chosen before) with no one to ask, or the person said no.
+ */
+export class ImportRefused extends Error {
+  constructor(
+    /** the registrable domain whose cookies would have been read: what `API_ANYTHING_ALLOW_IMPORT` takes */
+    readonly domain: string,
+    readonly declined: boolean,
+    readonly from?: string,
+  ) {
+    super(
+      declined
+        ? `not imported: you said no to importing ${domain} cookies from ${from}`
+        : `importing ${domain} cookies from ${from ?? "your everyday browser"} needs a yes from a person at a terminal, the first time`,
+    );
+    this.name = "ImportRefused";
+  }
+}
+
+/** Asks a person a yes/no question whose default is no. */
+export type ConfirmImport = (question: string) => Promise<boolean>;
+
+const sameProfile = (a: string, b: string) => {
+  const x = parsePin(a);
+  const y = parsePin(b);
+  return x.browser?.toLowerCase() === y.browser?.toLowerCase() && x.profile === y.profile;
+};
+
 export interface ImportOptions {
   loginCookies?: string[];
   /** "Chrome/Profile 1" or a session source "chrome:Profile 1" */
   profile?: string;
+  /**
+   * Asks the person at the terminal before a browser profile's cookies are read for the first time for
+   * this site. Without it, only a re-import from the profile chosen before, or a host in
+   * `API_ANYTHING_ALLOW_IMPORT`, reads anything; anything else throws `ImportRefused`.
+   */
+  confirm?: ConfirmImport;
   /** a cookies.txt / JSON export, for servers/CI with no browser */
   file?: string;
   /** also inject into api-anything's browser profile (default true when a browser is present) */
@@ -157,15 +213,43 @@ export async function importSession(site: string, url: string, o: ImportOptions 
     const cookies = cookiesFromFile(readFileSync(o.file, "utf8"), url).filter((c) => forSite(c, url));
     if (cookies.length) imported = { cookies, source: "file", browser: "file", profile: o.file };
   } else {
+    // An agent with a shell can run login itself, and macOS may hand over the Keychain key silently
+    // ("Always Allow"): a (domain, profile) pair no person approved is read only on a person's yes.
+    // Bound to the domain read, not the site key: a site's op on another domain, or a URL passed
+    // under a known site's name, is a new choice.
+    const domain = hostOf(url);
+    const approved = importApprovals(site).filter((a) => a.domain === domain);
+    const allowed = importAllowed(url);
+    if (!approved.length && !allowed && !o.confirm) throw new ImportRefused(domain, false);
     const pin = o.profile ? parsePin(o.profile) : undefined;
-    imported = importFromBrowsers({ url, loginCookies: o.loginCookies, pin, guest });
+    const chosen = chooseProfile({ url, loginCookies: o.loginCookies, pin, guest });
+    if (chosen && !allowed && !approved.some((a) => sameProfile(a.source, chosen.source))) {
+      const from = profileLabel(chosen.source).label;
+      if (!o.confirm) throw new ImportRefused(domain, false, from);
+      if (!(await o.confirm(`Import ${domain} cookies from ${from}?`))) throw new ImportRefused(domain, true, from);
+    }
+    if (chosen) {
+      const { read, ...session } = chosen;
+      const cookies = read();
+      if (cookies.length) imported = { ...session, cookies };
+    }
   }
   if (!imported?.cookies.length) return undefined;
   const { cookies } = imported;
   const before = withLock(sessionFile(site), () => {
     const s = loadSession(site);
     const guestCookies = o.guest ? union(s.guestCookies, o.guest) : s.guestCookies;
-    saveSession(site, { ...s, cookies, source: imported.source, ...(guestCookies ? { guestCookies } : {}) });
+    // the migrated approval is written out before `source` changes, since it is derived from it
+    const imports = importApprovals(site, s);
+    if (imported.source !== "file" && !imports.some((a) => a.domain === hostOf(url) && a.source === imported.source))
+      imports.push({ domain: hostOf(url), source: imported.source });
+    saveSession(site, {
+      ...s,
+      cookies,
+      source: imported.source,
+      ...(guestCookies ? { guestCookies } : {}),
+      ...(imports.length ? { imports } : {}),
+    });
     return s.cookies;
   });
   clearCoolDown(site);
@@ -215,10 +299,34 @@ export function importWarning(url: string, r: Imported): string | undefined {
 
 const forSite = (c: StoredCookie, url: string) => belongs(c.domain, siteOf(new URL(url).hostname.toLowerCase()));
 
+const isBrowserSource = (source?: string): source is string => !!source && source !== "window" && source !== "file";
+
 /** The browser profile a human chose for this site ("chrome:Profile 1"), if its session came from one. */
 export function browserSource(site: string): string | undefined {
   const source = loadSession(site).source;
-  return source && source !== "window" && source !== "file" ? source : undefined;
+  return isBrowserSource(source) ? source : undefined;
+}
+
+/** The registrable domain of a site's baseUrl, or of a site named after its host ("github.com"). */
+function siteDomain(site: string): string | undefined {
+  try {
+    const baseUrl = loadSite(site)?.site.baseUrl;
+    if (baseUrl) return hostOf(baseUrl);
+  } catch {
+    // a corrupt spec approves nothing
+  }
+  return site.includes(".") ? siteOf(site) : undefined;
+}
+
+/**
+ * The (domain, profile) pairs a person approved importing for this site. A session saved before
+ * approvals were recorded, whose source is a browser profile, counts as approved for that profile and
+ * the registrable domain of the site's baseUrl only: the one domain that login could have read.
+ */
+export function importApprovals(site: string, s: Session = loadSession(site)): ImportApproval[] {
+  if (s.imports) return s.imports.map((a) => ({ ...a }));
+  const domain = isBrowserSource(s.source) ? siteDomain(site) : undefined;
+  return domain && s.source ? [{ domain, source: s.source }] : [];
 }
 
 /**
@@ -242,9 +350,10 @@ export async function reimportIfBrowser(
     if (!source) return { renewed };
     const pin: ImportPin = parsePin(source);
     renewed = !!(await importSession(site, url, { loginCookies, profile: `${pin.browser}/${pin.profile}` }))?.renewed;
-  } catch {
+  } catch (e) {
+    // a domain no person approved for this profile: `api-anything login` in a terminal, which asks
+    if (e instanceof ImportRefused || !source) return { renewed: false };
     // an unreadable session file, a profile with no cookies left, a full disk: no recovery
-    if (!source) return { renewed };
   }
   const { label, profile } = profileLabel(source);
   return { renewed, signIn: `sign in to ${hostOf(url)} in ${label}`, profile };

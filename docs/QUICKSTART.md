@@ -12,8 +12,12 @@ account and no model key: your agent supplies the reasoning when it learns an op
 npx -y api-anything setup
 ```
 
-Setup connects the MCP server, `{"command":"npx","args":["-y","api-anything","mcp"]}`, to each agent
-it finds:
+Setup lists the agents it finds and asks once which to connect: `Connect API Anything to: 1) Claude
+Code 2) Codex 3) Cursor [Enter = all, numbers like 1,3, n = none]`. Hermes, an always-on gateway, is
+never in that list: name it with `--agents hermes`. Without a terminal (an agent running it) and
+without `--agents`, it connects nothing and prints the command that connects each agent it found.
+It connects the MCP server, `{"command":"npx","args":["-y","api-anything","mcp"]}`, to each agent
+chosen:
 
 | agent | how | skill |
 |---|---|---|
@@ -44,20 +48,26 @@ The server's own instructions carry the same rules in brief, for a client that l
   nobody edited since (each copy carries a stamp, `.api-anything.json`). An edited copy, a link, or
   a copy from a newer version is left alone.
 - It checks for a Chromium browser, makes this install's key (`~/.api-anything/key.json`, mode 0600),
-  and asks whether to help build the shared catalog. The answer is kept in
-  `~/.api-anything/settings.json`; until it is given, nothing is shared or reported. Without setup
-  (the plugin, or `mcp add` by hand), the agent's `learn_site` asks the same question once, the first
-  time it learns something it could share.
+  and asks whether to help build the shared catalog (Enter = yes). After a yes it asks a second
+  question, whether an idle server may test up to 20 new shared operations a day from your network,
+  with no cookies and on public https hosts only (Enter = no). The answers are kept in
+  `~/.api-anything/settings.json`; until the first is given, nothing is shared or reported. Without
+  setup (the plugin, or `mcp add` by hand), the agent's `learn_site` asks the sharing question once,
+  the first time it learns something it could share. An install that said yes before verification
+  had its own question keeps it on, as that answer covered it.
 
 Flags:
 
 | flag | does |
 |---|---|
 | `--dry-run` | prints what would change, and changes nothing |
-| `--yes` | answers the question yes without asking |
-| `--no-share` | answers it no |
-| `--share-only` | with `--yes` or `--no-share`: records the answer and changes nothing else (the way to turn sharing on or off later) |
-| `--agents claude-code,codex,cursor,claude-desktop,hermes,gemini,vscode` | connects these agents only, found or not |
+| `--agents claude-code,codex,...` | connects these agents only, found or not; `all` is every one found but Hermes |
+| `--yes` | answers the sharing question yes without asking |
+| `--no-share` | answers it no (and turns verification off) |
+| `--verify`, `--no-verify` | background verification on or off; it needs sharing on |
+| `--local-only`, `--no-local-only` | sends nothing to the shared catalog (no search, pull, reports, verification, sharing or publish), or reaches it again. `API_ANYTHING_LOCAL_ONLY=1` does the same for one environment |
+| `--pin` | writes `api-anything@<this version>` into each config instead of the newest release; `setup --pin` from a newer version moves the pin, and `status` shows each config's |
+| `--share-only` | records the answers above and changes nothing else (the way to change them later) |
 
 Without a terminal (an agent running it) and without `--yes` or `--no-share`, the question is not
 asked and nothing is shared. Running setup again changes only what is missing.

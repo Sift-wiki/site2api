@@ -28,12 +28,13 @@ import {
   unplaced,
 } from "./heal.js";
 import { buildRequest, unknownArgs } from "./http.js";
-import { answerShare } from "./identity.js";
+import { loadSettings, localOnly, localOnlyOff, setLocalOnly } from "./identity.js";
 import { AmbiguousProfile } from "./import.js";
 import { type Candidate, capturePages, matches, pageUrls, rankCandidates } from "./learn.js";
 import { learnSite } from "./learnsite.js";
 import {
   cookieNames,
+  ImportRefused,
   importSession,
   importWarning,
   knownGuests,
@@ -45,13 +46,24 @@ import {
 import { type Outline, outline } from "./outline.js";
 import { pagingFlag, pagingHints } from "./paging.js";
 import { plan, uploadName } from "./publish.js";
-import { pull, RegistryError, reportInterface, search } from "./registry.js";
+import { LocalOnlyError, pull, RegistryError, reportInterface, search } from "./registry.js";
 import { settle } from "./report.js";
 import { getResult, type ResultView, viewProblem } from "./results.js";
 import { onPlaintext, plaintextWarning, SealError } from "./seal.js";
 import { captureLive, redact } from "./secrets.js";
 import { loadSession, placeholders } from "./session.js";
-import { AGENTS, type Agent, askYesNo, setup, summary } from "./setup.js";
+import {
+  AGENTS,
+  type Agent,
+  answersSummary,
+  askAgents,
+  askYesNo,
+  configPins,
+  guiServer,
+  record,
+  setup,
+  summary,
+} from "./setup.js";
 import { shareOps } from "./share.js";
 import { refreshSkills } from "./skill.js";
 import {
@@ -102,7 +114,12 @@ const HELP: Record<string, string> = {
   By default imports the site's cookies from your everyday browser (you are almost always already
   signed in there, so no password and no re-doing 2FA). Prints which profile was used and the cookie
   NAMES only (plus the profile's display name and Google account). The imported session is the SAME
-  one as your browser: if the site logs it out, both go.
+  one as your browser: if the site logs it out, both go. The first import of a domain from a browser
+  profile asks first, on the terminal: Import <domain> cookies from <profile>? [y/N]. Without a
+  terminal it reads nothing and refuses; --window and --cookies need no terminal, and a later import
+  of that domain from that profile asks nothing. API_ANYTHING_ALLOW_IMPORT=github.com,linkedin.com
+  pre-approves those domains for automation you set up. On macOS, choose Allow on the Keychain
+  dialog, not Always Allow.
   <site|url>  a site name (linkedin), a domain (linkedin.com, www.linkedin.com) or a URL
   --profile   the browser profile to import from, e.g. "Chrome/Profile 1". Needed when several
               profiles are signed in to the site (possibly different people's accounts): login
@@ -316,7 +333,8 @@ const HELP: Record<string, string> = {
   URL matches the sites whose operations use it (news.ycombinator.com). Each match says whether it is
   installed; pull one that is not. A match may list the site's own agent interfaces (an MCP server, an
   OpenAPI document); a domain search finds a site that has only those. API_ANYTHING_REGISTRY overrides
-  the registry's URL.`,
+  the registry's URL. Local-only (setup --local-only, API_ANYTHING_LOCAL_ONLY=1) searches this
+  machine alone, and the answer says so.`,
   interface: `api-anything interface mcp|openapi <url>
   Tells the registry a site offers its own agent interface: an MCP server or an OpenAPI document, https
   on the site's own domain. Once installs on enough distinct networks said so, search lists it beside
@@ -335,19 +353,21 @@ const HELP: Record<string, string> = {
   literal typed into the page). The param examples are sent: they must be values anyone may see. It
   refuses an op holding a live cookie or session value, or failing its checks. --yes sends them, signed
   with this install's key; an op that needed a login or writes is reviewed before others get it.`,
-  mcp: `api-anything mcp [--allow-writes] [--sites a,b] [--print-config] [--no-learn]
+  mcp: `api-anything mcp [--allow-writes] [--sites a,b] [--print-config [--pin]] [--no-learn]
   Serves list_sites, find_sites, list_operations, call_operation, call_batch, get_result, get_job, site_status, login and learn_site over
   stdio MCP, and call_write_operation with --allow-writes. list_operations and call_operation pull a
   shared site an agent asks for, with its reads only: its writes need a human's api-anything pull. Its
   login only refreshes a session a human imported here. A call still running after about 25 s answers
-  class pending with a job, which get_job waits for. With sharing on, an idle server checks a few new
-  shared operations a day, over plain HTTP with no cookies, and reports how calls went. learn_site
+  class pending with a job, which get_job waits for. With sharing on, it reports how calls went; with
+  verification on too (setup --verify), an idle server checks a few new shared operations a day, over
+  plain HTTP with no cookies. learn_site
   learns a read (as learn does); writes are learned here with add --write.
   --sites a,b     also serve each operation of these sites as a tool of its own (goodreads__searchBooks),
                   with its args' JSON Schema: no list_operations step first. Costs tokens per op
   --print-config  print the command or config entry that adds this server to Claude Code, Codex,
                   Gemini CLI, VS Code, Cursor and Claude Desktop, with absolute paths and the other
                   flags given, instead of serving
+  --pin           with --print-config: the npx form pinned to this version (api-anything@<version>)
   --no-learn      hide learn_site`,
   serve: `api-anything serve [--host 127.0.0.1] [--port 8787] [--allow-writes] [--sites a,b] [--no-learn] [--cors <origin>]... [--public-url <url>] [--max-concurrent 8] [--print-config]
   Serves the MCP tools over HTTP, for clients that cannot start a process (n8n, Make, Zapier, Dify,
@@ -371,22 +391,35 @@ const HELP: Record<string, string> = {
   --max-concurrent  calls running at once over REST and MCP together (default 8; a batch takes one
                 per call it runs at once); one more is answered at once with 429, class rate
   --print-config  print curl, MCP-over-HTTP and n8n examples instead of serving`,
-  setup: `api-anything setup [--yes | --no-share] [--share-only] [--agents claude-code,codex,cursor,claude-desktop,hermes,gemini,vscode] [--dry-run]
-  Connects the MCP server (npx -y api-anything mcp) to each agent found on this machine: Claude Code,
-  Codex, Cursor, Claude Desktop, Hermes, Gemini CLI, VS Code. Installs the skill for Claude Code
+  setup: `api-anything setup [--agents <list> | --agents all] [--yes | --no-share] [--verify | --no-verify] [--local-only | --no-local-only] [--pin] [--share-only] [--dry-run]
+  Connects the MCP server (npx -y api-anything mcp) to the agents you choose: Claude Code, Codex,
+  Cursor, Claude Desktop, Hermes, Gemini CLI, VS Code. On a terminal with no --agents it lists the
+  agents found and asks once which to connect (Enter = all of them). Hermes, an always-on gateway, is
+  never in that list: name it with --agents hermes. With no terminal and no --agents it connects
+  none, and prints the command that connects each agent found. Installs the skill for Claude Code
   (~/.claude/skills), for Hermes (~/.hermes/skills) and for Codex, Cursor, Gemini CLI and VS Code
   (~/.agents/skills); Claude Desktop takes skills only by upload. Checks for a Chromium browser, makes
-  this install's key, and asks whether to help build the shared catalog (default yes). Other entries
-  in an agent's config are never changed; a file is backed up to <file>.bak-api-anything before its
-  first edit. Running it again changes nothing. Afterwards, any command (the MCP server included)
-  updates a skill copy setup installed when a newer api-anything runs, unless the copy was edited.
-  --yes        share: answer the question yes without asking
-  --no-share   do not share; answer the question no
-  --share-only record --yes or --no-share and nothing else: no agent, skill or key is touched. learn_site
-               asks the question the first time something could be shared; this records the answer
-               given in chat, and changes it later
-  --agents     connect these agents only, found or not
-  --dry-run    print what would change, and change nothing`,
+  this install's key, and asks whether to help build the shared catalog (Enter = yes), then, after a
+  yes, whether an idle server may test new shared operations from your network (Enter = no). Other
+  entries in an agent's config are never changed; a file is backed up to <file>.bak-api-anything
+  before its first edit. Running it again changes nothing. Afterwards, any command (the MCP server
+  included) updates a skill copy setup installed when a newer api-anything runs, unless the copy was edited.
+  --agents       connect these agents only, found or not (claude-code,codex,cursor,claude-desktop,hermes,
+                 gemini,vscode). all: every one found but Hermes (all,hermes adds it)
+  --yes          share: answer the sharing question yes without asking
+  --no-share     do not share or report; answer it no (verification goes off too)
+  --verify       let an idle MCP server test up to 20 new shared operations a day from your network,
+                 with no cookies, on public https hosts only. Needs sharing on
+  --no-verify    no background verification (the default)
+  --local-only   send nothing to the shared catalog: no search, pull, reports, verification, sharing or
+                 publish. API_ANYTHING_LOCAL_ONLY=1 does the same for one environment
+  --no-local-only  reach the catalog again
+  --pin          write api-anything@<this version> into each config instead of the newest release; run
+                 it again from a newer version to move the pin
+  --share-only   record --yes/--no-share, --verify/--no-verify and --local-only/--no-local-only and nothing
+                 else: no agent, skill or key is touched. learn_site asks the sharing question the first
+                 time something could be shared; this records the answer given in chat, and changes it later
+  --dry-run      print what would change, and change nothing`,
   learn: `api-anything learn <trigger> --args k=v --args2 k=v --args3 k=v [--site s] [--op o] [--intent text] [options]
   Learns a read in one step and returns the answer to --args (as MCP learn_site does): runs the page with
   --args and --args2, picks the request carrying them and the fields from the first run's outline, saves
@@ -411,7 +444,7 @@ const HELP: Record<string, string> = {
 
 const USAGE = `api-anything ${VERSION}: turn a website into operations an agent can call.
 
-  api-anything setup [--yes | --no-share] [--dry-run]
+  api-anything setup [--agents claude-code,...] [--yes | --no-share] [--verify] [--local-only] [--pin] [--dry-run]
   api-anything learn <url-template> --args k=v --args2 k=v --args3 k=v
   api-anything login <site|url> [--profile ... | --window | --cookies <file>]
   api-anything logout <site>
@@ -569,6 +602,11 @@ const OPTIONS = {
   agents: { type: "string" },
   "dry-run": { type: "boolean" },
   "no-share": { type: "boolean" },
+  verify: { type: "boolean" },
+  "no-verify": { type: "boolean" },
+  "local-only": { type: "boolean" },
+  "no-local-only": { type: "boolean" },
+  pin: { type: "boolean" },
   "share-only": { type: "boolean" },
   "no-learn": { type: "boolean" },
   paging: { type: "string" },
@@ -626,10 +664,25 @@ async function cmdLogin({ v, pos }: Parsed): Promise<number> {
 
   // what a signed-out visit is given, so those names do not pass for a sign-in
   const guest = await knownGuests(site, url, loginCookies);
+  const tty = process.stdin.isTTY && process.stderr.isTTY;
   let imported: Awaited<ReturnType<typeof importSession>>;
   try {
-    imported = await importSession(site, url, { loginCookies, profile: v.profile, file: v.cookies, guest });
+    imported = await importSession(site, url, {
+      loginCookies,
+      profile: v.profile,
+      file: v.cookies,
+      guest,
+      ...(tty ? { confirm: (q: string) => askYesNo(q, false) } : {}),
+    });
   } catch (e) {
+    if (e instanceof ImportRefused)
+      throw new Fail(
+        e.message,
+        e.declined
+          ? `nothing was read. To sign in without your browser's cookies: api-anything login ${site} --window`
+          : `ask the user to run in a terminal: api-anything login ${site} (it asks before reading their browser's cookies), or to sign in in a window of its own: api-anything login ${site} --window. Automation the user set up can pre-approve the domain: API_ANYTHING_ALLOW_IMPORT=${e.domain}`,
+        { site },
+      );
     if (!(e instanceof AmbiguousProfile)) throw e;
     throw new Fail(
       e.message,
@@ -1243,7 +1296,9 @@ function cmdHeals({ pos }: Parsed): number {
 }
 
 function cmdStatus({ pos }: Parsed): number {
-  out(status(pos[0] ? requireSite(pos[0]).site.name : undefined));
+  if (pos[0]) out(status(requireSite(pos[0]).site.name));
+  // the whole install: also which agent configs run a pinned version (setup --pin), or the newest release
+  else out({ ...status(), configs: configPins() });
   return 0;
 }
 
@@ -1555,9 +1610,12 @@ async function cmdSearch({ pos }: Parsed): Promise<number> {
     query,
     matches: r.matches,
     ...(r.registryError ? { registryError: r.registryError } : {}),
+    ...(r.localOnly ? { localOnly: r.localOnly } : {}),
     ...(r.matches.length ? { shared: SHARED_NOTE } : {}),
     next: !top
-      ? "nothing matched. Broaden the query or check api-anything sites before learning. Words find only sites whose operations other installs confirmed: if you know the site's domain or a page URL, search with that, which also finds unconfirmed ones; else learn it with api-anything learn"
+      ? r.localOnly
+        ? "nothing on this machine matched, and the shared catalog was not asked (local-only). Check api-anything sites, or learn it with api-anything learn"
+        : "nothing matched. Broaden the query or check api-anything sites before learning. Words find only sites whose operations other installs confirmed: if you know the site's domain or a page URL, search with that, which also finds unconfirmed ones; else learn it with api-anything learn"
       : !top.operations.length && top.interfaces?.length
         ? `${top.domain} offers its own agent interface: ${top.interfaces.map((i) => `${i.kind} ${i.url}`).join(", ")}`
         : r.matches.every((m) => m.unmatched.length)
@@ -1588,9 +1646,11 @@ async function cmdPull({ pos }: Parsed): Promise<number> {
       (e as Error).message,
       missing
         ? `nobody shared ${pos[0]} yet: learn it with api-anything capture and add, then share it with api-anything publish`
-        : e instanceof RegistryError
-          ? "the registry request failed, not the spec: check the network (and API_ANYTHING_REGISTRY if it is set), then retry"
-          : "do not edit the pulled spec to get past this; learn the site with capture and add instead",
+        : e instanceof LocalOnlyError
+          ? localOnlyOff()
+          : e instanceof RegistryError
+            ? "the registry request failed, not the spec: check the network (and API_ANYTHING_REGISTRY if it is set), then retry"
+            : "do not edit the pulled spec to get past this; learn the site with capture and add instead",
     );
   }
   out({
@@ -1606,6 +1666,11 @@ async function cmdPull({ pos }: Parsed): Promise<number> {
 async function cmdPublish({ v, pos }: Parsed): Promise<number> {
   const [name, ...ops] = pos;
   const { site } = requireSite(name);
+  if (localOnly())
+    throw new Fail(
+      `refusing to publish ${site.name}: this install is local-only, so nothing is sent to the shared catalog`,
+      localOnlyOff(),
+    );
   const again = `api-anything publish ${[site.name, ...ops].join(" ")}`;
   let p: ReturnType<typeof plan>;
   try {
@@ -1653,30 +1718,56 @@ async function cmdPublish({ v, pos }: Parsed): Promise<number> {
 }
 
 async function cmdSetup({ v }: Parsed): Promise<number> {
-  if (v.yes && v["no-share"]) throw new Fail("--yes and --no-share contradict each other", "pass one of them");
-  if (v["share-only"]) {
-    if (!v.yes && !v["no-share"])
-      throw new Fail("--share-only records an answer: pass --yes or --no-share with it", "api-anything setup --help");
-    const share = !!v.yes;
-    if (!v["dry-run"]) answerShare(share);
-    out({ ok: true, ...(v["dry-run"] ? { dryRun: true } : {}), share, shareAsked: true });
-    process.stderr.write(
-      `Sharing: ${v["dry-run"] ? "would be " : ""}${share ? "on. Turn it off with api-anything setup --no-share --share-only" : "off. Turn it on with api-anything setup --yes --share-only"}\n`,
+  const pair = (on: Flag, off: Flag) => {
+    if (v[on] && v[off]) throw new Fail(`--${on} and --${off} contradict each other`, "pass one of them");
+    return v[on] ? true : v[off] ? false : undefined;
+  };
+  const share = pair("yes", "no-share");
+  const verify = pair("verify", "no-verify");
+  const offline = pair("local-only", "no-local-only");
+  if (verify && (share === false || (share === undefined && !loadSettings().share)))
+    throw new Fail(
+      "background verification reports its outcomes to the shared catalog, so it needs sharing on",
+      "api-anything setup --yes --verify (add --share-only to change nothing else)",
     );
+  const dryRun = !!v["dry-run"];
+  if (v["share-only"]) {
+    if (share === undefined && verify === undefined && offline === undefined)
+      throw new Fail(
+        "--share-only records answers: pass --yes or --no-share, --verify or --no-verify, or --local-only or --no-local-only with it",
+        "api-anything setup --help",
+      );
+    if (v.agents || v.pin)
+      throw new Fail(
+        "--share-only touches no agent: --agents and --pin need a setup without it",
+        "api-anything setup --help",
+      );
+    if (offline !== undefined && !dryRun) setLocalOnly(offline);
+    const r = { ...(await record({ share, verify }, { dryRun })), localOnly: offline ?? localOnly() };
+    out({ ok: true, ...(dryRun ? { dryRun: true } : {}), ...r });
+    process.stderr.write(`${answersSummary({ ...r, ...(dryRun ? { dryRun: true as const } : {}) }).join("\n")}\n`);
     return 0;
   }
-  const agents = v.agents?.split(",").map((a) => a.trim());
-  const unknown = agents?.filter((a) => !(AGENTS as readonly string[]).includes(a));
-  if (unknown?.length)
+  const agents = v.agents
+    ?.split(",")
+    .map((a) => a.trim())
+    .filter(Boolean);
+  const unknown = agents?.filter((a) => a !== "all" && !(AGENTS as readonly string[]).includes(a));
+  if (unknown?.length || agents?.length === 0)
     throw new Fail(
-      `unknown agent ${unknown.join(", ")}; the agents are ${AGENTS.join(", ")}`,
+      `unknown agent ${unknown?.join(", ") || "(none named)"}; the agents are ${AGENTS.join(", ")}, or all (every one found but Hermes)`,
       "api-anything setup --help",
     );
+  const tty = process.stdin.isTTY && process.stderr.isTTY;
   const r = await setup({
-    agents: agents as Agent[] | undefined,
-    dryRun: v["dry-run"],
-    share: v.yes ? true : v["no-share"] ? false : undefined,
-    ask: process.stdin.isTTY && process.stderr.isTTY ? askYesNo : undefined,
+    agents: agents as (Agent | "all")[] | undefined,
+    choose: tty ? askAgents : undefined,
+    dryRun,
+    share,
+    verify,
+    localOnly: offline,
+    pin: v.pin,
+    ask: tty ? askYesNo : undefined,
   });
   out(r);
   process.stderr.write(`${summary(r)}\n`);
@@ -1728,9 +1819,16 @@ async function cmdMcp({ v }: Parsed): Promise<number> {
       ...(sites.length ? ["--sites", sites.join(",")] : []),
       ...(v["no-learn"] ? ["--no-learn"] : []),
     ];
-    process.stdout.write(`${printConfig(launchOf(fileURLToPath(import.meta.url), flags))}\n`);
+    const here = launchOf(fileURLToPath(import.meta.url), flags);
+    // pinned: npx fetches exactly this version at each start, not the newest release
+    const pinned = v.pin ? guiServer(true) : undefined;
+    const launch = pinned
+      ? { command: pinned.command, args: [...pinned.args, ...flags], env: { ...pinned.env, ...here.env } }
+      : here;
+    process.stdout.write(`${printConfig(launch)}\n`);
     return 0;
   }
+  if (v.pin) throw new Fail("--pin goes with --print-config", "api-anything mcp --print-config --pin");
   const { serveStdio } = await import("./mcp.js");
   await serveStdio({ allowWrites: v["allow-writes"], sites });
   return -1; // keep serving
@@ -1909,7 +2007,7 @@ const COMMANDS: Record<string, { run: (p: Parsed) => number | Promise<number>; f
   interface: { run: cmdInterface, flags: [] },
   pull: { run: cmdPull, flags: [] },
   publish: { run: cmdPublish, flags: ["yes"] },
-  mcp: { run: cmdMcp, flags: ["allow-writes", "sites", "print-config", "no-learn"] },
+  mcp: { run: cmdMcp, flags: ["allow-writes", "sites", "print-config", "no-learn", "pin"] },
   serve: {
     run: cmdServe,
     flags: [
@@ -1924,7 +2022,21 @@ const COMMANDS: Record<string, { run: (p: Parsed) => number | Promise<number>; f
       "print-config",
     ],
   },
-  setup: { run: cmdSetup, flags: ["yes", "no-share", "share-only", "agents", "dry-run"] },
+  setup: {
+    run: cmdSetup,
+    flags: [
+      "yes",
+      "no-share",
+      "verify",
+      "no-verify",
+      "local-only",
+      "no-local-only",
+      "pin",
+      "share-only",
+      "agents",
+      "dry-run",
+    ],
+  },
   learn: {
     run: cmdLearn,
     flags: [
@@ -1999,7 +2111,11 @@ try {
   const next =
     f?.next ??
     (e instanceof CaptureUnavailable || e instanceof SealError ? e.next : undefined) ??
-    (e instanceof ProfileInUse ? PROFILE_HINT : `api-anything ${process.argv[2] ?? ""} --help`.replace(/\s+/g, " "));
+    (e instanceof ProfileInUse
+      ? PROFILE_HINT
+      : e instanceof LocalOnlyError
+        ? localOnlyOff()
+        : `api-anything ${process.argv[2] ?? ""} --help`.replace(/\s+/g, " "));
   process.stderr.write(`next: ${next}\n`);
   process.exitCode = 1;
 }

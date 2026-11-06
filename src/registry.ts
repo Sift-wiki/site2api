@@ -8,7 +8,7 @@ import { rmSync } from "node:fs";
 import { join } from "node:path";
 import { z } from "zod";
 import { loadRecord, opHash } from "./checks.js";
-import { loadSettings, signedHeaders } from "./identity.js";
+import { loadSettings, localOnly, localOnlyOff, signedHeaders } from "./identity.js";
 import { MAX_SEARCH_QUERY, REGISTRY_API, type ServedSite, type Status } from "./registry-api.js";
 import { indexEntry, matchQuery, operationMatch, type QueryMatch, summarize } from "./search.js";
 import { dropUnbound, home, loadSession, readJson, safeName, siteOf, writePrivate } from "./session.js";
@@ -38,9 +38,19 @@ export class RegistryError extends Error {
   }
 }
 
+/** Local-only mode refused a request before anything was sent. */
+export class LocalOnlyError extends RegistryError {
+  constructor() {
+    super(`this install is local-only: nothing is sent to the shared catalog (${localOnlyOff()})`);
+    this.name = "LocalOnlyError";
+  }
+}
+
 /**
  * One request to the registry, answered with JSON: no redirects (one could move it to any origin), a
  * timeout, the answer read while streaming so a huge one stops at `cap`. `signed` adds identity.ts's headers.
+ * Every registry request goes through here, so local-only mode is enforced here: it throws
+ * `LocalOnlyError` before any connection opens.
  */
 export async function registryRequest<T>(
   path: string,
@@ -53,6 +63,7 @@ export async function registryRequest<T>(
     signal?: AbortSignal;
   } = {},
 ): Promise<T> {
+  if (localOnly()) throw new LocalOnlyError();
   const url = `${registryBase()}${path}`;
   const method = o.method ?? "GET";
   const text = o.body === undefined ? "" : JSON.stringify(o.body);
@@ -296,7 +307,7 @@ const RETRY_UPGRADE_MS = 7 * 24 * 60 * 60_000;
  */
 export async function upgradeBundled(name: string, o: { signal?: AbortSignal } = {}): Promise<boolean> {
   name = safeName(name);
-  if (!loadSettings().share || loadSite(name)?.source !== "bundled") return false;
+  if (!loadSettings().share || localOnly() || loadSite(name)?.source !== "bundled") return false;
   const tried = readJsonOr<Record<string, number>>(upgradesFile(), {});
   if (Date.now() - (tried[name] ?? 0) < RETRY_UPGRADE_MS) return false;
   writePrivate(upgradesFile(), JSON.stringify({ ...tried, [name]: Date.now() }));
@@ -540,29 +551,34 @@ const localFound = (s: Site): Found => ({
  * The sites that answer a query, best first: the registry's matches merged with the specs on this machine
  * (a site learned here and never shared is found too; the local copy wins). A registry that cannot be
  * reached leaves the local ones, with the reason in `registryError`. A registry match that breaks the
- * limits is dropped, not the rest.
+ * limits is dropped, not the rest. Local-only mode searches this machine alone and says so in `localOnly`.
  */
 export async function search(
   query: string,
   o: { limit?: number; local?: Site[] } = {},
-): Promise<{ matches: Found[]; registryError?: string }> {
+): Promise<{ matches: Found[]; registryError?: string; localOnly?: string }> {
   const limit = o.limit ?? 5;
   // local scoring and each op's coverage repeat the query's words too
   query = query.trim().slice(0, MAX_SEARCH_QUERY);
   let remote: z.infer<typeof SearchMatchSchema>[] = [];
   let registryError: string | undefined;
-  try {
-    const r = await registryRequest<{ matches?: unknown }>(`/v1/search?q=${encodeURIComponent(query)}&limit=${limit}`, {
-      cap: 4 * 1024 * 1024,
-    });
-    if (!Array.isArray(r.matches)) throw new Error(`${registryBase()}/v1/search answered no matches`);
-    remote = r.matches.flatMap((m) => {
-      const p = SearchMatchSchema.safeParse(m);
-      return p.success ? [p.data] : [];
-    });
-  } catch (e) {
-    registryError = (e as Error).message;
-  }
+  const offline = localOnly();
+  if (!offline)
+    try {
+      const r = await registryRequest<{ matches?: unknown }>(
+        `/v1/search?q=${encodeURIComponent(query)}&limit=${limit}`,
+        {
+          cap: 4 * 1024 * 1024,
+        },
+      );
+      if (!Array.isArray(r.matches)) throw new Error(`${registryBase()}/v1/search answered no matches`);
+      remote = r.matches.flatMap((m) => {
+        const p = SearchMatchSchema.safeParse(m);
+        return p.success ? [p.data] : [];
+      });
+    } catch (e) {
+      registryError = (e as Error).message;
+    }
   const local = o.local ?? localSites();
   const installed = new Set(local.map((s) => s.name));
   // Local call metadata wins. Registry evidence describes its own version, never local verification.
@@ -629,7 +645,15 @@ export async function search(
         ...operationMatch({ op: op.signature, description: op.description }, query),
       })),
     }));
-  return { matches, ...(registryError ? { registryError } : {}) };
+  return {
+    matches,
+    ...(registryError ? { registryError } : {}),
+    ...(offline
+      ? {
+          localOnly: `searched this machine only: this install is local-only, so the shared catalog was not asked (${localOnlyOff()})`,
+        }
+      : {}),
+  };
 }
 
 /**

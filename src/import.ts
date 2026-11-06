@@ -373,13 +373,30 @@ export function profileLabel(source: string): { label: string; profile: string }
  * accounts), it throws AmbiguousProfile with their display names and emails. Undefined when nothing
  * is importable (the caller falls back to the window flow).
  */
-export function importFromBrowsers(o: {
+export function importFromBrowsers(o: ProfileQuery): ImportedSession | undefined {
+  const chosen = chooseProfile(o);
+  if (!chosen) return undefined;
+  const { read, ...session } = chosen;
+  const cookies = read();
+  return cookies.length ? { ...session, cookies } : undefined;
+}
+
+export interface ProfileQuery {
   url: string;
   loginCookies?: string[];
   pin?: ImportPin;
   /** the names a signed-out visit is given (`Session.guestCookies`): a profile holding only these is not signed in */
   guest?: string[];
-}): ImportedSession | undefined {
+}
+
+/** The profile an import would read, chosen by cookie names alone; `read` decrypts its cookies for the site. */
+export type ChosenProfile = Omit<ImportedSession, "cookies"> & { read: () => StoredCookie[] };
+
+/**
+ * The profile `importFromBrowsers` would read, chosen from plaintext cookie names: no value is read or
+ * decrypted and no Keychain dialog appears until `read` is called, so a person can be asked first.
+ */
+export function chooseProfile(o: ProfileQuery): ChosenProfile | undefined {
   const site = siteOf(new URL(o.url).hostname.toLowerCase());
   const candidates = candidatesFor(site, o.pin);
   if (o.pin && !candidates.length)
@@ -399,15 +416,13 @@ export function importFromBrowsers(o: {
     );
   const chosen = pool[0];
   if (!chosen) return undefined;
-  const cookies =
-    chosen.family === "chromium" ? readChromium(chosen.root, chosen.dbPath, site) : readFirefox(chosen.dbPath, site);
-  if (!cookies.length) return undefined;
   return {
-    cookies,
     source: `${chosen.browser.toLowerCase()}:${chosen.profile}`,
     browser: chosen.browser,
     profile: chosen.profile,
     ...profileInfo(chosen),
+    read: () =>
+      chosen.family === "chromium" ? readChromium(chosen.root, chosen.dbPath, site) : readFirefox(chosen.dbPath, site),
   };
 }
 

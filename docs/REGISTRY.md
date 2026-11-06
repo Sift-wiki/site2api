@@ -15,26 +15,44 @@ using the tool; a person is asked only to share an operation that needed a login
 
 ## Setup
 
-`npx api-anything setup` finds the user's agents (Claude Code, Codex, Cursor, Claude Desktop, Gemini
-CLI, VS Code), connects the MCP server to each (and the skill where the agent takes skills), checks
-for a Chromium
-browser (needed only to learn sites), makes the install's key (`identity.ts`: an Ed25519 pair in
-`~/.api-anything/key.json`, 0600) and asks one question:
+`npx api-anything setup` finds the user's agents (Claude Code, Codex, Cursor, Claude Desktop, Hermes,
+Gemini CLI, VS Code) and, on a terminal, asks once which to connect (Hermes only by name); without a
+terminal it connects the ones named with `--agents`, and none otherwise. It connects the MCP server to
+each (and the skill where the agent takes skills), checks for a Chromium browser (needed only to learn
+sites), makes the install's key (`identity.ts`: an Ed25519 pair in `~/.api-anything/key.json`, 0600)
+and asks:
 
 > Help build the shared catalog? Your agent will share operations it learns from public pages (never
-> your cookies or logins), report under this install's anonymous key whether calls work, and test a few
-> new operations a day from your network. Site searches go to the catalog either way.
+> your cookies or logins) and report under this install's anonymous key whether calls work. Site
+> searches go to the catalog either way, unless you choose local-only.
 
-The answer is `settings.json` `share: true|false` (default yes). No account. An install that never ran
-setup (the plugin, `claude mcp add`, `npm -g`) shares nothing until the question is answered: `learn_site`
-asks it once, the first time it has something to share (MCP elicitation, or the CLI's prompt), and when
-the client cannot ask, its `next` has the agent ask the user and run `api-anything setup --yes
---share-only` or `--no-share --share-only`, which records the answer alone. What it does not change:
-`find_sites` sends its words, domain or URL to `GET /v1/search` whether sharing is on or off (the
-local specs are searched too, and answer alone when the registry cannot be reached), and so does a
-call of a site this machine lacks, which fetches it. The registry sees the request's IP address, as any
-web server does, and does not store it. Of a domain or URL search that finds nothing, it keeps the
-registrable domain and the hashed network that asked (demand, below), never the words of a search.
+The answer is `settings.json` `share: true|false` (Enter on the terminal is yes; an agent passes `--yes`
+only on the user's explicit yes, and `--no-share` otherwise). After a yes, a second question:
+
+> Also let an idle server test up to 20 new shared operations a day from your network? No cookies,
+> public https hosts only.
+
+Its answer is `verify` (Enter is no; `--verify`, `--no-verify`), and background verification
+(below) runs only with both on. An install that answered the old single question, which also said "test
+a few new operations a day from your network", keeps the answer it gave: the first read writes
+`verify` from `share` into the file with `verifyFrom: "migrated"`, so no read infers it again. No
+account. An install that never ran setup (the plugin, `claude mcp add`, `npm -g`) shares nothing until
+the question is answered: `learn_site` asks it once, the first time it has something to share (MCP
+elicitation, or the CLI's prompt), and when the client cannot ask, its `next` has the agent ask the
+user and run `api-anything setup --yes --share-only` or `--no-share --share-only`, which records the
+answer alone. What it does not change: `find_sites` sends its words, domain or URL to `GET /v1/search`
+whether sharing is on or off (the local specs are searched too, and answer alone when the registry
+cannot be reached), and so does a call of a site this machine lacks, which fetches it. The registry
+sees the request's IP address, as any web server does, and does not store it. Of a domain or URL search
+that finds nothing, it keeps the registrable domain and the hashed network that asked (demand, below),
+never the words of a search.
+
+**Local-only.** `setup --local-only` (`settings.json` `localOnly`) or `API_ANYTHING_LOCAL_ONLY=1` stops
+every request to the registry: search, pull, reports, verification jobs, claims, uploads, publish,
+interface reports and the bundled-spec upgrade. It is enforced in `registryRequest`, the one function
+every registry request goes through, which throws before it opens a connection. Search then answers from
+this machine with a `localOnly` note; a call of a site this machine lacks, `pull` and `publish` say it is
+local-only and how to turn it off (`setup --no-local-only --share-only`, or unset the variable).
 
 ## Using an operation that exists
 
@@ -329,7 +347,8 @@ the longest) is served while it is not degraded, whatever the success rates and 
 live version, a heal included, is served only once the incumbent degrades. A few keys on two networks
 can promote a version, but they cannot replace one callers already rely on.
 
-Background verification makes the long tail move: an MCP server idle for a minute asks
+Background verification makes the long tail move: an MCP server whose user said yes to sharing and to
+verification (setup's second question, `verify` in settings) and is idle for a minute asks
 `GET /v1/verify-jobs` for candidates and calls each with its published examples, plain HTTP only, no
 cookies, at most 20 a day, and reports the outcome. The calls go from the user's machine and IP address,
 only over https to a host under a public suffix that resolves to no private, loopback, link-local, CGNAT

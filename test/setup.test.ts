@@ -9,8 +9,19 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, beforeEach, test } from "node:test";
 import { fileURLToPath } from "node:url";
-import { loadSettings } from "../src/identity.js";
-import { detect, guiServer, paths, SERVER, setup } from "../src/setup.js";
+import { loadSettings, QUESTION, saveSettings, settingsFile, VERIFY_QUESTION } from "../src/identity.js";
+import {
+  configPins,
+  detect,
+  guiServer,
+  paths,
+  pickAgents,
+  SERVER,
+  serverEntry,
+  setup,
+  summary,
+  VERSION,
+} from "../src/setup.js";
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const SKILL = readFileSync(join(ROOT, "skills", "api-anything", "SKILL.md"), "utf8");
@@ -320,7 +331,7 @@ test("the agents' own CLIs add the server when they are installed, and are not r
   fakeCli("codex");
   write(paths.claudeJson(), JSON.stringify({ other: true }));
   assert.deepEqual(detect(), ["claude-code", "codex"]);
-  const r = await setup({ share: false });
+  const r = await setup({ agents: ["all"], share: false });
   assert.deepEqual(
     r.agents.map((a) => [a.agent, a.mcp, a.via]),
     [
@@ -333,7 +344,7 @@ test("the agents' own CLIs add the server when they are installed, and are not r
     ["codex", "mcp", "add", "api-anything", "--", "npx", "-y", "api-anything", "mcp"],
   ]);
   assert.equal(read(`${paths.claudeJson()}.bak-api-anything`), JSON.stringify({ other: true }));
-  const again = await setup({ share: false });
+  const again = await setup({ agents: ["all"], share: false });
   assert.deepEqual(
     again.agents.map((a) => a.mcp),
     ["unchanged", "unchanged"],
@@ -347,7 +358,7 @@ test("Gemini CLI and VS Code: their own CLIs add the server, and a config with c
   fakeExe("npx");
   fakeExe("node");
   assert.deepEqual(detect(), ["gemini", "vscode"]);
-  const r = await setup({ share: false });
+  const r = await setup({ agents: ["all"], share: false });
   assert.deepEqual(
     r.agents.map((a) => [a.agent, a.mcp, a.via, a.skill]),
     [
@@ -360,7 +371,7 @@ test("Gemini CLI and VS Code: their own CLIs add the server, and a config with c
     ["gemini", "mcp", "add", "--scope", "user", "api-anything", "npx", "--", "-y", "api-anything", "mcp"],
     ["code", "--add-mcp", JSON.stringify({ name: "api-anything", ...gui })],
   ]);
-  const again = await setup({ share: false });
+  const again = await setup({ agents: ["all"], share: false });
   assert.deepEqual(
     again.agents.map((a) => a.mcp),
     ["unchanged", "unchanged"],
@@ -474,7 +485,8 @@ test("CLI setup: --dry-run, --yes, --no-share, and no answer without a TTY", asy
   const only = await cli("setup", "--yes", "--share-only");
   assert.deepEqual([only.code, only.out.share, loadSettings().share], [0, true, true]);
   assert.equal(read(paths.cursorJson()), "{}");
-  assert.match(only.stderr, /Sharing: on\. Turn it off with api-anything setup --no-share --share-only/);
+  assert.match(only.stderr, /Sharing: on\. .*Turn it off with: api-anything setup --no-share --share-only/);
+  assert.match(only.stderr, /Background verification: off, not asked/);
   const off = await cli("setup", "--no-share", "--share-only");
   assert.deepEqual([off.out.share, loadSettings().share], [false, false]);
   const unanswered = await cli("setup", "--share-only");
@@ -485,4 +497,404 @@ test("CLI setup: --dry-run, --yes, --no-share, and no answer without a TTY", asy
   assert.equal(both.code, 1);
   const bad = await cli("setup", "--agents", "vim");
   assert.match(String(bad.out.error), /unknown agent vim/);
+});
+
+/* --------------------------------------------------------- which agents */
+
+/** Claude Code, Codex and Hermes installed, each with a config of its own. */
+function three() {
+  write(paths.claudeJson(), "{}");
+  write(paths.codexToml(), 'model = "o3"\n');
+  write(paths.hermesYaml(), 'model: "other"\n');
+  return [read(paths.claudeJson()), read(paths.codexToml()), read(paths.hermesYaml())];
+}
+const configs = () => [read(paths.claudeJson()), read(paths.codexToml()), read(paths.hermesYaml())];
+
+test("with no terminal and no --agents, setup connects nothing and says how to connect each agent found", async () => {
+  const before = three();
+  const r = await setup({ share: false });
+  assert.equal(r.ok, true);
+  assert.deepEqual([r.selection, r.found, r.agents], ["none", ["claude-code", "codex", "hermes"], []]);
+  assert.deepEqual(
+    r.notConnected.map((n) => [n.agent, n.command]),
+    [
+      ["claude-code", "api-anything setup --agents claude-code"],
+      ["codex", "api-anything setup --agents codex"],
+      ["hermes", "api-anything setup --agents hermes"],
+    ],
+  );
+  assert.deepEqual(configs(), before, "no config was touched");
+  assert.equal(existsSync(paths.claudeSkill()), false, "no skill installed");
+  const text = summary(r);
+  assert.match(
+    text,
+    /Claude Code: not connected: no terminal to ask; connect it with: api-anything setup --agents claude-code/,
+  );
+  assert.match(text, /Hermes: found, not connected \(always-on gateway\): add with --agents hermes/);
+});
+
+test("on a terminal it asks once which to connect; Hermes is never offered, and is only connected by name", async () => {
+  three();
+  const offered: unknown[] = [];
+  const r = await setup({
+    share: false,
+    choose: async (offer, o) => {
+      offered.push(offer, o);
+      return ["codex"];
+    },
+  });
+  assert.deepEqual(offered, [["claude-code", "codex"], { hermes: true }]);
+  assert.deepEqual(
+    r.agents.map((a) => [a.agent, a.mcp]),
+    [["codex", "added"]],
+  );
+  assert.equal(read(paths.claudeJson()), "{}", "Claude Code was not chosen");
+  assert.doesNotMatch(read(paths.hermesYaml()), /api-anything/);
+  assert.deepEqual(
+    r.notConnected.map((n) => [n.agent, n.reason]),
+    [
+      ["claude-code", "found, not chosen"],
+      ["hermes", "found, not connected (always-on gateway)"],
+    ],
+  );
+  // codex is connected now: a later run lists it neither as chosen nor as missing
+  const again = await setup({ share: false, choose: async () => [] });
+  assert.deepEqual(
+    again.notConnected.map((n) => n.agent),
+    ["claude-code", "hermes"],
+  );
+  // --agents all is every one found but Hermes; all,hermes adds it
+  assert.deepEqual(
+    (await setup({ agents: ["all"], share: false, dryRun: true })).agents.map((a) => a.agent),
+    ["claude-code", "codex"],
+  );
+  assert.deepEqual(
+    (await setup({ agents: ["all", "hermes"], share: false, dryRun: true })).agents.map((a) => a.agent),
+    ["claude-code", "codex", "hermes"],
+  );
+});
+
+test("--dry-run on a terminal asks nothing and reports what each offered agent would get", async () => {
+  const before = three();
+  let asked = false;
+  const r = await setup({
+    dryRun: true,
+    choose: async () => {
+      asked = true;
+      return [];
+    },
+    ask: async () => {
+      asked = true;
+      return true;
+    },
+  });
+  assert.equal(asked, false);
+  assert.equal(r.selection, "would ask");
+  assert.deepEqual(
+    r.agents.map((a) => [a.agent, a.mcp]),
+    [
+      ["claude-code", "would add"],
+      ["codex", "would add"],
+    ],
+  );
+  assert.deepEqual(configs(), before);
+  assert.match(summary(r), /Would ask which to connect \(Enter = all of Claude Code, Codex\)/);
+  // with no terminal, a dry run says it would connect none
+  assert.equal((await setup({ dryRun: true })).selection, "none");
+});
+
+test("the typed answer: Enter is every agent offered, numbers pick, n is none, anything else asks again", () => {
+  const offer = ["claude-code", "codex", "cursor"] as const;
+  assert.deepEqual(pickAgents("", [...offer]), [...offer]);
+  assert.deepEqual(pickAgents(" 1,3 ", [...offer]), ["claude-code", "cursor"]);
+  assert.deepEqual(pickAgents("2 3", [...offer]), ["codex", "cursor"]);
+  assert.deepEqual(pickAgents("n", [...offer]), []);
+  assert.equal(pickAgents("4", [...offer]), undefined);
+  assert.equal(pickAgents("yes", [...offer]), undefined);
+});
+
+/* ------------------------------------------------------- share, verify */
+
+test("the questions: sharing first (Enter = yes), then verification only after a yes (Enter = no)", async () => {
+  const asked: [string, boolean][] = [];
+  const answers = [true, false];
+  const r = await setup({
+    agents: [],
+    ask: async (q, yes) => {
+      asked.push([q, yes]);
+      return answers.shift()!;
+    },
+  });
+  assert.deepEqual(asked, [
+    [QUESTION, true],
+    [VERIFY_QUESTION, false],
+  ]);
+  assert.deepEqual([r.share, r.verify], [true, false]);
+  assert.deepEqual([loadSettings().share, loadSettings().verify], [true, false]);
+  assert.doesNotMatch(QUESTION, /test a few new operations/, "the sharing question no longer covers verification");
+  assert.match(
+    summary(r),
+    /Sharing: on\..*\n.*Background verification: off\. Turn it on with: api-anything setup --verify/,
+  );
+  // answered: neither is asked again
+  const again = await setup({ agents: [], ask: async () => assert.fail("asked again") });
+  assert.deepEqual([again.share, again.verify], [true, false]);
+
+  // a no to sharing: verification is not asked, and is off
+  rmSync(settingsFile());
+  asked.length = 0;
+  const no = await setup({
+    agents: [],
+    ask: async (q, yes) => {
+      asked.push([q, yes]);
+      return false;
+    },
+  });
+  assert.deepEqual(asked, [[QUESTION, true]]);
+  assert.deepEqual([no.share, no.verify], [false, false]);
+});
+
+test("an install that answered the old question keeps verification as it answered, recorded once in settings", () => {
+  // the old question: "... and test a few new operations a day from your network"
+  write(settingsFile(), JSON.stringify({ share: true, askedAt: "2026-01-01T00:00:00.000Z" }));
+  assert.equal(loadSettings().verify, true);
+  const file = json(settingsFile());
+  assert.deepEqual([file.verify, file.verifyAskedAt, file.verifyFrom], [true, "2026-01-01T00:00:00.000Z", "migrated"]);
+  write(settingsFile(), JSON.stringify({ share: false, askedAt: "2026-01-01T00:00:00.000Z" }));
+  assert.equal(loadSettings().verify, false);
+  assert.equal(json(settingsFile()).verify, false);
+  // a new install's yes to sharing alone never turns verification on
+  rmSync(settingsFile());
+  saveSettings({ share: true, askedAt: "2026-11-01T00:00:00.000Z" });
+  assert.equal(loadSettings().verify, false);
+  assert.equal(json(settingsFile()).verifyFrom, undefined);
+});
+
+test("CLI: --verify and --no-verify, with --share-only too; verification needs sharing on", async () => {
+  const off = await cli("setup", "--verify", "--share-only");
+  assert.equal(off.code, 1);
+  assert.match(String(off.out.error), /needs sharing on/);
+  const on = await cli("setup", "--yes", "--verify", "--share-only");
+  assert.equal(on.code, 0, on.stderr);
+  assert.deepEqual([on.out.share, on.out.verify, loadSettings().verify], [true, true, true]);
+  assert.match(on.stderr, /Background verification: on\. An idle server tests up to 20 new shared operations a day/);
+  const noVerify = await cli("setup", "--no-verify", "--share-only");
+  assert.deepEqual([noVerify.out.share, noVerify.out.verify, loadSettings().verify], [true, false, false]);
+  // a no to sharing turns verification off with it
+  await cli("setup", "--verify", "--share-only");
+  assert.equal(loadSettings().verify, true);
+  await cli("setup", "--no-share", "--share-only");
+  assert.deepEqual([loadSettings().share, loadSettings().verify], [false, false]);
+  const both = await cli("setup", "--verify", "--no-verify", "--share-only");
+  assert.match(String(both.out.error), /contradict/);
+  // no terminal: an agent's run names the agent and records only the answers it was given
+  write(paths.cursorJson(), "{}");
+  const agent = await cli("setup", "--agents", "cursor", "--yes");
+  assert.equal(agent.code, 0, agent.stderr);
+  assert.equal((agent.out.agents as { mcp: string }[])[0]!.mcp, "added");
+});
+
+/* ----------------------------------------------------------------- pin */
+
+test("--pin writes this version into every config it writes, and moves an older pin of setup's own entry", async () => {
+  fakeExe("npx");
+  fakeExe("node");
+  write(paths.claudeJson(), "{}");
+  write(paths.cursorJson(), "{}");
+  write(paths.codexToml(), 'model = "o3"\n');
+  write(paths.hermesYaml(), "mcp_servers:\n  other:\n    command: x\n");
+  const pinned = ["-y", `api-anything@${VERSION}`, "mcp"];
+  assert.deepEqual(serverEntry(true).args, pinned);
+  const r = await setup({ agents: ["claude-code", "cursor", "codex", "hermes"], pin: true, share: false });
+  assert.deepEqual(
+    r.agents.map((a) => [a.agent, a.mcp, a.pinned]),
+    [
+      ["claude-code", "added", VERSION],
+      ["cursor", "added", VERSION],
+      ["codex", "added", VERSION],
+      ["hermes", "added", VERSION],
+    ],
+  );
+  assert.deepEqual(json(paths.claudeJson()).mcpServers["api-anything"], { command: "npx", args: pinned });
+  assert.deepEqual(json(paths.cursorJson()).mcpServers["api-anything"].args, pinned);
+  assert.match(
+    read(paths.codexToml()),
+    new RegExp(`args = \\["-y", "api-anything@${VERSION.replaceAll(".", "\\.")}", "mcp"\\]`),
+  );
+  assert.match(
+    read(paths.hermesYaml()),
+    new RegExp(`args: \\["-y","api-anything@${VERSION.replaceAll(".", "\\.")}","mcp"\\]`),
+  );
+  assert.deepEqual(
+    configPins().map((p) => [p.agent, p.pinned]),
+    [
+      ["claude-code", VERSION],
+      ["codex", VERSION],
+      ["cursor", VERSION],
+      ["hermes", VERSION],
+    ],
+  );
+
+  // a run without --pin leaves a pinned entry as it is
+  const plain = await setup({ agents: ["claude-code"], share: false });
+  assert.deepEqual([plain.agents[0]!.mcp, plain.agents[0]!.pinned], ["kept", VERSION]);
+
+  // an older version pinned them: --pin from this one moves each pin, and keeps the rest of the entry
+  const old = ["-y", "api-anything@0.0.1", "mcp"];
+  write(
+    paths.claudeJson(),
+    JSON.stringify({ mcpServers: { "api-anything": { type: "stdio", command: "npx", args: old, env: {} } } }),
+  );
+  write(paths.cursorJson(), JSON.stringify({ mcpServers: { "api-anything": { ...guiServer(), args: old } } }));
+  write(
+    paths.codexToml(),
+    `model = "o3"\n\n[mcp_servers.api-anything]\ncommand = "npx"\nargs = ["-y", "api-anything@0.0.1", "mcp"]\nstartup_timeout_sec = 30\n`,
+  );
+  write(
+    paths.hermesYaml(),
+    `mcp_servers:\n  api-anything:\n    enabled: true\n    command: "${guiServer().command}"\n    args: ${JSON.stringify(old)}\n  other:\n    command: x\n`,
+  );
+  assert.deepEqual(
+    configPins().map((p) => p.pinned),
+    ["0.0.1", "0.0.1", "0.0.1", "0.0.1"],
+  );
+  const dry = await setup({ agents: ["claude-code", "cursor", "codex", "hermes"], pin: true, dryRun: true });
+  assert.deepEqual(
+    dry.agents.map((a) => a.mcp),
+    ["would update", "would update", "would update", "would update"],
+  );
+  assert.match(summary(dry), new RegExp(`pin would move to api-anything@${VERSION.replaceAll(".", "\\.")}`));
+  const moved = await setup({ agents: ["claude-code", "cursor", "codex", "hermes"], pin: true, share: false });
+  assert.deepEqual(
+    moved.agents.map((a) => [a.mcp, a.pinned]),
+    [
+      ["updated", VERSION],
+      ["updated", VERSION],
+      ["updated", VERSION],
+      ["updated", VERSION],
+    ],
+  );
+  assert.deepEqual(json(paths.claudeJson()).mcpServers["api-anything"], {
+    type: "stdio",
+    command: "npx",
+    args: pinned,
+    env: {},
+  });
+  assert.match(read(paths.codexToml()), /startup_timeout_sec = 30\n$/, "the table's other keys are kept");
+  assert.match(read(paths.hermesYaml()), / {2}other:\n {4}command: x\n$/, "the other server is kept");
+  assert.deepEqual(
+    configPins().map((p) => p.pinned),
+    [VERSION, VERSION, VERSION, VERSION],
+  );
+
+  // an entry setup did not write (a global install) is never touched, pin or not
+  const own = { command: "api-anything", args: ["mcp"] };
+  write(paths.cursorJson(), JSON.stringify({ mcpServers: { "api-anything": own } }));
+  assert.equal((await setup({ agents: ["cursor"], pin: true, share: false })).agents[0]!.mcp, "kept");
+  assert.deepEqual(json(paths.cursorJson()).mcpServers["api-anything"], own);
+  assert.equal(configPins().find((p) => p.agent === "cursor")?.pinned, "custom");
+});
+
+test("moving a pin changes only the package argument: env, command, cwd and other fields stay", async () => {
+  fakeExe("npx");
+  fakeExe("node");
+  const old = ["-y", "api-anything@0.0.1", "mcp"];
+  const pinned = ["-y", `api-anything@${VERSION}`, "mcp"];
+  const custom = { API_ANYTHING_LOCAL_ONLY: "1", API_ANYTHING_HOME: "/data/aa" };
+  write(
+    paths.cursorJson(),
+    JSON.stringify({
+      mcpServers: {
+        "api-anything": { command: "/custom/npx", args: old, env: { PATH: "/my/bin", ...custom }, cwd: "/work" },
+      },
+    }),
+  );
+  // no PATH: the GUI entry's is merged in, beside the user's own variables
+  write(
+    paths.desktopJson(),
+    JSON.stringify({ mcpServers: { "api-anything": { command: "npx", args: old, env: { ...custom } } } }),
+  );
+  write(
+    paths.vscodeJson(),
+    JSON.stringify({
+      servers: {
+        "api-anything": {
+          type: "stdio",
+          command: "/opt/npx",
+          args: ["-y", "api-anything", "mcp"],
+          env: { PATH: "/x", ...custom },
+          envFile: "/e",
+        },
+      },
+    }),
+  );
+  write(
+    paths.codexToml(),
+    `[mcp_servers.api-anything]\ncommand = "/opt/bin/npx"\nargs = ["-y", "api-anything@0.0.1", "mcp"]\nenv = { API_ANYTHING_LOCAL_ONLY = "1" }\n`,
+  );
+  write(
+    paths.hermesYaml(),
+    `mcp_servers:\n  api-anything:\n    command: "/opt/bin/npx"\n    args: ${JSON.stringify(old)}\n    env:\n      API_ANYTHING_HOME: "/data/aa"\n  other:\n    command: x\n`,
+  );
+  const agents = ["cursor", "claude-desktop", "vscode", "codex", "hermes"] as const;
+  const r = await setup({ agents: [...agents], pin: true, share: false });
+  assert.deepEqual(
+    r.agents.map((a) => [a.agent, a.mcp, a.pinned]),
+    agents.map((a) => [a, "updated", VERSION]),
+  );
+  assert.deepEqual(json(paths.cursorJson()).mcpServers["api-anything"], {
+    command: "/custom/npx",
+    args: pinned,
+    env: { PATH: "/my/bin", ...custom },
+    cwd: "/work",
+  });
+  assert.deepEqual(json(paths.desktopJson()).mcpServers["api-anything"], {
+    command: "npx",
+    args: pinned,
+    env: { ...custom, PATH: guiServer().env!.PATH },
+  });
+  assert.deepEqual(json(paths.vscodeJson()).servers["api-anything"], {
+    type: "stdio",
+    command: "/opt/npx",
+    args: pinned,
+    env: { PATH: "/x", ...custom },
+    envFile: "/e",
+  });
+  assert.equal(
+    read(paths.codexToml()),
+    `[mcp_servers.api-anything]\ncommand = "/opt/bin/npx"\nargs = ${JSON.stringify(pinned).replaceAll(",", ", ")}\nenv = { API_ANYTHING_LOCAL_ONLY = "1" }\n`,
+  );
+  assert.equal(
+    read(paths.hermesYaml()),
+    `mcp_servers:\n  api-anything:\n    command: "/opt/bin/npx"\n    args: ${JSON.stringify(pinned)}\n    env:\n      PATH: ${JSON.stringify(guiServer().env!.PATH)}\n      API_ANYTHING_HOME: "/data/aa"\n  other:\n    command: x\n`,
+  );
+  // moved: a second run has nothing to change
+  const again = await setup({ agents: [...agents], pin: true, share: false });
+  assert.deepEqual(
+    again.agents.map((a) => a.mcp),
+    agents.map(() => "unchanged"),
+  );
+  // a Hermes entry with no env gets one holding PATH, after its other keys
+  write(paths.hermesYaml(), `mcp_servers:\n  api-anything:\n    command: npx\n    args: ${JSON.stringify(old)}\n`);
+  await setup({ agents: ["hermes"], pin: true, share: false });
+  assert.equal(
+    read(paths.hermesYaml()),
+    `mcp_servers:\n  api-anything:\n    command: npx\n    args: ${JSON.stringify(pinned)}\n    env:\n      PATH: ${JSON.stringify(guiServer().env!.PATH)}\n`,
+  );
+});
+
+test("CLI: mcp --print-config --pin prints the pinned npx form; status shows each config's pin", async () => {
+  fakeExe("npx");
+  const printed = await new Promise<string>((resolve) =>
+    execFile(
+      process.execPath,
+      ["--import", "tsx", join(ROOT, "src", "cli.ts"), "mcp", "--print-config", "--pin"],
+      { cwd: ROOT, env: { ...process.env, PATH: `${bin}:${dirname(process.execPath)}` } },
+      (_err, stdout) => resolve(stdout),
+    ),
+  );
+  assert.ok(printed.includes(`${join(bin, "npx")} -y api-anything@${VERSION} mcp`), printed);
+  write(paths.claudeJson(), JSON.stringify({ mcpServers: { "api-anything": SERVER } }));
+  const s = await cli("status");
+  assert.deepEqual(s.out.configs, [{ agent: "claude-code", file: paths.claudeJson(), pinned: false }]);
 });

@@ -46,6 +46,12 @@ export interface Session {
   /** where the cookies came from: "<browser>:<profile>" (import), "window", or "file"; drives self-heal re-import */
   source?: string;
   /**
+   * The browser imports a person approved for this site: each a registrable domain and the profile
+   * ("chrome:Profile 1") its cookies may be read from with no question again. Absent in a file
+   * written before the field (`importApprovals` in login.ts migrates it).
+   */
+  imports?: ImportApproval[];
+  /**
    * The names, never the values, of the cookies a signed-out visit to the site is given (`knownGuests`,
    * saved by a login). A framework hands every visitor a `laravel_session` or an `_app_session`, so a name here
    * is no evidence of a sign-in.
@@ -53,6 +59,14 @@ export interface Session {
   guestCookies?: string[];
   updatedAt?: string;
 }
+
+export interface ImportApproval {
+  domain: string;
+  source: string;
+}
+
+const isApproval = (a: unknown): a is ImportApproval =>
+  !!a && typeof (a as ImportApproval).domain === "string" && typeof (a as ImportApproval).source === "string";
 
 export const home = () => process.env.API_ANYTHING_HOME || join(homedir(), ".api-anything");
 
@@ -194,6 +208,7 @@ export function loadSession(site: string): Session {
     ...(Array.isArray(s.origins) ? { origins: s.origins } : {}),
     ...(Array.isArray(s.guestCookies) ? { guestCookies: s.guestCookies } : {}),
     source: s.source,
+    ...(Array.isArray(s.imports) ? { imports: s.imports.filter(isApproval) } : {}),
     updatedAt: s.updatedAt,
   };
 }
@@ -295,6 +310,7 @@ export function mergeCapture(
       values: { ...s.values, ...values },
       ...(Object.keys(valueHosts).length ? { valueHosts } : {}),
       source: s.source,
+      ...(s.imports ? { imports: s.imports } : {}),
       ...(Object.keys(kinds).length ? { kinds } : {}),
       ...(s.origins ? { origins: s.origins } : {}),
       ...(s.guestCookies ? { guestCookies: s.guestCookies } : {}),

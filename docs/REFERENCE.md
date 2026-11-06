@@ -34,7 +34,10 @@ Each search op, and each op in `pull <site>` output, separates evidence:
 An installed copy keeps its params and descriptions without losing the registry's health. Health
 describes the registry version, which may differ from the local one. An unreachable registry leaves
 local matches with `registryError` and unknown registry health. No probes run, and no tier or latency
-is inferred: the Worker does not store aggregates for them.
+is inferred: the Worker does not store aggregates for them. In local-only mode (`setup --local-only`,
+or `API_ANYTHING_LOCAL_ONLY=1`) the registry is never asked: search answers from this machine's specs
+with a `localOnly` note saying so, and `pull`, `publish` and a call of a site this machine lacks say
+it is local-only and how to turn that off.
 
 `find_sites.nextCall` is a complete discovery call: `list_operations {site}` for a match, so the
 agent reads notes before calling, or `list_sites {}` when nothing matched. An interface-only match
@@ -343,6 +346,27 @@ api-anything call linkedin getCompany universalName=openai
 api-anything call linkedin getProfile publicId=williamhgates
 ```
 
+**The first import asks you.** An agent with a shell can run `login` too, so the first import of a
+domain's cookies from a browser profile waits for a person: on a terminal it asks `Import
+linkedin.com cookies from Chrome profile "Work" (me@example.com)? [y/N]` before it reads any cookie
+value, and without a terminal it reads nothing and answers `ok: false` with a `next` to run
+`api-anything login <site>` in a terminal or use `--window`. `--profile` does not skip the question.
+Your yes is kept, in the site's session file, for that domain (its registrable domain:
+`linkedin.com` covers `www.linkedin.com`) and that profile only. Importing that domain again from that
+profile (`login` again, or the re-import after an `auth` call) asks nothing. Another profile, or
+another domain, is a new choice and asks again, even under the same site name: an operation of the
+site on another domain does not re-import that domain's cookies on its own. `logout` forgets the
+approvals with the session. A session imported by an older version counts as approved for its
+profile and the domain of the site's `baseUrl` only. `--window` and `--cookies` need no terminal.
+For headless automation you set up yourself, `API_ANYTHING_ALLOW_IMPORT=github.com,linkedin.com`
+pre-approves those domains.
+
+The question is a safeguard against an agent importing a site's cookies by accident, or because a
+page it read told it to. It is not a security boundary against an agent with unrestricted shell
+access: such an agent can open a terminal of its own and answer `y`, or set
+`API_ANYTHING_ALLOW_IMPORT`, and it can read your files anyway. The boundary is not giving an
+agent you don't trust a shell.
+
 **Several profiles signed in.** If more than one browser profile is signed in to the site (a work
 and a personal profile, or someone else's account in your Chrome), `login` does not guess. It
 answers `ok: false` with a `candidates` list, each with its profile, display name and email, and you
@@ -370,10 +394,12 @@ A write learned while signed in is checked before it is sent: if the session has
 cookie (expired or missing), api-anything re-imports first, and if there is still none the call
 returns `class: "auth"` and sends nothing.
 
-On macOS the first import shows one Keychain prompt ("security wants to use the … Safe Storage" key).
-Choose **Allow**, not **Always Allow**: that key decrypts every cookie the browser holds, and Always
-Allow lets any process that runs `security` read it from then on without asking you again. With Allow,
-each import asks. The imported session is the *same* one as your browser, so if the site logs it out, both
+**Keychain: choose Allow, not Always Allow.** On macOS an import shows one Keychain prompt ("security
+wants to use the … Safe Storage" key). That key decrypts every cookie the browser holds, and Always
+Allow lets any process that runs `security` read it from then on without asking you again, which
+makes an import nobody watched silent. With Allow, each import asks.
+
+The imported session is the *same* one as your browser, so if the site logs it out, both
 go — avoid heavy automated traffic on it. Other ways in:
 
 - `--window` opens a visible Chrome window to sign in by hand (an independent session). Use it when
@@ -540,8 +566,9 @@ answer says it is unavailable instead of returning a continuation.
   table representation as a single call; its retry, paging and truncation fields stay intact.
 - Each answer is JSON text, and the same object as `structuredContent`.
 - `--print-config` prints how to add the server to Claude Code, Codex, Gemini CLI, VS Code, Cursor,
-  Claude Desktop and Hermes, with absolute paths. Client timeouts and fixes for common problems are in
-  [QUICKSTART.md](QUICKSTART.md#client-timeouts).
+  Claude Desktop and Hermes, with absolute paths. With `--pin` it prints the npx form pinned to this
+  version (`npx -y api-anything@<version> mcp`), as `setup --pin` writes it. Client timeouts and fixes
+  for common problems are in [QUICKSTART.md](QUICKSTART.md#client-timeouts).
 - `api-anything serve` serves the same tools over HTTP: MCP over Streamable HTTP at `/mcp`, JSON
   endpoints under `/v1` that answer as the library's `call()` does (data as records, plus a
   `nextRequest`), and an OpenAPI 3.1 document at `/openapi.json`. See

@@ -47,7 +47,7 @@ import {
   unknownArgs,
   withDefaults,
 } from "./http.js";
-import { loadSettings } from "./identity.js";
+import { loadSettings, localOnly, localOnlyOff } from "./identity.js";
 import { derive, LookupFailed, sendDerived } from "./lookup.js";
 import { projectView, type ResultCursor, type ResultView, resultView, viewProblem } from "./results.js";
 import { SealError } from "./seal.js";
@@ -1043,8 +1043,10 @@ export function resolveCall(
     return {
       ok: false,
       class: "input",
-      reason: `no site "${siteName}"`,
-      next: `api-anything sites lists what exists; api-anything pull ${siteName} fetches it if someone shared it`,
+      reason: `no site "${siteName}"${localOnly() ? " on this machine, and this install is local-only, so the shared catalog was not asked" : ""}`,
+      next: localOnly()
+        ? `api-anything sites lists what exists here; ${localOnlyOff()}`
+        : `api-anything sites lists what exists; api-anything pull ${siteName} fetches it if someone shared it`,
       nextCall: { action: "list_sites" },
     };
   const op = r.site.operations.find((o) => o.name === opName);

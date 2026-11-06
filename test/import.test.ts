@@ -3,17 +3,30 @@
  * browser, no Keychain: API_ANYTHING_BROWSER_ROOTS injects roots and the Safe Storage password.
  */
 import assert from "node:assert/strict";
+import { execFile } from "node:child_process";
 import { mkdirSync, mkdtempSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, before, beforeEach, describe, test } from "node:test";
+import { fileURLToPath } from "node:url";
 import { AmbiguousProfile, type BrowserRoot, cookiesFromFile, importFromBrowsers } from "../src/import.js";
-import { guestCookieNames, importSession, importWarning, knownGuests, reimportIfBrowser } from "../src/login.js";
+import {
+  guestCookieNames,
+  ImportRefused,
+  importAllowed,
+  importSession,
+  importWarning,
+  knownGuests,
+  reimportIfBrowser,
+} from "../src/login.js";
 import { loadSession, saveSession } from "../src/session.js";
 import { makeChromiumDb, makeFirefoxDb } from "./fixture/cookie-db.js";
 import { startFixture } from "./fixture/server.js";
 
+const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const tmp = () => mkdtempSync(join(tmpdir(), "aa-import-"));
+/** The person at the terminal says yes to a first import. */
+const yes = async () => true;
 const inject = (roots: BrowserRoot[]) => (process.env.API_ANYTHING_BROWSER_ROOTS = JSON.stringify(roots));
 const li = { host_key: ".linkedin.com", name: "li_at", value: "AQEDreallylongtokenvalue" };
 const js = { host_key: ".linkedin.com", name: "JSESSIONID", value: '"ajax:1234567890"' };
@@ -183,7 +196,7 @@ describe("re-import", () => {
   test("the same login cookies again are no recovery: the hint names the profile to sign in to", async () => {
     saveSession("myshop", { cookies: [], values: {}, guestCookies: ["laravel_session"] });
     profile(visitor("eyJ2aXNpdG9yIjoxfQ"), login("eyJsb2dpbiI6MX0xx"));
-    const first = await importSession("myshop", url, { pushProfile: false });
+    const first = await importSession("myshop", url, { pushProfile: false, confirm: yes });
     assert.equal(first?.signedIn, true);
     assert.equal(first?.renewed, true);
     assert.equal(importWarning(url, first!), undefined);
@@ -225,10 +238,198 @@ describe("re-import", () => {
     saveSession("plain", { cookies: [], values: {} });
     const uid = (value: string) => ({ host_key: ".plainsite.com", name: "uid", value });
     makeChromiumDb(join(root, "Profile 3"), [uid("1001")], { password: "pw" });
-    await importSession("plain", "https://plainsite.com/", { pushProfile: false });
+    await importSession("plain", "https://plainsite.com/", { pushProfile: false, confirm: yes });
     assert.equal((await reimportIfBrowser("plain", "https://plainsite.com/")).renewed, false);
     makeChromiumDb(join(root, "Profile 3"), [uid("1002")], { password: "pw" });
     assert.equal((await reimportIfBrowser("plain", "https://plainsite.com/")).renewed, true);
+  });
+});
+
+describe("a first import from a browser profile needs a person", () => {
+  const url = "https://www.linkedin.com/";
+  let root: string;
+  const asked: string[] = [];
+  const answer = (yes: boolean) => async (q: string) => {
+    asked.push(q);
+    return yes;
+  };
+  const savedAllow = process.env.API_ANYTHING_ALLOW_IMPORT;
+  beforeEach(() => {
+    process.env.API_ANYTHING_HOME = tmp();
+    process.env.API_ANYTHING_BROWSER = "no-such-browser";
+    delete process.env.API_ANYTHING_ALLOW_IMPORT;
+    asked.length = 0;
+    root = tmp();
+    makeChromiumDb(join(root, "Default"), [li, js], { password: "pw" });
+    makeChromiumDb(join(root, "Profile 2"), [{ host_key: ".linkedin.com", name: "lang", value: "v=2&lang=en-us" }], {
+      password: "pw",
+    });
+    inject([{ name: "Chrome", family: "chromium", root, password: "pw" }]);
+  });
+  after(() => {
+    delete process.env.API_ANYTHING_BROWSER;
+    if (savedAllow === undefined) delete process.env.API_ANYTHING_ALLOW_IMPORT;
+    else process.env.API_ANYTHING_ALLOW_IMPORT = savedAllow;
+  });
+
+  test("with no one to ask, nothing is read: not even the cookie names", async () => {
+    // a cookie database that cannot be opened: a scan would throw something else
+    writeFileSync(join(root, "Default", "Network", "Cookies"), "not a database");
+    await assert.rejects(
+      importSession("linkedin", url, { pushProfile: false }),
+      (e) => e instanceof ImportRefused && !e.declined && /needs a yes from a person at a terminal/.test(e.message),
+    );
+    // --profile is no way around it: an agent can pass it
+    await assert.rejects(
+      importSession("linkedin", url, { pushProfile: false, profile: "Chrome/Default" }),
+      ImportRefused,
+    );
+    assert.deepEqual(loadSession("linkedin").cookies, []);
+  });
+
+  test("the person is asked which profile, before any value is read; a no keeps nothing", async () => {
+    await assert.rejects(
+      importSession("linkedin", url, { pushProfile: false, confirm: answer(false) }),
+      (e) => e instanceof ImportRefused && e.declined,
+    );
+    assert.deepEqual(asked, ['Import linkedin.com cookies from Chrome profile "Default"?']);
+    assert.deepEqual(loadSession("linkedin").cookies, []);
+    const r = await importSession("linkedin", url, { pushProfile: false, confirm: answer(true) });
+    assert.equal(r?.source, "chrome:Default");
+    assert.equal(loadSession("linkedin").source, "chrome:Default");
+  });
+
+  test("the profile chosen before is read again with no question: login again, a re-import on auth", async () => {
+    await importSession("linkedin", url, { pushProfile: false, confirm: answer(true) });
+    asked.length = 0;
+    assert.ok(await importSession("linkedin", url, { pushProfile: false }));
+    assert.ok(await importSession("linkedin", url, { pushProfile: false, profile: "Chrome/Default" }));
+    assert.equal((await reimportIfBrowser("linkedin", url)).profile, "Chrome/Default");
+    assert.deepEqual(asked, []);
+    // another profile is a new choice: asked again, or refused with no one to ask
+    await assert.rejects(
+      importSession("linkedin", url, { pushProfile: false, profile: "Chrome/Profile 2" }),
+      (e) => e instanceof ImportRefused && /Chrome profile "Profile 2"/.test(e.message),
+    );
+    assert.ok(
+      await importSession("linkedin", url, { pushProfile: false, profile: "Chrome/Profile 2", confirm: answer(true) }),
+    );
+    assert.deepEqual(asked, ['Import linkedin.com cookies from Chrome profile "Profile 2"?']);
+  });
+
+  test("an approval is for its domain: another domain under the same site key is a first import", async () => {
+    const evil = { host_key: ".evil.example", name: "sid", value: "evil-session-value" };
+    makeChromiumDb(join(root, "Default"), [li, js, evil], { password: "pw" });
+    await importSession("linkedin", url, { pushProfile: false, confirm: answer(true) });
+    assert.deepEqual(loadSession("linkedin").imports, [{ domain: "linkedin.com", source: "chrome:Default" }]);
+    asked.length = 0;
+    const noEvil = () => assert.ok(!loadSession("linkedin").cookies.some((c) => c.domain.includes("evil")));
+    await assert.rejects(
+      importSession("linkedin", "https://evil.example/", { pushProfile: false }),
+      (e) => e instanceof ImportRefused && e.domain === "evil.example" && !e.declined,
+    );
+    await assert.rejects(
+      importSession("linkedin", "https://evil.example/", { pushProfile: false, profile: "Chrome/Default" }),
+      ImportRefused,
+    );
+    // the auth re-import (a call's, or learn_site's holdout's) of an op on another domain
+    assert.deepEqual(await reimportIfBrowser("linkedin", "https://evil.example/api"), { renewed: false });
+    noEvil();
+    assert.equal(loadSession("linkedin").source, "chrome:Default");
+    // a person can still approve it, and is asked about the domain that would be read
+    await assert.rejects(
+      importSession("linkedin", "https://evil.example/", { pushProfile: false, confirm: answer(false) }),
+      (e) => e instanceof ImportRefused && e.declined,
+    );
+    assert.deepEqual(asked, ['Import evil.example cookies from Chrome profile "Default"?']);
+    noEvil();
+    // the approved domain still re-imports with no question
+    assert.ok(await importSession("linkedin", url, { pushProfile: false }));
+  });
+
+  test("a session imported before approvals were recorded is approved for its baseUrl's domain only", async () => {
+    makeChromiumDb(
+      join(root, "Default"),
+      [li, js, { host_key: ".evil.example", name: "sid", value: "evil-session-value" }],
+      { password: "pw" },
+    );
+    // the bundled linkedin spec's baseUrl is www.linkedin.com
+    saveSession("linkedin", { cookies: [], values: {}, source: "chrome:Default" });
+    assert.ok(await importSession("linkedin", url, { pushProfile: false }));
+    assert.deepEqual(asked, []);
+    assert.deepEqual(loadSession("linkedin").imports, [{ domain: "linkedin.com", source: "chrome:Default" }]);
+    saveSession("linkedin", { cookies: [], values: {}, source: "chrome:Default" });
+    await assert.rejects(importSession("linkedin", "https://evil.example/", { pushProfile: false }), ImportRefused);
+    assert.deepEqual(await reimportIfBrowser("linkedin", "https://evil.example/"), { renewed: false });
+    // a site with no spec and no domain for a name approves nothing
+    saveSession("nospec", { cookies: [], values: {}, source: "chrome:Default" });
+    await assert.rejects(importSession("nospec", url, { pushProfile: false }), ImportRefused);
+    // a file import keeps the approval it migrated, though the source is now "file"
+    saveSession("linkedin", { cookies: [], values: {}, source: "chrome:Default" });
+    const file = join(process.env.API_ANYTHING_HOME!, "c.json");
+    writeFileSync(file, JSON.stringify([{ name: "li_at", value: "fromafile", domain: ".linkedin.com" }]));
+    await importSession("linkedin", url, { pushProfile: false, file });
+    assert.ok(await importSession("linkedin", url, { pushProfile: false }));
+  });
+
+  test("a session from a sign-in window is no browser profile: the first import still asks", async () => {
+    saveSession("linkedin", { cookies: [], values: {}, source: "window" });
+    await assert.rejects(importSession("linkedin", url, { pushProfile: false }), ImportRefused);
+  });
+
+  test("API_ANYTHING_ALLOW_IMPORT pre-approves its hosts, for automation the user set up", async () => {
+    process.env.API_ANYTHING_ALLOW_IMPORT = "github.com, www.linkedin.com";
+    assert.equal(importAllowed("https://linkedin.com/feed"), true);
+    assert.equal(importAllowed("https://github.com"), true);
+    assert.equal(importAllowed("https://x.com"), false);
+    assert.equal((await importSession("linkedin", url, { pushProfile: false }))?.source, "chrome:Default");
+    process.env.API_ANYTHING_ALLOW_IMPORT = "linkedin.com.evil.example";
+    saveSession("linkedin", { cookies: [], values: {} });
+    await assert.rejects(importSession("linkedin", url, { pushProfile: false }), ImportRefused);
+  });
+
+  test("a cookies file needs no one", async () => {
+    const file = join(process.env.API_ANYTHING_HOME!, "c.json");
+    writeFileSync(file, JSON.stringify([{ name: "li_at", value: "fromafile", domain: ".linkedin.com" }]));
+    assert.equal((await importSession("linkedin", url, { pushProfile: false, file }))?.source, "file");
+  });
+
+  test("CLI login with no terminal reads nothing, and says to run it in a terminal or use --window", async () => {
+    const fx = await startFixture();
+    try {
+      // a cookie for the fixture's host, which login would import if it read the profile
+      makeChromiumDb(
+        join(root, "Default"),
+        [{ host_key: "127.0.0.1", name: "auth_token", value: "member-token-0001" }],
+        {
+          password: "pw",
+        },
+      );
+      const run = (env: Record<string, string> = {}, target = `${fx.url}/members`) =>
+        new Promise<{ code: number; out: Record<string, unknown>; stderr: string }>((resolve) =>
+          execFile(
+            process.execPath,
+            ["--import", "tsx", join(ROOT, "src", "cli.ts"), "login", target],
+            { cwd: ROOT, env: { ...process.env, ...env } },
+            (err, stdout, stderr) =>
+              resolve({ code: err ? Number(err.code ?? 1) : 0, out: JSON.parse(stdout.trim()), stderr }),
+          ),
+        );
+      const refused = await run();
+      assert.equal(refused.code, 1);
+      assert.match(String(refused.out.error), /needs a yes from a person at a terminal/);
+      assert.match(refused.stderr, /in a terminal: api-anything login 127\.0\.0\.1.*--window/);
+      assert.deepEqual(loadSession("127.0.0.1").cookies, []);
+      // the hint names what the variable takes: the domain, not the site's name
+      const named = await run({}, "linkedin");
+      assert.equal(named.code, 1);
+      assert.match(named.stderr, /API_ANYTHING_ALLOW_IMPORT=linkedin\.com\b/);
+      const allowed = await run({ API_ANYTHING_ALLOW_IMPORT: "127.0.0.1" });
+      assert.equal(allowed.code, 0, allowed.stderr);
+      assert.equal(allowed.out.profile, "Chrome/Default");
+    } finally {
+      await fx.close();
+    }
   });
 });
 

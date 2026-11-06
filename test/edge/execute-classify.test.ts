@@ -1086,7 +1086,10 @@ describe("browser tiers", { skip: !browserAvailable() && "no Chromium browser in
     ]);
     try {
       signIn("first");
-      assert.equal((await importSession("t2auth", `${fx.base}/`))?.source, "chrome:Default");
+      assert.equal(
+        (await importSession("t2auth", `${fx.base}/`, { confirm: async () => true }))?.source,
+        "chrome:Default",
+      );
       assert.deepEqual((await call("t2auth", "me", {}, o)).data, [{ me: "first" }]);
 
       signIn("second");
@@ -1111,6 +1114,38 @@ describe("browser tiers", { skip: !browserAvailable() && "no Chromium browser in
       const w = await call("t2auth", "save", {}, { ...o, allowWrites: true });
       assert.equal(w.class, "auth", JSON.stringify(w));
       assert.equal(me(), 1, "the write was sent once");
+    } finally {
+      delete process.env.API_ANYTHING_BROWSER_ROOTS;
+    }
+  });
+
+  test("auth on an op whose domain no person approved importing re-imports nothing from the browser", async () => {
+    site("crossauth", rd("me", "/api/me"));
+    const root = mkdtempSync(join(HOME, "everyday-browser-"));
+    const port = new URL(fx.base).port;
+    // approved: localhost's cookies, under this site key; the op is on 127.0.0.1, whose sid the server takes
+    makeChromiumDb(
+      join(root, "Default"),
+      [
+        { host_key: "localhost", name: "sid", value: "approved" },
+        { host_key: "127.0.0.1", name: "sid", value: "unapproved" },
+      ],
+      { password: "pw" },
+    );
+    fx.state.sid = "unapproved";
+    process.env.API_ANYTHING_BROWSER_ROOTS = JSON.stringify([
+      { name: "Chrome", family: "chromium", root, password: "pw" },
+    ]);
+    try {
+      await importSession("crossauth", `http://localhost:${port}/`, { confirm: async () => true, pushProfile: false });
+      const r = await call("crossauth", "me", {}, t1);
+      assert.equal(r.class, "auth", JSON.stringify(r));
+      const s = loadSession("crossauth");
+      assert.deepEqual(
+        s.cookies.map((c) => `${c.domain}=${c.value}`),
+        ["localhost=approved"],
+      );
+      assert.deepEqual(s.imports, [{ domain: "localhost", source: "chrome:Default" }]);
     } finally {
       delete process.env.API_ANYTHING_BROWSER_ROOTS;
     }
@@ -1157,7 +1192,10 @@ describe("browser tiers", { skip: !browserAvailable() && "no Chromium browser in
     ]);
     try {
       signIn("first");
-      assert.equal((await importSession("t3auth", `${fx.base}/`))?.source, "chrome:Default");
+      assert.equal(
+        (await importSession("t3auth", `${fx.base}/`, { confirm: async () => true }))?.source,
+        "chrome:Default",
+      );
       assert.deepEqual((await call("t3auth", "me", {}, o)).data, [{ me: "first" }]);
 
       signIn("second");
@@ -1197,7 +1235,10 @@ describe("browser tiers", { skip: !browserAvailable() && "no Chromium browser in
       { name: "Chrome", family: "chromium", root, password: "pw" },
     ]);
     try {
-      assert.equal((await importSession("t3write", `${fx.base}/`))?.source, "chrome:Default");
+      assert.equal(
+        (await importSession("t3write", `${fx.base}/`, { confirm: async () => true }))?.source,
+        "chrome:Default",
+      );
       fx.hits.length = 0;
       const r = await call("t3write", "save", {}, { allowWrites: true, minIntervalMs: 0, timeoutMs: 5000 });
       const saves = fx.hits.filter((h) => h.method === "POST" && h.url === "/api/save").length;

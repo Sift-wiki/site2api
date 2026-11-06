@@ -527,7 +527,7 @@ describe("e2e", { skip: !browserAvailable() && "no Chromium browser installed" }
       });
 
       // login by import: browserless, no Keychain (password injected), no profile push
-      const imported = await importSession(SITE, `${fx.url}/`, { pushProfile: false });
+      const imported = await importSession(SITE, `${fx.url}/`, { pushProfile: false, confirm: async () => true });
       assert.equal(imported?.source, "chrome:Default");
       assert.equal(loadSession(SITE).source, "chrome:Default");
 
