@@ -1,7 +1,8 @@
 # Agent frameworks
 
 API Anything is an MCP server that runs over stdio, so any framework with an MCP client can use it.
-The server is the same everywhere:
+A framework that cannot start a local process can use `api-anything serve` instead, which serves
+the same tools over HTTP (last row below). The server is the same everywhere:
 
 ```json
 { "command": "npx", "args": ["-y", "api-anything", "mcp"] }
@@ -18,6 +19,7 @@ and listed its tools.
 | LangChain.js | [examples/langchain.mjs](../examples/langchain.mjs) | `npm install langchain @langchain/anthropic @langchain/mcp-adapters @langchain/core @langchain/langgraph` |
 | OpenAI Agents SDK (Python) | [examples/openai-agents.py](../examples/openai-agents.py) | `pip install openai-agents` |
 | Plain MCP SDK, no model | [examples/mcp-call.mjs](../examples/mcp-call.mjs) | `npm install @modelcontextprotocol/sdk` |
+| Anything that speaks HTTP: n8n, Make, Zapier, Dify, Flowise, Postman, a custom GPT, any language | [SERVE.md](SERVE.md): REST, MCP over HTTP and an OpenAPI document | `npx -y api-anything serve` |
 
 Each example takes a question as its arguments:
 

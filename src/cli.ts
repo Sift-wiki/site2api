@@ -349,6 +349,25 @@ const HELP: Record<string, string> = {
                   Gemini CLI, VS Code, Cursor and Claude Desktop, with absolute paths and the other
                   flags given, instead of serving
   --no-learn      hide learn_site`,
+  serve: `api-anything serve [--host 127.0.0.1] [--port 8787] [--allow-writes] [--sites a,b] [--no-learn] [--cors <origin>]... [--public-url <url>] [--print-config]
+  Serves the MCP tools over HTTP, for clients that cannot start a process (n8n, Make, Zapier, Dify,
+  Postman, a custom GPT, any HTTP client): MCP over Streamable HTTP at /mcp, the same answers as JSON
+  endpoints under /v1, and an OpenAPI 3.1 document at /openapi.json with one path per installed read.
+  Prints one JSON line once listening ({ok, version, url, mcp, openapi, tokenFile}), then logs to
+  stderr. Every request but GET /v1/health needs Authorization: Bearer <token>: API_ANYTHING_TOKEN,
+  else the token in ~/.api-anything/serve-token, made on first start. A request from a browser page
+  (an Origin header) is refused unless its origin is listed with --cors. docs/SERVE.md has examples.
+  --host        the address to listen on; default 127.0.0.1. Anything but loopback lets other
+                machines try the token: it warns
+  --port        default 8787; 0 picks a free port
+  --allow-writes  serve POST /v1/write/{site}/{op} and call_write_operation
+  --sites a,b   MCP: each op of these sites as a tool of its own; OpenAPI: per-op paths for these
+                sites only (default every installed site, at most 300 paths)
+  --no-learn    hide POST /v1/learn and learn_site
+  --cors        a browser origin allowed to call (https://app.example.com); repeat for more
+  --public-url  the address a tunnel or proxy gives this server: its Host is accepted, and the
+                OpenAPI document names it as the server
+  --print-config  print curl, MCP-over-HTTP and n8n examples instead of serving`,
   setup: `api-anything setup [--yes | --no-share] [--share-only] [--agents claude-code,codex,cursor,claude-desktop,hermes,gemini,vscode] [--dry-run]
   Connects the MCP server (npx -y api-anything mcp) to each agent found on this machine: Claude Code,
   Codex, Cursor, Claude Desktop, Hermes, Gemini CLI, VS Code. Installs the skill for Claude Code
@@ -407,6 +426,7 @@ const USAGE = `api-anything ${VERSION}: turn a website into operations an agent 
   api-anything heals [site] | revert <site> <op> | status [site]
   api-anything stats [--days n] [--card]
   api-anything mcp [--allow-writes] [--sites a,b] [--print-config]
+  api-anything serve [--host 127.0.0.1] [--port 8787] [--allow-writes] [--cors <origin>]
 
 api-anything <command> --help for details. Data lives in ~/.api-anything (API_ANYTHING_HOME overrides).`;
 
@@ -552,6 +572,10 @@ const OPTIONS = {
   find: { type: "string" },
   sites: { type: "string" },
   "print-config": { type: "boolean" },
+  host: { type: "string" },
+  port: { type: "string" },
+  cors: { type: "string", multiple: true },
+  "public-url": { type: "string" },
   days: { type: "string" },
   card: { type: "boolean" },
 } as const;
@@ -1708,6 +1732,102 @@ async function cmdMcp({ v }: Parsed): Promise<number> {
   return -1; // keep serving
 }
 
+async function cmdServe({ v }: Parsed): Promise<number> {
+  const { DEFAULT_PORT, isLoopback, originOf, serve, serveToken } = await import("./serve.js");
+  if (v["no-learn"]) (await import("./mcp-learn.js")).learnTool.enabled = false;
+  const sites = (v.sites ?? "")
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+  for (const s of sites) if (!loadSite(s)) throw new Fail(`no site "${s}"`, "api-anything sites lists them");
+  const host = v.host ?? "127.0.0.1";
+  const port = v.port === undefined ? DEFAULT_PORT : Number(v.port);
+  if (!Number.isInteger(port) || port < 0 || port > 65535)
+    throw new Fail(`--port ${v.port}: not a port`, "a number from 0 (any free port) to 65535");
+  const cors = (v.cors ?? [])
+    .flatMap((c) => c.split(","))
+    .map((c) => c.trim())
+    .filter(Boolean);
+  try {
+    cors.forEach(originOf);
+    if (v["public-url"]) new URL(v["public-url"]);
+  } catch (e) {
+    throw new Fail((e as Error).message, "api-anything serve --help");
+  }
+  const base = `http://${host.includes(":") ? `[${host}]` : host}:${port || DEFAULT_PORT}`;
+  if (v["print-config"]) {
+    process.stdout.write(`${serveExamples(v["public-url"] ?? base)}\n`);
+    return 0;
+  }
+  const { token, file } = serveToken();
+  const served = await serve({
+    host,
+    port,
+    allowWrites: v["allow-writes"],
+    sites,
+    cors,
+    token,
+    ...(v["public-url"] ? { publicUrl: v["public-url"] } : {}),
+  });
+  const url = v["public-url"] ? new URL(v["public-url"]).origin : served.url;
+  out({
+    ok: true,
+    version: VERSION,
+    url,
+    mcp: `${url}/mcp`,
+    openapi: `${url}/openapi.json`,
+    ...(file ? { tokenFile: file } : { tokenEnv: "API_ANYTHING_TOKEN" }),
+  });
+  if (!isLoopback(host))
+    process.stderr.write(
+      `api-anything serve: listening on ${host}, not loopback: anyone who reaches this address and has the token can use your signed-in sessions\n`,
+    );
+  if (process.stderr.isTTY)
+    process.stderr.write(
+      `api-anything serve: send Authorization: Bearer <token>; the token is ${file ? `in ${file}` : "API_ANYTHING_TOKEN"}\n`,
+    );
+  let stopping = false;
+  const stop = () => {
+    if (stopping) process.exit(130); // a second signal: stop now
+    stopping = true;
+    void served
+      .close()
+      .then(() => settle(1500))
+      .then(closeBrowser)
+      .finally(() => process.exit(0));
+  };
+  process.on("SIGINT", stop);
+  process.on("SIGTERM", stop);
+  return -1; // keep serving
+}
+
+/** `serve --print-config`: how an HTTP client reaches this server, with the token left as a placeholder. */
+function serveExamples(base: string): string {
+  return [
+    "# the token: cat ~/.api-anything/serve-token (or API_ANYTHING_TOKEN)",
+    `curl -s ${base}/v1/health`,
+    `curl -s -H "Authorization: Bearer $TOKEN" ${base}/v1/sites`,
+    `curl -s -H "Authorization: Bearer $TOKEN" -H "content-type: application/json" -d '{"args":{"query":"sqlite"}}' ${base}/v1/call/hacker-news/search`,
+    "",
+    "# MCP over HTTP (Streamable HTTP), for a client that takes a URL and headers:",
+    JSON.stringify({ url: `${base}/mcp`, headers: { Authorization: "Bearer <token>" } }),
+    "",
+    "# n8n: an HTTP Request node",
+    JSON.stringify({
+      method: "POST",
+      url: `${base}/v1/call/hacker-news/search`,
+      authentication: "genericCredentialType",
+      genericAuthType: "httpBearerAuth",
+      sendBody: true,
+      contentType: "json",
+      specifyBody: "json",
+      jsonBody: '{"args":{"query":"sqlite"}}',
+    }),
+    "",
+    `# OpenAPI 3.1 (with the token): ${base}/openapi.json`,
+  ].join("\n");
+}
+
 type Flag = keyof typeof OPTIONS;
 /** Each command and the flags it takes: run() refuses any other, so none is silently ignored. */
 const COMMANDS: Record<string, { run: (p: Parsed) => number | Promise<number>; flags: Flag[] }> = {
@@ -1779,6 +1899,10 @@ const COMMANDS: Record<string, { run: (p: Parsed) => number | Promise<number>; f
   pull: { run: cmdPull, flags: [] },
   publish: { run: cmdPublish, flags: ["yes"] },
   mcp: { run: cmdMcp, flags: ["allow-writes", "sites", "print-config", "no-learn"] },
+  serve: {
+    run: cmdServe,
+    flags: ["host", "port", "allow-writes", "sites", "no-learn", "cors", "public-url", "print-config"],
+  },
   setup: { run: cmdSetup, flags: ["yes", "no-share", "share-only", "agents", "dry-run"] },
   learn: {
     run: cmdLearn,

@@ -9,7 +9,7 @@
  */
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
-import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { McpServer, type RegisteredTool } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 import { idleWork } from "./background.js";
@@ -382,17 +382,54 @@ export interface ServerOptions {
   waitMs?: number;
   /** stand-ins for the slow steps, in tests: a call, and the sign-in window */
   run?: { call?: typeof call; window?: typeof windowLogin };
+  /**
+   * the jobs to start and find calls in; default: this server's own. `serve` gives every MCP session
+   * and its REST surface the same one, so a job one started is found, and joined, by any other
+   */
+  jobs?: Jobs<Reply>;
 }
 
-export function createServer({
+/** Call options a REST call takes that the MCP tools do not. */
+export type CallExtra = Pick<CallOptions, "maxTier">;
+
+type OpInput = { site: string; op: string; args?: Record<string, unknown>; view?: ResultView };
+type CallInput = OpInput & Watch;
+type WriteInput = OpInput & { again?: boolean; idempotencyKey?: string };
+
+/**
+ * A server's tools as functions beside the server itself: `serve` answers its REST endpoints with
+ * the very handlers MCP runs, so the two answer the same by construction.
+ */
+export interface Toolset {
+  server: McpServer;
+  /** the tool's input checked with its own schema, as MCP checks it; undefined: no such tool */
+  input(name: string, value: unknown): { value: Record<string, unknown> } | { invalid: string } | undefined;
+  /** a registered tool's handler on input `input` accepted */
+  run(name: string, value: Record<string, unknown>): Promise<Reply>;
+  /** the tool's input schema as JSON Schema, for an OpenAPI document; undefined: no such tool or none */
+  schema(name: string): Record<string, unknown> | undefined;
+  /** call_operation, with what only REST passes */
+  callOperation(input: CallInput, extra?: CallExtra): Promise<Reply>;
+  /** call_write_operation; present only on a server that allows writes */
+  callWrite?: (input: WriteInput, extra?: CallExtra) => Promise<Reply>;
+}
+
+export function createServer(opts: ServerOptions = {}): McpServer {
+  return createToolset(opts).server;
+}
+
+/** No tool here reads its request context: a call from REST has none. */
+const NO_EXTRA = { signal: new AbortController().signal, requestId: 0 } as never;
+
+export function createToolset({
   allowWrites = false,
   sites = [],
   waitMs = WAIT_MS,
   run = {},
-}: ServerOptions = {}): McpServer {
+  jobs = new Jobs<Reply>(waitMs),
+}: ServerOptions = {}): Toolset {
   const callOp = run.call ?? call;
   const signInWindow = run.window ?? windowLogin;
-  const jobs = new Jobs<Reply>(waitMs);
   /** `work` as a job: identical calls share one, and one running past the deadline answers pending */
   const asJob = async (key: string, note: string, work: () => Promise<Reply>): Promise<Reply> => {
     const r = await jobs.start(key, note, () => guard(work));
@@ -417,6 +454,17 @@ export function createServer({
     },
   );
 
+  // every tool registered, with the schema MCP checks its input against, for the Toolset's REST callers
+  const tools = new Map<string, { tool: RegisteredTool; parse?: z.ZodType }>();
+  const register = server.registerTool.bind(server);
+  server.registerTool = ((name: string, config: { inputSchema?: unknown }, cb: never) => {
+    const tool = register(name, config as never, cb);
+    const s = config.inputSchema;
+    const parse = s === undefined ? undefined : s instanceof z.ZodType ? s : z.object(s as z.ZodRawShape);
+    tools.set(name, { tool, ...(parse ? { parse } : {}) });
+    return tool;
+  }) as typeof server.registerTool;
+
   /**
    * One call of an op, as its answer over MCP. A read is sent with writes off, whatever the server
    * allows, so a tool advertised read-only never sends a write; on a server that allows writes, the
@@ -430,9 +478,11 @@ export function createServer({
     write?: { again?: boolean; idempotencyKey?: string },
     view?: ResultView,
     watch: Watch = {},
+    extra: CallExtra = {},
   ): Promise<Reply> => {
     const pulled = agentPulled(site);
     const r = await callOp(site, op, args, {
+      ...extra,
       allowWrites: !!write && allowWrites && !pulled,
       ...write,
       ...(view ? { view } : {}),
@@ -614,6 +664,58 @@ export function createServer({
       }),
   );
 
+  /** A key's extra part: none for MCP's own calls, so theirs stay as they were */
+  const extraKey = (extra: CallExtra) => (Object.keys(extra).length ? [extra] : []);
+
+  const callOperation = ({ site, op, args = {}, view, ...rest }: CallInput, extra: CallExtra = {}): Promise<Reply> => {
+    const watch = watchOf(rest);
+    return asJob(
+      `call ${JSON.stringify([site, op, args, view ?? null, watch, ...extraKey(extra)])}`,
+      READ_NOTE,
+      async () => {
+        const got = await install(site);
+        if ("error" in got) return installFailed(site, got);
+        return callReply(
+          site,
+          op,
+          args,
+          { tool: "call_operation", args: { site, op, args, ...(view ? { view } : {}), ...watch } },
+          undefined,
+          view,
+          watch,
+          extra,
+        );
+      },
+    );
+  };
+
+  const callWrite = (
+    { site, op, args = {}, again, idempotencyKey, view }: WriteInput,
+    extra: CallExtra = {},
+  ): Promise<Reply> =>
+    guard(async () => {
+      const got = await install(site);
+      if ("error" in got) return installFailed(site, got);
+      const read = readHere(site, op, args);
+      if (read) return read;
+      // an agent-pulled site is read-only here, whatever the server allows
+      if (agentPulled(site) && isWrite(site, op)) return pulledWrite(site, op);
+      // `again` and `extra` are left out of the key: a write still on its way is joined, never sent
+      // beside itself, whatever tier cap the second caller asked for
+      return asJob(`write ${JSON.stringify([site, op, args, idempotencyKey ?? null])}`, WRITE_NOTE, () =>
+        callReply(
+          site,
+          op,
+          args,
+          { tool: "call_write_operation", args: { site, op, args, ...(view ? { view } : {}) } },
+          { again, idempotencyKey },
+          view,
+          {},
+          extra,
+        ),
+      );
+    });
+
   const RESULT =
     "Returns {ok, class, data, tier, healed?, heal?, ms, reason?, next?, nextCall?, retry?, retryAfterMs?, write?, nextPage?, hasMore?}; a list of two or more records comes back as data {columns, rows} when that shortens the JSON (one row per item, null for a missing field); otherwise it stays a list. `reason` also explains a slow success. On failure follow `next` (nextCall is the same step as data, with the tool to use) at most once, then stop and report. `retry` says whether to send the same call again: safe, after_wait (retryAfterMs), after_fix (once the step is done) or no. An op that pages (list_operations: pages) answers nextPage, the value its paging param takes for the next page, and hasMore (false: the last page). A call that repaired the op (healed: true) says how in heal {strategy, changes}: tell the user it healed and what changed in its request (a human can undo it with api-anything revert <site> <op>). A call still running after about 25 s answers class pending with a job: call get_job with it. " +
     " view {fields?, maxChars?} shapes output after classification/extraction, separately from site args. A cut answer has resultId and more: call get_result with more to recover it locally, not nextPage (which skips to the site's next page). " +
@@ -634,28 +736,7 @@ export function createServer({
       outputSchema: outputSchema(CALL_RESULT_SCHEMA),
       annotations: READ_HINTS,
     },
-    ({
-      site,
-      op,
-      args = {},
-      view,
-      ...rest
-    }: { site: string; op: string; args?: Record<string, unknown>; view?: ResultView } & Watch) => {
-      const watch = watchOf(rest);
-      return asJob(`call ${JSON.stringify([site, op, args, view ?? null, watch])}`, READ_NOTE, async () => {
-        const got = await install(site);
-        if ("error" in got) return installFailed(site, got);
-        return callReply(
-          site,
-          op,
-          args,
-          { tool: "call_operation", args: { site, op, args, ...(view ? { view } : {}), ...watch } },
-          undefined,
-          view,
-          watch,
-        );
-      });
-    },
+    (input: CallInput) => callOperation(input),
   );
 
   server.registerTool(
@@ -747,40 +828,7 @@ export function createServer({
         outputSchema: outputSchema(CALL_RESULT_SCHEMA),
         annotations: WRITE_HINTS,
       },
-      ({
-        site,
-        op,
-        args = {},
-        again,
-        idempotencyKey,
-        view,
-      }: {
-        site: string;
-        op: string;
-        args?: Record<string, unknown>;
-        again?: boolean;
-        idempotencyKey?: string;
-        view?: ResultView;
-      }) =>
-        guard(async () => {
-          const got = await install(site);
-          if ("error" in got) return installFailed(site, got);
-          const read = readHere(site, op, args);
-          if (read) return read;
-          // an agent-pulled site is read-only here, whatever the server allows
-          if (agentPulled(site) && isWrite(site, op)) return pulledWrite(site, op);
-          // `again` is left out of the key: a write still on its way is joined, never sent beside itself
-          return asJob(`write ${JSON.stringify([site, op, args, idempotencyKey ?? null])}`, WRITE_NOTE, () =>
-            callReply(
-              site,
-              op,
-              args,
-              { tool: "call_write_operation", args: { site, op, args, ...(view ? { view } : {}) } },
-              { again, idempotencyKey },
-              view,
-            ),
-          );
-        }),
+      (input: WriteInput) => callWrite(input),
     );
 
   for (const name of sites) {
@@ -942,8 +990,35 @@ export function createServer({
       }),
   );
   registerLearn(server, { asJob });
-  return server;
+  return {
+    server,
+    input(name, value) {
+      const t = tools.get(name);
+      if (!t) return undefined;
+      if (!t.parse) return { value: {} };
+      const r = t.parse.safeParse(value ?? {});
+      return r.success ? { value: r.data as Record<string, unknown> } : { invalid: oneLineIssues(r.error) };
+    },
+    run(name, value) {
+      const t = tools.get(name);
+      if (!t) return Promise.reject(new Error(`no tool "${name}"`));
+      const handler = t.tool.handler as unknown as (...a: unknown[]) => Promise<Reply>;
+      return t.parse ? handler(value, NO_EXTRA) : handler(NO_EXTRA);
+    },
+    schema(name) {
+      const parse = tools.get(name)?.parse;
+      if (!parse) return undefined;
+      const { $schema: _, ...rest } = z.toJSONSchema(parse, { io: "input", unrepresentable: "any" });
+      return rest;
+    },
+    callOperation,
+    ...(allowWrites ? { callWrite } : {}),
+  };
 }
+
+/** A schema's refusal in one line: each issue's path and message. */
+const oneLineIssues = (e: z.ZodError) =>
+  e.issues.map((i) => `${i.path.length ? `${i.path.join(".")}: ` : ""}${i.message}`).join("; ");
 
 /**
  * An agent may be acting on injected page text: it may only refresh a known site's session from

@@ -2108,6 +2108,51 @@ independent alternative.
     the domain, follow `next` once, writes only on request), for a client that loads no skill
     (Claude Desktop takes skills only as an upload); every session pays for them, so they stay a few
     sentences.
+- **HTTP server** (`api-anything serve`, `serve.ts`, `openapi.ts`; how to use it: [SERVE.md](SERVE.md)).
+  stdio reaches only a client that starts a local process; n8n, Make, Zapier, Dify, Postman, a
+  custom GPT's actions and plain HTTP clients cannot. One `node:http` port serves three surfaces:
+  MCP over the SDK's Streamable HTTP transport at `/mcp`, JSON endpoints under `/v1`, and an
+  OpenAPI 3.1 document at `/openapi.json`. It takes `mcp`'s flags (`--allow-writes`, `--sites`,
+  `--no-learn`) plus `--host`, `--port`, `--cors` and `--public-url`.
+  - **Answers are the tools' answers by construction.** `createToolset` (mcp.ts) builds the
+    server and keeps each registered tool's handler and its input schema. A REST endpoint checks
+    its body with that schema (a refusal is HTTP 400) and runs the same handler, so `GET /v1/sites`
+    is `list_sites` and `POST /v1/call/{site}/{op}` is `call_operation`, including the
+    `next`/`nextCall` rewrites into MCP terms, `asTable`, refusals and pulls. No tool definition is
+    duplicated. The one thing REST adds is `maxTier` on a call, passed through `callOperation`'s
+    and `callWrite`'s `extra`. An MCP call has no extra, so its job keys are as before. HTTP status
+    is 200 whenever the call ran, whatever its `class`. A status that changed with the outcome
+    would make every HTTP client treat an `auth` or `drift` answer as a transport error and drop
+    the `next` that says what to do.
+  - **One job table.** Each MCP session gets its own server (a server has one transport; the
+    session is stateful, so `learn_site`'s elicitation can be answered). Every session and the REST
+    surface share one `Jobs`, so `GET /v1/jobs/{id}` finds a job any of them started, and an
+    identical call from anywhere joins the running one. That way a write is never sent twice
+    across clients. At most 64 sessions are kept; past that, the least recently used is closed.
+  - **Guarded like a key**, since it acts with the user's sessions. A bearer token on everything
+    but `GET /v1/health`: `API_ANYTHING_TOKEN`, else `~/.api-anything/serve-token`, created with
+    `wx` and mode 0600 so two first starts keep one token. Tokens are compared as SHA-256 digests
+    with `timingSafeEqual`, so the time depends on neither token's length. Any `Origin` not listed
+    with `--cors` is refused (403) before auth: a page the user visits can send requests to
+    loopback, and a page has no business with this server. `*` is refused. Bound to loopback, any
+    `Host` other than the loopback names with the port, or `--public-url`'s host, is refused,
+    which blocks DNS rebinding (a page whose domain resolves to 127.0.0.1 still sends its domain
+    as Host). The token is never printed to stdout; stdout carries exactly one JSON line once the
+    server listens, and everything after goes to stderr. Bodies are capped at 1 MB (413).
+  - **The OpenAPI document** is generated per request, from the tools' own zod schemas
+    (`z.toJSONSchema`; a tuple's `prefixItems` is flattened to `items`, the only form many loaders
+    read) and the installed specs. It has one concrete `POST /v1/call/<site>/<op>` path per read,
+    with `operationId` `<site>__<op>` (`[^A-Za-z0-9_]` as `_`, numbered on a collision), `args`
+    typed with `inputSchema(op)` and `data` typed from `describeOperation`'s output hints. Since
+    a list can come as `{columns, rows}`, `data` is an `anyOf` of the records and the table. Paths
+    are capped at 300, and descriptions at 300 characters, a custom GPT's limit. A shared site's
+    description starts with `SHARED_NOTE`, as a per-op tool's does. `--sites` narrows the paths
+    and the per-op MCP tools, not what `/v1/call` reaches: the endpoints are the tools, and the
+    tools reach every installed site.
+  - Shutdown on SIGINT/SIGTERM stops accepting, waits up to 30 s for answers in flight (an open
+    `GET /mcp` event stream is not one), closes the MCP sessions, then settles reports and closes
+    the browser. An idle server verifies candidates as the stdio one does; every request counts
+    as activity.
 - **Skill** `skills/api-anything/`: `SKILL.md` is the core an agent loads whenever a request is about
   a website: the find, call, learn loop, the few result fields the agent must tell the user about,
   the strict failure loop (follow `next` at most once, then stop and report), and the safety rules.
