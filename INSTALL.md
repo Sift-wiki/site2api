@@ -12,27 +12,39 @@ node --version
 Node must be v22.13 or newer. If it is missing or older, stop and tell the user; don't change their
 Node yourself.
 
-## 2. Ask the user one question
+## 2. Ask the user
 
 Ask in one message, in these words or close to them:
 
 > Help build the shared catalog? Your agent will share what it learns from public pages (never
-> logins, never your data), report whether calls work, and check a few new operations a day in the
-> background.
+> logins, never your data) and report whether calls work. Site searches go to the catalog either
+> way, unless you choose local-only.
 
-Yes is the default: if the user says yes or doesn't mind, use `--yes`; if they say no, use `--no-share`.
+Use `--yes` only when the user says yes. If they say no, or don't answer, use `--no-share`. If they
+want nothing sent to the catalog at all, searches included, use `--no-share --local-only`.
+
+Background verification (an idle server testing up to 20 new shared operations a day from the user's
+network) is a separate setting and stays off. Add `--verify` only if the user asks for it.
 
 ## 3. Run setup
 
+Name the agent you are with `--agents`: `claude-code`, `codex`, `cursor`, `claude-desktop`,
+`gemini` or `vscode`.
+
 ```sh
-npx -y api-anything setup --yes        # or --no-share
+npx -y api-anything setup --agents claude-code --yes        # or --no-share
 ```
 
-It connects the MCP server to every agent it finds on this machine (Claude Code, Codex, Cursor,
-Claude Desktop, Gemini CLI, VS Code), installs the skill for the agents that take one, checks for a
-Chromium browser and makes the install's key. It leaves other MCP entries alone and backs up each
-config file before its first edit. It prints JSON on stdout and a short summary on stderr. To see
-what it would change first, run it with `--dry-run`.
+It connects the MCP server to the agent you named, installs the skill if that agent takes one,
+checks for a Chromium browser and makes the install's key. It leaves other MCP entries alone and
+backs up each config file before its first edit. It prints JSON on stdout and a short summary on
+stderr. To see what it would change first, run it with `--dry-run`.
+
+Its output lists the other agents it found (`notConnected`). Ask the user before you connect any of
+them, and connect each one they want with its own `--agents` (for example `--agents codex,cursor`).
+Hermes is an always-on gateway: connect it only if the user asks for it by name.
+
+`--pin` writes this exact version into each config instead of the newest release; `setup --pin` again moves it.
 
 If the output has `"ok":false`, show the user the agent whose `mcp` is `failed` and its `error`.
 

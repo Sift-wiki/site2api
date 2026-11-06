@@ -1086,7 +1086,10 @@ describe("browser tiers", { skip: !browserAvailable() && "no Chromium browser in
     ]);
     try {
       signIn("first");
-      assert.equal((await importSession("t2auth", `${fx.base}/`))?.source, "chrome:Default");
+      assert.equal(
+        (await importSession("t2auth", `${fx.base}/`, { confirm: async () => true }))?.source,
+        "chrome:Default",
+      );
       assert.deepEqual((await call("t2auth", "me", {}, o)).data, [{ me: "first" }]);
 
       signIn("second");
@@ -1157,7 +1160,10 @@ describe("browser tiers", { skip: !browserAvailable() && "no Chromium browser in
     ]);
     try {
       signIn("first");
-      assert.equal((await importSession("t3auth", `${fx.base}/`))?.source, "chrome:Default");
+      assert.equal(
+        (await importSession("t3auth", `${fx.base}/`, { confirm: async () => true }))?.source,
+        "chrome:Default",
+      );
       assert.deepEqual((await call("t3auth", "me", {}, o)).data, [{ me: "first" }]);
 
       signIn("second");
@@ -1197,7 +1203,10 @@ describe("browser tiers", { skip: !browserAvailable() && "no Chromium browser in
       { name: "Chrome", family: "chromium", root, password: "pw" },
     ]);
     try {
-      assert.equal((await importSession("t3write", `${fx.base}/`))?.source, "chrome:Default");
+      assert.equal(
+        (await importSession("t3write", `${fx.base}/`, { confirm: async () => true }))?.source,
+        "chrome:Default",
+      );
       fx.hits.length = 0;
       const r = await call("t3write", "save", {}, { allowWrites: true, minIntervalMs: 0, timeoutMs: 5000 });
       const saves = fx.hits.filter((h) => h.method === "POST" && h.url === "/api/save").length;

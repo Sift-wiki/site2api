@@ -2,13 +2,14 @@
  * Background verification (docs/REGISTRY.md "Verification by the crowd"): an idle MCP server asks the
  * registry for candidates this install has not reported, calls each with its published args over plain
  * HTTP with no cookies and no session values (clean.ts), only to public addresses, and reports the
- * outcome. At most 20 a day. A candidate that needs the browser (minTier above 1) is skipped: plain HTTP
+ * outcome. Only with `verify` on in settings.json (its own answer, after a yes to sharing). At most 20 a
+ * day. A candidate that needs the browser (minTier above 1) is skipped: plain HTTP
  * would fail it whether it works or not.
  */
 import { createHash } from "node:crypto";
 import { join } from "node:path";
 import { cleanCall } from "./clean.js";
-import { loadSettings } from "./identity.js";
+import { loadSettings, localOnly } from "./identity.js";
 import { registryRequest } from "./registry.js";
 import { type ServedSite, type VerifyJob, versionHashText } from "./registry-api.js";
 import { flushReports, outcomeOf, queueReport, withSignal } from "./report.js";
@@ -68,7 +69,9 @@ async function candidate(
 export async function verifyCandidates(
   o: { fetchImpl?: typeof fetch; signal?: AbortSignal; now?: Date; minIntervalMs?: number } = {},
 ): Promise<number> {
-  if (!loadSettings().share) return 0;
+  // its own setting: sharing alone never sends this install's network to call other people's ops
+  const s = loadSettings();
+  if (!s.share || !s.verify || localOnly()) return 0;
   let ran = 0;
   try {
     const { jobs } = await registryRequest<{ jobs?: VerifyJob[] }>(`/v1/verify-jobs?limit=${DAILY_JOBS}`, {

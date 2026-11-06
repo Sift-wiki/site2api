@@ -61,7 +61,13 @@ beforeEach(() => {
   dns.clear();
 });
 
-const shareOn = (share = true) => saveSettings({ share, askedAt: "2026-10-25T00:00:00.000Z" });
+const shareOn = (share = true, verify = share) =>
+  saveSettings({
+    share,
+    askedAt: "2026-10-25T00:00:00.000Z",
+    verify,
+    verifyAskedAt: "2026-10-25T00:00:00.000Z",
+  });
 
 const site = (op: Record<string, unknown> = {}, over: Record<string, unknown> = {}): Site =>
   parseSite({

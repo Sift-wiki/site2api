@@ -5,7 +5,8 @@
  * unless started with allowWrites. A call still running at the deadline answers with a job (jobs.ts).
  * It finds and pulls shared specs from the registry, whose writes it never offers: page content may be
  * steering the agent. For the same reason its login cannot import cookies a human did not already
- * choose to import. Idle, it verifies a few candidates a day for the registry (background.ts).
+ * choose to import. Idle, with verification on, it verifies a few candidates a day for the registry
+ * (background.ts).
  */
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
@@ -18,6 +19,7 @@ import { closeBrowser } from "./browser.js";
 import { describeOperation, inputSchema } from "./describe.js";
 import { type CallOptions, call, type NextCall } from "./execute.js";
 import { returnedFields } from "./extract.js";
+import { localOnlyOff } from "./identity.js";
 import { type Job, Jobs, type Permits } from "./jobs.js";
 import { prepareLink } from "./links.js";
 import {
@@ -31,7 +33,7 @@ import {
   windowRetry,
 } from "./login.js";
 import { registerLearn } from "./mcp-learn.js";
-import { type Pulled, pull, search } from "./registry.js";
+import { LocalOnlyError, type Pulled, pull, search } from "./registry.js";
 import { settle } from "./report.js";
 import { getResult, MAX_RESULT_CHARS, MIN_RESULT_CHARS, type ResultView } from "./results.js";
 import {
@@ -277,6 +279,12 @@ async function install(site: string): Promise<{ pulled?: Pulled } | { error: str
   try {
     return { pulled: await pull(site, { by: "agent" }) };
   } catch (e) {
+    if (e instanceof LocalOnlyError)
+      return {
+        error: `no site "${site}" on this machine, and this install is local-only, so the shared catalog was not asked`,
+        next: `tell the user; ${localOnlyOff()}. Or learn it here with learn_site`,
+        missing: true,
+      };
     const missing = /^no shared spec/.test((e as Error).message);
     return {
       error: missing ? `no site "${site}", here or in the registry` : (e as Error).message,
@@ -609,14 +617,17 @@ export function createToolset({
             operations: m.operations.filter((o) => !o.write),
           })),
           ...(r.registryError ? { registryError: r.registryError } : {}),
+          ...(r.localOnly ? { localOnly: r.localOnly } : {}),
           // bundled and pulled specs are someone else's too, installed or not
           ...(r.matches.length ? { shared: SHARED_NOTE } : {}),
           next:
-            top && !top.operations.length && top.interfaces?.length
-              ? `${top.domain} offers its own agent interface (${top.interfaces.map((i) => `${i.kind} ${i.url}`).join(", ")}): tell the user, who can connect it; nothing here calls it`
-              : top
-                ? `check that ${top.domain} is the site the user means (a lookalike name can point elsewhere), then call_operation {"site":"${top.site}","op":<an op above>,"args":<its params>}; list_operations {"site":"${top.site}"} first shows the site's notes (caveats, arg formats)${r.matches.every((m) => m.unmatched.length) ? "; these are partial lexical matches, not guarantees for the unmatched constraints: try their core capabilities or broaden the query before learning a new site" : ""}`
-                : "nothing matched. Broaden the query or check list_sites before learning. Words find only sites whose operations other installs confirmed: if you know the site's domain or a page URL, find_sites with that, which also finds unconfirmed ones; else learn it with learn_site (the page that shows the data, example args and what you want from it), which calls an op someone shared for the same page before it opens a browser",
+            !top && r.localOnly
+              ? "nothing on this machine matched, and the shared catalog was not asked (local-only): check list_sites, or learn it with learn_site"
+              : top && !top.operations.length && top.interfaces?.length
+                ? `${top.domain} offers its own agent interface (${top.interfaces.map((i) => `${i.kind} ${i.url}`).join(", ")}): tell the user, who can connect it; nothing here calls it`
+                : top
+                  ? `check that ${top.domain} is the site the user means (a lookalike name can point elsewhere), then call_operation {"site":"${top.site}","op":<an op above>,"args":<its params>}; list_operations {"site":"${top.site}"} first shows the site's notes (caveats, arg formats)${r.matches.every((m) => m.unmatched.length) ? "; these are partial lexical matches, not guarantees for the unmatched constraints: try their core capabilities or broaden the query before learning a new site" : ""}`
+                  : "nothing matched. Broaden the query or check list_sites before learning. Words find only sites whose operations other installs confirmed: if you know the site's domain or a page URL, find_sites with that, which also finds unconfirmed ones; else learn it with learn_site (the page that shows the data, example args and what you want from it), which calls an op someone shared for the same page before it opens a browser",
           nextCall:
             top && !top.operations.length
               ? undefined

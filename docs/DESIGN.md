@@ -1246,9 +1246,25 @@ of the service and the crowd rules (candidate, live, degraded, review; promotion
 contract is `src/registry-api.ts`. This section is the client's side. The base URL is `REGISTRY_API`;
 `API_ANYTHING_REGISTRY` overrides it (https, or http to localhost for tests). Every request refuses
 redirects, has a timeout and reads its answer while streaming up to a cap. Uploads, reports and
-verify jobs are signed with the install's Ed25519 key (`identity.ts`). Nothing is uploaded, reported
-or verified unless setup's question (`QUESTION`) was answered yes (`settings.json` `share`, with
-`askedAt`), except an upload the user consents to.
+verify jobs are signed with the install's Ed25519 key (`identity.ts`). Nothing is uploaded or reported
+unless setup's question (`QUESTION`) was answered yes (`settings.json` `share`, with `askedAt`), except
+an upload the user consents to, and nothing is verified in the background unless the second question
+(`VERIFY_QUESTION`, asked by setup only after a yes, default no) was answered yes too (`verify`, with
+`verifyAskedAt`). A no to sharing turns `verify` off with it. `settings.json` always holds `verify`
+once written by this version; a file without it was written by a version whose single question also
+covered verification, so its first read writes `verify` equal to `share` (`verifyFrom: "migrated"`)
+and later reads take the field as it is.
+
+**Local-only.** `localOnly()` is `API_ANYTHING_LOCAL_ONLY=1` or `settings.json` `localOnly`
+(`setup --local-only`; `--no-local-only` clears it). `registryRequest` is the one function that sends a
+request to the registry, and with local-only on it throws `LocalOnlyError` before it opens a connection,
+so every path is covered by that one check: search, pull, servedNow, sharedName, reports, verify jobs,
+claims, uploads, interface reports and the bundled upgrade. The callers that would otherwise ask the
+user something or record an attempt check first: `search` answers from this machine with a `localOnly`
+note, `shareOps` answers each op "local-only", `publish` refuses with that reason, `upgradeBundled`
+records no attempt, `learn_site` asks no sharing question, and a call (CLI or MCP) of a site this machine
+lacks says it is local-only and how to turn that off. `test/local-only.test.ts` points the registry at a
+localhost server that counts connections and runs each path with local-only on: none connects.
 
 **The catalog's one request to a site.** The service never calls a site for an install: every call runs
 on the user's machine, from its address and with its sessions, which is what lets the ladder reach sites
@@ -1574,7 +1590,7 @@ The registry counts it as a heal only after this install reported `fail` on the 
 reports (the call's `fail` among them) are flushed and awaited before the upload. Otherwise it stays a
 local op with no version.
 
-**Background verification (`background.ts`).** An MCP server with `share` on that has seen no message
+**Background verification (`background.ts`).** An MCP server with `share` and `verify` on (and not local-only) that has seen no message
 in or out for 60 s asks `GET /v1/verify-jobs` (signed) for candidates this install has not reported,
 takes each candidate's op from the job, which carries the version and its site's `baseUrl` since
 `GET /v1/sites/<site>` serves only each op's best (used only when it hashes to the job's hash; a
@@ -1582,7 +1598,7 @@ registry that sends none is asked `GET /v1/sites/<site>`, matched by hash; not i
 shared rules), calls it with the job's args through `cleanCall` with `publicOnly` (https to public
 addresses only, every hop, as above), never with the user's sessions, and reports the outcome. A
 candidate with `minTier` above 1 is skipped: plain HTTP would fail it whether it works or not, and the
-report would count against it. The calls go from the user's IP address, which the setup question says.
+report would count against it. The calls go from the user's IP address, which the verification question says.
 At most 20 a day (`~/.api-anything/verify-jobs.json`); a round stops when the client goes away.
 
 **Recorded answers (`test/fixture/sites/<site>.json`).** CI cannot reach the sites, so for every
@@ -1618,6 +1634,20 @@ the page).
 The easiest sign-in is the one the user already did. `api-anything login <site|url>` by default
 **imports** that site's cookies from the user's everyday browser, so there is no password to type
 and no 2FA/captcha to redo — the human solved those in their own browser already.
+
+**A person approves the first import.** An agent with a shell can run `api-anything login <any site>`
+itself, and on macOS the Keychain hands over the Safe Storage key without a dialog once the user has
+clicked "Always Allow", so an import nobody watched would be silent. So a browser import of a site
+whose session has no browser-profile source yet (none, `window` or `file`) needs a person
+(`importSession`'s `confirm`): the profile is chosen from plaintext cookie names (`chooseProfile`),
+then the terminal asks `Import <host> cookies from <Browser profile label>? [y/N]` before any value is
+read or decrypted, and a no keeps nothing (`ImportRefused`, `declined`). With no terminal, `login`
+refuses before it opens any cookie database, with a `next` to run `api-anything login <site>` in a
+terminal or use `--window`. `--profile` does not bypass it, since an agent can pass it. Importing
+again from the profile already recorded for the site (`login` again, `reimportIfBrowser` on `auth`,
+MCP `login` mode import) asks nothing; another profile is a new choice and asks. `--window` and
+`--cookies` need no terminal. `API_ANYTHING_ALLOW_IMPORT=github.com,linkedin.com` pre-approves those
+hosts (each counts for its registrable domain) for headless automation the user set up.
 
 A password is never a trigger step's. A `fill` step's value is saved in the spec (and its examples),
 so before it types, the run asks the page what the field is: a `type=password` input, or one whose
@@ -1901,6 +1931,27 @@ independent alternative.
     and no response samples are gathered for discovery. A shape stripped on export leaves the
     corresponding hints unknown. A learned `null` also stays unknown: the shape uses it for a
     field absent from some items, not only a JSON null.
+  - `setup [--agents <list>|all] [--yes|--no-share] [--verify|--no-verify] [--local-only|--no-local-only] [--pin] [--share-only] [--dry-run]`
+    (`setup.ts`) connects agents only by a choice: `--agents` (`all` is every agent found but
+    Hermes), or on a terminal one question listing the agents found, `Connect API Anything to: 1)
+    Claude Code 2) Codex ... [Enter = all, numbers like 1,3, n = none]`; the person typed `setup`, so
+    Enter connects the listed ones. Hermes is never listed: it is an always-on gateway, where a
+    browser-capable tool is a deliberate choice, so it is connected only when named and the summary
+    says "found, not connected (always-on gateway): add with --agents hermes". With no terminal and
+    no `--agents` it connects nothing and answers `notConnected`, each agent found with the command
+    that connects it. `--dry-run` asks nothing and reports each case (`selection`: `named`, `asked`,
+    `would ask` with what each offered agent would get, `none`). An agent following INSTALL.md
+    names itself and asks the user before adding another. Then the sharing questions (see Sharing
+    specs) and `localOnly`; the summary says plainly which of sharing, verification and local-only
+    is on. Entries run `npx -y api-anything mcp`, unpinned: an exact pin leaves most installs on old
+    versions (docs/INTEGRATIONS.md, "An old global install wins"), and releases carry npm provenance
+    from trusted publishing. `--pin` writes `api-anything@<this version>` into every entry it writes
+    (the shell entry, the GUI-app entry, Hermes's, Codex's TOML, and the agents' own `mcp add`), and
+    moves the pin of an entry that is setup's own npx form (`npxEntry`: npx, then `-y`,
+    `api-anything[@version]`, `mcp`, nothing else); any other entry stays the user's. Without `--pin`
+    a pinned entry is kept as it is. `mcp --print-config --pin` prints the pinned form, and `status`
+    (no site) adds `configs`: each agent config with an api-anything entry and its pin (`false` for
+    unpinned, `custom` for an entry setup did not write).
   - All output is JSON-first, compact, and ends with a `next` hint on failure.
   - A call's result says what happened in fields as well as prose: `retry` (`safe`, `after_wait`,
     `after_fix`, `no`), `retryAfterMs`, `nextCall` (`{action, site, op}`, with `mode` for a window
@@ -1952,8 +2003,8 @@ independent alternative.
   `next`, `call_operation`'s description and the skill tell the agent to check it is the site the user
   means before calling, since a name or description can imitate another site. When a share
   needs the user's yes, the prompt (MCP elicitation or the CLI's) and the `next` that tells the agent to
-  ask list the upload's `personal` items. With `share` on, an
-  idle server verifies a few candidates a day and flushes call reports (see Sharing specs). The agent may be steered by page content, so MCP `login` import
+  ask list the upload's `personal` items. With `share` on, a server flushes call reports, and with
+  `verify` on too an idle one verifies a few candidates a day (see Sharing specs). The agent may be steered by page content, so MCP `login` import
   only refreshes a site that has a spec and a browser source a human chose with the CLI, from that
   same profile; anything else answers `next`: ask the user to run `api-anything login <site>`. Mode
   window is allowed (a human signs in). So an `auth` result points at the login tool (`next`, and
@@ -2191,7 +2242,7 @@ independent alternative.
   copies the folder to
   `~/.claude/skills` (Claude Code) and `~/.agents/skills` (Codex, Cursor, Gemini CLI, VS Code) and
   records where (`skill.ts`). Each copy carries a stamp, `.api-anything.json`: the version and a hash
-  of the files. Since the server runs through `npx -y api-anything`, it is always the latest release
+  of the files. Since the server runs through `npx -y api-anything` (unless `--pin`), it is always the latest release
   while a copy is not, so any CLI start (the server's included) replaces a recorded copy that an
   older version wrote and nobody edited. An edited copy, a link, a newer version's copy, and a
   same-version copy with other files (a checkout beside a release) are left alone. A copy from before

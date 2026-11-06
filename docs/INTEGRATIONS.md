@@ -66,5 +66,7 @@ shared site first, call it, learn it only when nothing is shared, and answer a `
 - **Sharing.** Until someone answers the sharing question (`npx -y api-anything setup`, or the
   question `learn_site` asks once), nothing is shared or reported. For a non-interactive install,
   record the answer first: `npx -y api-anything setup --share-only --no-share` (or `--yes`).
+  Background verification is its own setting, off unless `--verify` is given. To keep a server off
+  the shared catalog entirely, searches included, set `API_ANYTHING_LOCAL_ONLY=1` in its environment.
 - **Writes.** Leave `--allow-writes` off unless the agent should send writes, such as posting or
   buying, and the framework asks a person before each one.

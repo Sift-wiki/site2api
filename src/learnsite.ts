@@ -26,7 +26,7 @@ import {
   PROFILE_HINT,
 } from "./heal.js";
 import { buildRequest } from "./http.js";
-import { answerShare, loadSettings, QUESTION } from "./identity.js";
+import { answerShare, loadSettings, localOnly, QUESTION } from "./identity.js";
 import { type Args, capturePages, lookedUp, pageUrls, rankCandidates } from "./learn.js";
 import { resolveLoginTarget } from "./login.js";
 import { lookupOp } from "./lookup.js";
@@ -191,7 +191,7 @@ async function reuse(
     data: answer.data,
     ...(answer.truncated ? { truncated: answer.truncated } : {}),
     reused: { site: name, op, ...(status ? { status } : {}) },
-    next: `${loadSettings().askedAt ? "" : `${ASK}. `}this is ${name}.${op}, shared by others: call_operation it from now on. If data is not what the user wanted, call learn_site again with the same input plus fresh: true to learn your own`,
+    next: `${loadSettings().askedAt || localOnly() ? "" : `${ASK}. `}this is ${name}.${op}, shared by others: call_operation it from now on. If data is not what the user wanted, call learn_site again with the same input plus fresh: true to learn your own`,
   };
 }
 
@@ -486,7 +486,7 @@ export async function learnSite(input: LearnSiteInput, o: LearnSiteOptions = {})
   // setup's question, asked at most once per call and once ever
   let prompted = false;
   const askOnce = async () => {
-    if (prompted || loadSettings().askedAt) return;
+    if (prompted || loadSettings().askedAt || localOnly()) return;
     prompted = true;
     const yes = await o.consent?.(QUESTION).catch(() => undefined);
     if (yes !== undefined) answerShare(yes);
@@ -859,7 +859,7 @@ export async function learnSite(input: LearnSiteInput, o: LearnSiteOptions = {})
       else if (yes === undefined)
         next = `ask the user whether to share ${op} with the catalog (${shared.reason ?? "it needs their yes"})${found ? `, showing them what may be theirs: ${found.join("; ")}` : ""}; only on their yes, run: ${publish}`;
     }
-    if (!shared.shared && !loadSettings().askedAt) {
+    if (!shared.shared && !loadSettings().askedAt && !localOnly()) {
       next = next
         ? `${next}. ${ASK}`
         : shared.reason?.startsWith("refused")

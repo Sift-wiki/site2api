@@ -93,7 +93,15 @@ describe("login", () => {
     const home = newHome();
     twoLinkedInProfiles();
     try {
+      // with no terminal, a first import reads nothing at all, so no profile is listed either
+      const refused = JSON.parse((await runCli(home, "login", "linkedin.com")).out);
+      assert.equal(refused.ok, false);
+      assert.match(refused.error, /needs a yes from a person at a terminal/);
+      assert.equal(refused.candidates, undefined);
+      // pre-approved (automation the user set up): still no guess between two accounts
+      process.env.API_ANYTHING_ALLOW_IMPORT = "linkedin.com";
       const r = await runCli(home, "login", "linkedin.com");
+      delete process.env.API_ANYTHING_ALLOW_IMPORT;
       assert.equal(r.code, 1, r.out + r.err);
       const out = JSON.parse(r.out);
       assert.equal(out.ok, false);
@@ -123,6 +131,7 @@ describe("login", () => {
         importSession("linkedin", "https://www.linkedin.com", {
           loginCookies: ["li_at", "JSESSIONID"],
           pushProfile: false,
+          confirm: async () => true,
         }),
         /2 browser profiles are signed in/,
       );
@@ -130,6 +139,7 @@ describe("login", () => {
         loginCookies: ["li_at", "JSESSIONID"],
         profile: "Chrome/Profile 2",
         pushProfile: false,
+        confirm: async () => true,
       });
       assert.equal(r?.name, "Sam Rivera");
       assert.equal(loadSession("linkedin").source, "chrome:Profile 2");
@@ -171,6 +181,7 @@ describe("login", () => {
         loginCookies: ["li_at", "JSESSIONID"],
         profile: "Chrome/Profile 2",
         pushProfile: false,
+        confirm: async () => true,
       });
       saveSession("linkedin", { ...loadSession("linkedin"), cookies: [] });
       const r = await login({ site: "linkedin" });
