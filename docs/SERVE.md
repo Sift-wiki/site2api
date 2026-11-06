@@ -19,7 +19,7 @@ npx -y api-anything serve
 ```
 
 ```text
-{"ok":true,"version":"0.3.2","url":"http://127.0.0.1:8787","mcp":"http://127.0.0.1:8787/mcp","openapi":"http://127.0.0.1:8787/openapi.json","tokenFile":"/Users/you/.api-anything/serve-token"}
+{"ok":true,"version":"0.4.0","url":"http://127.0.0.1:8787","mcp":"http://127.0.0.1:8787/mcp","openapi":"http://127.0.0.1:8787/openapi.json","tokenFile":"/Users/you/.api-anything/serve-token"}
 ```
 
 Once it listens it prints that one JSON line on stdout. Everything after it, one line per request,

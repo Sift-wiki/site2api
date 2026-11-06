@@ -1,7 +1,7 @@
 {
   "name": "api-anything",
   "displayName": "API Anything",
-  "version": "0.3.2",
+  "version": "0.4.0",
   "description": "Call websites through their own data requests from your agent: a shared catalog of operations, a missing one learned in a single call, replayed over HTTP with browser fallback and repair. The api-anything skill plus its MCP server.",
   "author": { "name": "Tianjun Zheng", "url": "https://github.com/goodnight000" },
   "homepage": "https://github.com/goodnight000/api-anything",
