@@ -1,0 +1,49 @@
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[project]
+name = "api-anything"
+# release-python.yml refuses a py-v* tag that differs from this; src/api_anything/__init__.py says the same
+version = "0.4.0"
+description = "Call websites as APIs from Python: a client for the api-anything server, with tools for agent frameworks and typed clients."
+readme = "README.md"
+requires-python = ">=3.9"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "Tianjun Zheng" }]
+keywords = ["api", "agents", "mcp", "scraping", "self-healing", "langchain", "openai-agents"]
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Intended Audience :: Developers",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3 :: Only",
+  "Topic :: Internet :: WWW/HTTP",
+  "Topic :: Software Development :: Libraries",
+  "Typing :: Typed",
+]
+dependencies = []
+
+[project.optional-dependencies]
+langchain = ["langchain-core>=0.3"]
+openai-agents = ["openai-agents>=0.1"]
+
+[project.urls]
+Homepage = "https://github.com/goodnight000/api-anything"
+Documentation = "https://github.com/goodnight000/api-anything/blob/main/docs/PYTHON.md"
+Issues = "https://github.com/goodnight000/api-anything/issues"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/api_anything"]
+
+[tool.hatch.build.targets.sdist]
+include = ["src/api_anything", "tests", "README.md", "LICENSE", "pyproject.toml"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py39"
+# the golden file is generated output, compared byte for byte
+extend-exclude = ["tests/golden"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B"]

@@ -2221,11 +2221,20 @@ independent alternative.
   Installed specs remain unchanged. The transport ladder, own-profile sessions, write ledger and
   readback, pacing, cool-downs, local logs and result caps stay in use. See [HOST.md](HOST.md) for
   approval binding, dynamic-value placeholders and the Bun export condition.
+- **Python** (`python/`, the PyPI package `api-anything`; [PYTHON.md](PYTHON.md)): a standard-library
+  client of `serve`'s HTTP routes, which can start the server itself (`api-anything` on PATH, else
+  npx), per-op tool definitions named as MCP's per-op tools, and `python -m api_anything gen <site>`,
+  a typed module for a site's reads. Neither the client nor a generated module sends a request to a
+  site, holds a credential or reads the session: every call goes through the server, so the ladder,
+  healing, cookie re-import and the classifier apply unchanged, and a second copy of `codec.ts` and
+  `http.ts` in Python is never needed (issue #29). A generated module depends only on the ops' names,
+  arg schemas and output hints, never on examples or notes, so the same description gives the same
+  bytes and a healed site the same file.
 
 ## Non-goals (v1)
 
 TLS impersonation transports, CAPTCHA solving, signature reimplementation, seroval parsing,
-a marketplace (the registry stores and counts; see Sharing specs), typed-client codegen, Windows app-bound cookie decryption
+a marketplace (the registry stores and counts; see Sharing specs), Windows app-bound cookie decryption
 (login falls back to `--window` there), and local operations (below).
 
 **Local operations.** An op is a request to a site, sent by the ladder. An op that runs a program on

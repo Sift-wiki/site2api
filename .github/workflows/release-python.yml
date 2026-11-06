@@ -1,0 +1,71 @@
+name: Release Python
+
+# Publishes the Python client (python/) to PyPI when a py-v* tag is pushed, through PyPI trusted
+# publishing: PyPI checks this workflow's OIDC identity against the trusted publisher set on the
+# project (this repository, release-python.yml, environment pypi), so no token is stored anywhere and
+# the upload carries attestations. Run it by hand (workflow_dispatch) for a dry run that builds and
+# tests but publishes nothing. docs/DISTRIBUTION.md says how to release, and the local fallback.
+on:
+  push:
+    tags: ["py-v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-python
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.13"
+      - name: The tag names the version in python/pyproject.toml
+        if: github.event_name == 'push'
+        run: |
+          version=$(python -c 'import tomllib; print(tomllib.load(open("python/pyproject.toml", "rb"))["project"]["version"])')
+          if [ "$GITHUB_REF_NAME" != "py-v$version" ]; then
+            echo "::error::tag $GITHUB_REF_NAME does not match python/pyproject.toml version $version"
+            exit 1
+          fi
+      - run: python -m pip install build
+      - run: python -m build python
+      # the tests also hold __version__ equal to pyproject.toml's version
+      - name: Test the built wheel
+        working-directory: python
+        run: |
+          python -m venv "$RUNNER_TEMP/venv"
+          "$RUNNER_TEMP/venv/bin/pip" install dist/*.whl
+          "$RUNNER_TEMP/venv/bin/python" -m unittest discover -s tests -t .
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: python-dist
+          path: python/dist/
+          if-no-files-found: error
+
+  # A job of its own, so only the upload holds the OIDC token, and a failed upload can be re-run
+  # without building again.
+  publish:
+    needs: build
+    if: github.event_name == 'push'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    environment:
+      name: pypi
+      url: https://pypi.org/project/api-anything/
+    permissions:
+      id-token: write # the OIDC token PyPI exchanges for a one-time upload credential
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: python-dist
+          path: dist/
+      - uses: pypa/gh-action-pypi-publish@7245906fb61fa33a13554f9d5fb856fe61758086 # v1.14.3
