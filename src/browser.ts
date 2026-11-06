@@ -1426,6 +1426,8 @@ export async function pageFetch(o: {
             await within(page.close(), undefined, Math.min(SEAL_MS, left()));
             entry = await originPage(ctx, o.origin, left);
           }
+          // the fetch may have reached the site before the page went: sending it again is another request
+          await o.pace?.();
         }
       }
     };

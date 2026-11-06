@@ -13,7 +13,8 @@ export const BatchItemSchema = z.object({
 export type BatchItem = z.infer<typeof BatchItemSchema>;
 export type BatchResult = CallResult & { id: string | number; site: string; op: string };
 
-export interface BatchOptions extends Pick<CallOptions, "fetchImpl" | "maxTier" | "timeoutMs"> {
+export interface BatchOptions
+  extends Pick<CallOptions, "fetchImpl" | "maxTier" | "timeoutMs" | "maxAgeMs" | "changes" | "changesOnly" | "watch"> {
   /** Default 1; at most 4, and only across different sites. */
   concurrency?: number;
   /** Default 200; may only lower the cap. The whole batch is checked before any call. */
@@ -69,6 +70,10 @@ export async function* callReads(items: readonly BatchItem[], opts: BatchOptions
         fetchImpl: opts.fetchImpl,
         maxTier: opts.maxTier,
         timeoutMs: opts.timeoutMs,
+        maxAgeMs: opts.maxAgeMs,
+        changes: opts.changes,
+        changesOnly: opts.changesOnly,
+        watch: opts.watch,
         allowWrites: false,
       });
       return {

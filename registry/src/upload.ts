@@ -17,6 +17,7 @@ export const SiteContextSchema = z.object({
   displayName: z.string().max(100).optional(),
   description: z.string().optional(),
   loginCookies: z.array(z.string().max(200)).max(50).optional(),
+  pace: z.object({ minIntervalMs: z.number().optional(), perHour: z.number().optional() }).strict().optional(),
   notes: z.string().optional(),
 });
 
@@ -72,6 +73,7 @@ export function refusals(site: SiteContext, ops: Operation[]): string[] {
     displayName: site.displayName,
     description: site.description,
     loginCookies: site.loginCookies,
+    pace: site.pace,
     operations: ops,
   });
   if (!spec.success) return issues(spec.error);

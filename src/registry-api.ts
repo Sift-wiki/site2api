@@ -38,6 +38,8 @@ export interface SiteContext {
   displayName?: string;
   description?: string;
   loginCookies?: string[];
+  /** the site's request budget (spec.ts `pace`); the shared rules bound it (vet.ts LIMITS) */
+  pace?: { minIntervalMs?: number; perHour?: number };
   /** caller notes (the `<site>.md` text before `## Maintainer notes`), at most 8 KB */
   notes?: string;
 }

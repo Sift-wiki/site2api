@@ -19,6 +19,7 @@ import {
 } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { BudgetSpent, HOUR_MS, limited, overBudget, type Pace, type SendBudget } from "./budget.js";
 import { pickedShape } from "./classify.js";
 import { type Leaf, setAt, walk } from "./codec.js";
 import {
@@ -33,7 +34,7 @@ import {
   signInFills,
 } from "./secrets.js";
 import { ensureDir, home, loadSession, readJson, safeName, withLock, writePrivate } from "./session.js";
-import { type Operation, parseSite, type Site } from "./spec.js";
+import { MAX_PER_HOUR, type Operation, parseSite, type Site } from "./spec.js";
 import { vetShared } from "./vet.js";
 
 let bundledOverride: string | undefined;
@@ -353,34 +354,89 @@ const ownSlots = new Map<string, number>();
 /** A gap between two sends is the interval ± this share of it: an exact period is a robot's. */
 export const PACE_JITTER = 0.3;
 
+const sendsFile = () => join(home(), "sends.json");
+const ownSends = new Map<string, number[]>();
+
+const lastHour = (times: unknown, now: number): number[] =>
+  Array.isArray(times)
+    ? times.filter((t): t is number => typeof t === "number" && t > now - HOUR_MS).sort((a, b) => a - b)
+    : [];
+
+const record = (v: unknown): Record<string, unknown> =>
+  v && typeof v === "object" && !Array.isArray(v) ? (v as Record<string, unknown>) : {};
+
 /**
  * Reserve the next moment a request may go to `site`, and move the site's slot on by the interval
- * ±`PACE_JITTER`. The slots are kept in pace.json under its lock, so separate processes (a CLI loop,
- * agents in parallel) queue up too; a home that cannot be written paces this process only.
+ * ±`PACE_JITTER`. Under a `budget` the same step checks it (throwing `BudgetSpent`, reserving
+ * nothing) and counts the send when the budget caps the hour, so two callers can never both take the
+ * last request of an hour. The slots are kept in pace.json and the counts in sends.json, both under
+ * pace.json's lock, so separate processes (a CLI loop, agents in parallel) queue up too; a home that
+ * cannot be written paces and counts this process only.
  */
-export function reserveSend(site: string, intervalMs: number, now = Date.now()): number {
+export function reserveSend(site: string, intervalMs: number, now = Date.now(), budget?: SendBudget): number {
   const gap = Math.round(intervalMs * (1 - PACE_JITTER + Math.random() * 2 * PACE_JITTER));
+  const take = (slotOf: number, sent: number[]) => {
+    const at = Math.max(now, slotOf);
+    if (budget && !budget.exempt) {
+      const over = overBudget(site, budget.pace, sent, at, now);
+      if (over) throw over;
+    }
+    return at;
+  };
+  const counts = !!budget?.pace.perHour;
   try {
     return withLock(paceFile(), () => {
       let slots: Record<string, unknown>;
       try {
-        slots = readJson<Record<string, unknown>>(paceFile(), {});
+        slots = record(readJson<unknown>(paceFile(), {}));
       } catch {
         slots = {};
       }
-      if (!slots || typeof slots !== "object" || Array.isArray(slots)) slots = {};
       // a slot in the past holds nothing back
       for (const [k, t] of Object.entries(slots)) if (!(typeof t === "number" && t > now)) delete slots[k];
-      const at = Math.max(now, (slots[site] as number | undefined) ?? 0);
+      let sends: Record<string, unknown> = {};
+      if (budget) {
+        try {
+          sends = record(readJson<unknown>(sendsFile(), {}));
+        } catch {
+          sends = {};
+        }
+      }
+      const at = take((slots[site] as number | undefined) ?? 0, lastHour(sends[site], now));
       slots[site] = at + gap;
       writePrivate(paceFile(), JSON.stringify(slots));
+      if (counts) {
+        for (const k of Object.keys(sends)) if (!lastHour(sends[k], now).length) delete sends[k];
+        sends[site] = [...lastHour(sends[site], now), at].slice(-MAX_PER_HOUR);
+        writePrivate(sendsFile(), JSON.stringify(sends));
+      }
       return at;
     });
-  } catch {
-    const at = Math.max(now, ownSlots.get(site) ?? 0);
+  } catch (e) {
+    if (e instanceof BudgetSpent) throw e;
+    const at = take(ownSlots.get(site) ?? 0, lastHour(ownSends.get(site), now));
     ownSlots.set(site, at + gap);
+    if (counts) ownSends.set(site, [...lastHour(ownSends.get(site), now), at].slice(-MAX_PER_HOUR));
     return at;
   }
+}
+
+/**
+ * Whether a send now would go over the budget, read without the lock and reserving nothing: a call's
+ * early answer, before a write's ledger. `reserveSend` is what holds every send to it.
+ */
+export function budgetCheck(site: string, pace: Pace, now = Date.now()): BudgetSpent | undefined {
+  if (!limited(pace)) return undefined;
+  let slot = ownSlots.get(site) ?? 0;
+  let sent = lastHour(ownSends.get(site), now);
+  try {
+    const t = record(readJson<unknown>(paceFile(), {}))[site];
+    if (typeof t === "number") slot = Math.max(slot, t);
+    sent = [...sent, ...lastHour(record(readJson<unknown>(sendsFile(), {}))[site], now)].sort((a, b) => a - b);
+  } catch {
+    /* unreadable: this process's own */
+  }
+  return overBudget(site, pace, sent, Math.max(now, slot), now);
 }
 
 /* ------------------------------------------------------------ write ledger */

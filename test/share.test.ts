@@ -7,10 +7,13 @@ import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { createServer } from "node:http";
+import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, before, beforeEach, test } from "node:test";
 import { fileURLToPath } from "node:url";
+import { promisify } from "node:util";
 import { readUpload } from "../registry/src/upload.js";
 import { DAILY_JOBS, verifyCandidates } from "../src/background.js";
 import { verifySite } from "../src/checks.js";
@@ -596,6 +599,80 @@ test("a write's carried read is its proof, not a call of its own: only the write
     fake.reports().map((x) => [x.hash, x.outcome]),
     [["c".repeat(64), "ok"]],
   );
+});
+
+test("a spent budget and a malformed API_ANYTHING_PACE are no word from the site: neither is reported", async () => {
+  shareOn();
+  saveSite(site({ version: { hash: "d".repeat(64), status: "live" } }));
+  const fetchImpl = async () => json({ hits: [{ t: 1 }] });
+  const o = { maxTier: 1 as const, minIntervalMs: 0, fetchImpl };
+  try {
+    process.env.API_ANYTHING_PACE = "demo:perHour=1";
+    assert.equal((await call("demo", "search", { q: "x" }, o)).ok, true);
+    const spent = await call("demo", "search", { q: "y" }, o);
+    assert.deepEqual([spent.class, spent.budget], ["rate", true]);
+    process.env.API_ANYTHING_PACE = "perHour=lots";
+    const bad = await call("demo", "search", { q: "z" }, o);
+    assert.equal(bad.class, "error");
+    assert.match(bad.reason!, /API_ANYTHING_PACE/);
+  } finally {
+    delete process.env.API_ANYTHING_PACE;
+  }
+  await settle(5000);
+  assert.deepEqual(
+    fake.reports().map((r) => [r.hash, r.outcome]),
+    [["d".repeat(64), "ok"]],
+  );
+});
+
+test("a site's pace goes up with its context, and comes back down with it", async () => {
+  saveSite(site({}, { pace: { minIntervalMs: 2000, perHour: 60 } }));
+  const p = plan("demo");
+  assert.deepEqual(p.errors, []);
+  assert.deepEqual(p.ops[0]!.upload.site.pace, { minIntervalMs: 2000, perHour: 60 });
+  // a pace the shared rules refuse never leaves
+  saveSite(site({}, { pace: { minIntervalMs: 120_000 } }));
+  assert.match(plan("demo").errors.join("\n"), /pace minIntervalMs is 120000/);
+});
+
+test("shutdown lets a library caller's process exit soon after its last call, the registry hanging", async () => {
+  // a bundled site called with sharing on starts its upgrade from the registry in the background
+  const server = createServer((_req, res) =>
+    res.writeHead(200, { "content-type": "application/json" }).end('{"hits":[{"t":1}]}'),
+  );
+  await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
+  const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  const home = process.env.API_ANYTHING_HOME!;
+  const bundled = mkdtempSync(join(tmpdir(), "aa-bundled-"));
+  const local = site({ request: { method: "GET", url: `${base}/api/search?q=kittens`, headers: {} } });
+  writeFileSync(join(bundled, "demo.json"), JSON.stringify({ ...local, baseUrl: base }));
+  shareOn();
+  fake.hang = true;
+  const src = (f: string) => JSON.stringify(fileURLToPath(new URL(`../src/${f}`, import.meta.url)));
+  const script = `const { setBundledDir } = await import(${src("store.ts")});
+const { call, shutdown } = await import(${src("index.ts")});
+setBundledDir(${JSON.stringify(bundled)});
+const r = await call("demo", "search", { q: "x" }, { maxTier: 1, minIntervalMs: 0 });
+console.log(JSON.stringify({ ok: r.ok, reason: r.reason, at: Date.now() }));
+await shutdown();`;
+  try {
+    const t0 = Date.now();
+    const out = await promisify(execFile)(process.execPath, ["--import", "tsx", "--input-type=module", "-e", script], {
+      env: { ...process.env, API_ANYTHING_HOME: home, API_ANYTHING_REGISTRY: fake.url },
+      timeout: 30_000,
+    });
+    const exited = Date.now();
+    const last = JSON.parse(out.stdout.trim().split("\n").at(-1)!);
+    assert.equal(last.ok, true, last.reason);
+    assert.ok(exited - last.at < 3000, `exited ${exited - last.at} ms after its last call (${exited - t0} ms in all)`);
+    assert.ok(
+      fake.received.some((r) => r.path === "/v1/sites/demo"),
+      "the upgrade did ask the registry",
+    );
+  } finally {
+    await new Promise((r) => server.close(r));
+    rmSync(bundled, { recursive: true, force: true });
+  }
 });
 
 test("reports are never sent with sharing off, and never hold a call or the exit up", async () => {

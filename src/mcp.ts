@@ -16,7 +16,7 @@ import { idleWork } from "./background.js";
 import { BATCH_CONCURRENCY, BatchItemSchema, callReads } from "./batch.js";
 import { closeBrowser } from "./browser.js";
 import { describeOperation, inputSchema } from "./describe.js";
-import { call, type NextCall } from "./execute.js";
+import { type CallOptions, call, type NextCall } from "./execute.js";
 import { returnedFields } from "./extract.js";
 import { type Job, Jobs } from "./jobs.js";
 import { prepareLink } from "./links.js";
@@ -45,6 +45,7 @@ import {
   loginSchema,
   siteStatusSchema,
 } from "./schema.js";
+import { KEEP_SNAPSHOT_MS } from "./snapshots.js";
 import { type Operation, type Paging, readbackName } from "./spec.js";
 import { status } from "./status.js";
 import { listSites, loadSite, siteNotes } from "./store.js";
@@ -83,6 +84,38 @@ const viewSchema = z.object({
     .max(MAX_RESULT_CHARS)
     .optional()
     .describe("JSON data budget; default 20000"),
+});
+
+/** A read's cache and comparison, the same for one call and a batch. */
+const watchSchema = {
+  maxAgeMs: z
+    .number()
+    .int()
+    .min(0)
+    .max(KEEP_SNAPSHOT_MS)
+    .optional()
+    .describe(
+      "answer from the last ok answer kept for these args when at most this old, sending nothing (cached, ageMs)",
+    ),
+  changes: z
+    .boolean()
+    .optional()
+    .describe("add changes {since, added, removed, changed, unchanged} against the previous ok answer for these args"),
+  changesOnly: z.boolean().optional().describe("changes without data, for cheap polling"),
+  watch: z
+    .string()
+    .regex(/^[\w.:-]{1,64}$/)
+    .optional()
+    .describe(
+      'whose baseline changes compares with and moves on (default "default"), so two watchers of one query each see every change; implies changes',
+    ),
+};
+type Watch = Pick<CallOptions, "maxAgeMs" | "changes" | "changesOnly" | "watch">;
+const watchOf = (w: Watch): Watch => ({
+  ...(w.maxAgeMs !== undefined ? { maxAgeMs: w.maxAgeMs } : {}),
+  ...(w.changes ? { changes: true } : {}),
+  ...(w.changesOnly ? { changesOnly: true } : {}),
+  ...(w.watch !== undefined ? { watch: w.watch } : {}),
 });
 
 /**
@@ -392,12 +425,14 @@ export function createServer({
     as: ToolCall,
     write?: { again?: boolean; idempotencyKey?: string },
     view?: ResultView,
+    watch: Watch = {},
   ): Promise<Reply> => {
     const pulled = agentPulled(site);
     const r = await callOp(site, op, args, {
       allowWrites: !!write && allowWrites && !pulled,
       ...write,
       ...(view ? { view } : {}),
+      ...watch,
     });
     // call_write_operation would refuse it too: the step is a human's pull
     if (r.class === "refused" && allowWrites && pulled) return pulledWrite(site, op);
@@ -562,11 +597,13 @@ export function createServer({
                 ...(returnedFields(o.response) ? { returns: returnedFields(o.response) } : {}),
                 ...(o.paging ? { pages: pagesOf(o.paging) } : {}),
                 ...(o.readback ? { readback: readbackName(o.readback) } : {}),
+                ...(o.response.key ? { key: o.response.key } : {}),
                 inputSchema: d.params,
                 output: d.output,
                 ...(d.links ? { links: d.links } : {}),
               };
             }),
+          ...(r.site.pace && Object.keys(r.site.pace).length ? { pace: r.site.pace } : {}),
           ...(r.site.shared ? { shared: SHARED_NOTE } : {}),
           ...(notes ? { notes } : {}),
         });
@@ -576,54 +613,67 @@ export function createServer({
   const RESULT =
     "Returns {ok, class, data, tier, healed?, heal?, ms, reason?, next?, nextCall?, retry?, retryAfterMs?, write?, nextPage?, hasMore?}; a list of two or more records comes back as data {columns, rows} when that shortens the JSON (one row per item, null for a missing field); otherwise it stays a list. `reason` also explains a slow success. On failure follow `next` (nextCall is the same step as data, with the tool to use) at most once, then stop and report. `retry` says whether to send the same call again: safe, after_wait (retryAfterMs), after_fix (once the step is done) or no. An op that pages (list_operations: pages) answers nextPage, the value its paging param takes for the next page, and hasMore (false: the last page). A call that repaired the op (healed: true) says how in heal {strategy, changes}: tell the user it healed and what changed in its request (a human can undo it with api-anything revert <site> <op>). A call still running after about 25 s answers class pending with a job: call get_job with it. " +
     " view {fields?, maxChars?} shapes output after classification/extraction, separately from site args. A cut answer has resultId and more: call get_result with more to recover it locally, not nextPage (which skips to the site's next page). " +
+    "A rate answer with budget: true is the site's own request budget, spent: nothing was sent; wait retryAfterMs. " +
     UNTRUSTED_NOTE;
 
   server.registerTool(
     "call_operation",
     {
-      description: `Call a site's read operation. For a site from find_sites, first check its match's domain is the site the user means. ${RESULT}${allowWrites ? " A write goes through call_write_operation." : " Writes are disabled on this server."}`,
+      description: `Call a site's read operation. For a site from find_sites, first check its match's domain is the site the user means. To watch something (new posts, a price), pass changes or changesOnly: changes {since, added, removed, changed, unchanged} compare with the previous ok answer for the same args, {first: true} the first time; maxAgeMs answers from a recent one without a request. ${RESULT}${allowWrites ? " A write goes through call_write_operation." : " Writes are disabled on this server."}`,
       inputSchema: {
         site: z.string(),
         op: z.string().describe("operation name from list_operations"),
         args: z.record(z.string(), z.unknown()).optional().describe("param name -> value"),
         view: viewSchema.optional(),
+        ...watchSchema,
       },
       outputSchema: outputSchema(CALL_RESULT_SCHEMA),
       annotations: READ_HINTS,
     },
-    ({ site, op, args = {}, view }: { site: string; op: string; args?: Record<string, unknown>; view?: ResultView }) =>
-      asJob(`call ${JSON.stringify([site, op, args, view ?? null])}`, READ_NOTE, async () => {
+    ({
+      site,
+      op,
+      args = {},
+      view,
+      ...rest
+    }: { site: string; op: string; args?: Record<string, unknown>; view?: ResultView } & Watch) => {
+      const watch = watchOf(rest);
+      return asJob(`call ${JSON.stringify([site, op, args, view ?? null, watch])}`, READ_NOTE, async () => {
         const got = await install(site);
         if ("error" in got) return installFailed(site, got);
         return callReply(
           site,
           op,
           args,
-          { tool: "call_operation", args: { site, op, args, ...(view ? { view } : {}) } },
+          { tool: "call_operation", args: { site, op, args, ...(view ? { view } : {}), ...watch } },
           undefined,
           view,
+          watch,
         );
-      }),
+      });
+    },
   );
 
   server.registerTool(
     "call_batch",
     {
       description:
-        "Call up to 20 reads of installed sites, with ordered results and no caching. Use list_operations first (it pulls missing sites); check each site's domain is the one the user means. Takes items {id?, site, op, args?}; missing ids are 1-based positions. Returns {ok, results: [{id, site, op, ...callResult}]}. Partial failures do not stop the batch; writes answer input: writes are not batched, even on a writes-enabled server. concurrency defaults to 1, at most 4 across different sites; same-site calls remain sequential and respect pacing and cool-downs. " +
+        "Call up to 20 reads of installed sites, with ordered results. Use list_operations first (it pulls missing sites); check each site's domain is the one the user means. Takes items {id?, site, op, args?}; missing ids are 1-based positions. Returns {ok, results: [{id, site, op, ...callResult}]}. Partial failures do not stop the batch; writes answer input: writes are not batched, even on a writes-enabled server. concurrency defaults to 1, at most 4 across different sites; same-site calls remain sequential and respect pacing and cool-downs. maxAgeMs, changes and changesOnly apply to every item, as in call_operation. " +
         RESULT,
       inputSchema: {
         items: z.array(BatchItemSchema).max(20),
         concurrency: z.number().int().min(1).max(BATCH_CONCURRENCY).optional(),
+        ...watchSchema,
       },
       outputSchema: outputSchema(callBatchSchema()),
       annotations: READ_HINTS,
     },
-    ({ items, concurrency = 1 }) =>
-      asJob(`batch ${JSON.stringify([items, concurrency])}`, READ_NOTE, async () => {
+    ({ items, concurrency = 1, ...rest }) => {
+      const watch = watchOf(rest);
+      return asJob(`batch ${JSON.stringify([items, concurrency, watch])}`, READ_NOTE, async () => {
         const results = [];
         let index = 0;
-        for await (const r of callReads(items, { concurrency, maxItems: 20 })) {
+        for await (const r of callReads(items, { concurrency, maxItems: 20, ...watch })) {
           const item = items[index++]!;
           results.push({
             ...r,
@@ -641,7 +691,8 @@ export function createServer({
         }
         const ok = results.every((r) => r.ok);
         return reply({ ok, results }, !ok);
-      }),
+      });
+    },
   );
 
   server.registerTool(

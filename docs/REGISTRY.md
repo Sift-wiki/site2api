@@ -454,7 +454,9 @@ What these rules leave open:
 
 ## What the registry stores
 
-D1 tables: `sites` (name, domain, display fields, notes, first uploader), `versions` (hash, site,
+D1 tables: `sites` (name, domain, display fields, login cookie names, the site's `pace` budget,
+notes, first uploader; the first upload or a seed sets them, and `GET /v1/sites/:name` serves them
+with the ops, `pace` held to the shared rules' bounds on the way in and again on pull), `versions` (hash, site,
 op name, match signature, operation JSON, parent, status, uploader and its network hash, evidence,
 timestamps including when it first went live, its report counts), `reports`
 (hash, key, network hash, outcome, tier, at), `keys` (public key, first seen, counts, first accepted ok), `rates` (hourly

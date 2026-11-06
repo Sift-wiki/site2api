@@ -34,8 +34,33 @@ export interface Fixture {
   mintSession(): string;
   /** /api/resolve answers the id at item.id instead of product.id, as after a redesign of the lookup */
   moveLookup(): void;
+  /**
+   * A listings board someone watches (new jobs, new homes): /api/listings answers these, in order, and
+   * /api/listings/<id> one of them; a POST to /api/listings adds one. Edit it between calls.
+   */
+  listings: Listing[];
+  /** the next /api/listings answers have these statuses instead of the list, in order */
+  failListings(...statuses: number[]): void;
+  /** the board as it starts (`LISTINGS`), with no failure queued */
+  resetListings(): void;
   close(): Promise<void>;
 }
+
+export interface Listing {
+  id?: string;
+  ref?: string;
+  title: string;
+  price: number;
+  url?: string;
+  seller?: { name: string };
+}
+
+/** The board as it starts: ids, an alternative ref the spec can name as its key, and a URL. */
+export const LISTINGS = (): Listing[] => [
+  { id: "a1", ref: "R-1", title: "Desk", price: 120, url: "/l/a1", seller: { name: "Ann" } },
+  { id: "b2", ref: "R-2", title: "Chair", price: 45, url: "/l/b2", seller: { name: "Bo" } },
+  { id: "c3", ref: "R-3", title: "Lamp", price: 20, url: "/l/c3", seller: { name: "Cy" } },
+];
 
 const APP_VERSION = "2026.09.27-a1b2c3";
 /** A public web-app bearer, the same for every visitor (X's pattern); the API refuses requests without it. */
@@ -171,6 +196,8 @@ export async function startFixture(): Promise<Fixture> {
   const orders = new Map<string, string>();
   let lookupMoved = false;
   const likes: number[] = [];
+  const listings = LISTINGS();
+  const listingFails: number[] = [];
 
   const send = (
     res: ServerResponse,
@@ -713,6 +740,28 @@ document.getElementById("gql").onclick=()=>fetch("/api/gql",{method:"POST",heade
       });
     }
 
+    if (p === "/api/listings" && req.method === "POST") {
+      const added = { id: randomBytes(3).toString("hex"), ...(JSON.parse(body || "{}") as Omit<Listing, "id">) };
+      listings.push(added);
+      return json(res, 201, { listing: added });
+    }
+    if (p === "/api/listings") {
+      const status = listingFails.shift();
+      if (status) return json(res, status, { message: status === 429 ? "Too many requests" : "Server error" });
+      const q = (u.searchParams.get("q") ?? "").toLowerCase();
+      return json(res, 200, { listings: listings.filter((l) => l.title.toLowerCase().includes(q)) });
+    }
+    // A wall that refuses a client claiming Chrome without Chrome's TLS, and answers a plain one (Hacker News's "Sorry")
+    if (p === "/api/sorry") {
+      if (/Chrome/.test(req.headers["user-agent"] ?? "")) return json(res, 403, { message: "Sorry." });
+      return json(res, 200, { listings });
+    }
+    m = p.match(/^\/api\/listings\/([^/]+)$/);
+    if (m) {
+      const found = listings.find((l) => l.id === m![1]);
+      return found ? json(res, 200, { listing: found }) : json(res, 404, { message: "no such listing" });
+    }
+
     if (p === "/api/limited") {
       limitedHits++;
       return limitedHits > 2
@@ -747,6 +796,14 @@ document.getElementById("gql").onclick=()=>fetch("/api/gql",{method:"POST",heade
     mintSession: mint,
     moveLookup() {
       lookupMoved = true;
+    },
+    listings,
+    failListings(...statuses) {
+      listingFails.push(...statuses);
+    },
+    resetListings() {
+      listings.splice(0, listings.length, ...LISTINGS());
+      listingFails.length = 0;
     },
     close() {
       server.closeAllConnections();

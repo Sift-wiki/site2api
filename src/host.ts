@@ -6,7 +6,7 @@ import { createHash } from "node:crypto";
 import { readdirSync } from "node:fs";
 import { join } from "node:path";
 import { isDeepStrictEqual } from "node:util";
-import { closeBrowser, closeIdleBrowser } from "./browser.js";
+import { closeIdleBrowser } from "./browser.js";
 import { setAt, templateRefs } from "./codec.js";
 import { describeOperation, type OperationDescription } from "./describe.js";
 import { siteOf } from "./domain.js";
@@ -88,12 +88,22 @@ type ReadyPlan = Extract<CallPlan, { ok: true }>;
 export type HostOperationDescription = OperationDescription & { resultSchema?: JsonSchema };
 
 /**
- * Host controls transport, write permission and the answer's shape (`view`), never healing, force or
- * duplicate overrides. `view` shapes only the answer, so it is not part of the approved plan.
+ * Host controls transport, write permission and the answer's shape (`view`; a read's `maxAgeMs` and
+ * `changes`), never healing, force or duplicate overrides. Those shape only the answer, so they are
+ * not part of the approved plan.
  */
 export type HostCallOptions = Pick<
   CallOptions,
-  "allowWrites" | "maxTier" | "timeoutMs" | "fetchImpl" | "minIntervalMs" | "view"
+  | "allowWrites"
+  | "maxTier"
+  | "timeoutMs"
+  | "fetchImpl"
+  | "minIntervalMs"
+  | "view"
+  | "maxAgeMs"
+  | "changes"
+  | "changesOnly"
+  | "watch"
 >;
 export type HostPlanOptions = Pick<CallOptions, "maxTier">;
 
@@ -478,6 +488,10 @@ export async function callPlanned(plan: ReadyPlan, opts: HostCallOptions = {}): 
       fetchImpl: opts.fetchImpl,
       minIntervalMs: opts.minIntervalMs,
       ...(opts.view ? { view: opts.view } : {}),
+      ...(opts.maxAgeMs !== undefined ? { maxAgeMs: opts.maxAgeMs } : {}),
+      ...(opts.changes ? { changes: true } : {}),
+      ...(opts.changesOnly ? { changesOnly: true } : {}),
+      ...(opts.watch !== undefined ? { watch: opts.watch } : {}),
       callOnly: true,
     });
   } finally {
@@ -486,7 +500,11 @@ export async function callPlanned(plan: ReadyPlan, opts: HostCallOptions = {}): 
   }
 }
 
-/** Close the shared browser so the process can exit. Host calls never queue background work. */
+/**
+ * Let the process exit: `shutdown` (any background registry work this process started outside host
+ * calls, bounded, then the shared browser). Host calls themselves never queue background work.
+ */
 export async function closeHost(): Promise<void> {
-  await closeBrowser();
+  const { shutdown } = await import("./report.js");
+  await shutdown();
 }

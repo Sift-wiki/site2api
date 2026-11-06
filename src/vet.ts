@@ -6,6 +6,7 @@
 import { parse } from "tldts";
 import { walk } from "./codec.js";
 import { siteOf } from "./domain.js";
+import { parsePath, returnedFields } from "./extract.js";
 import { linkProblems } from "./links.js";
 import {
   credentialName,
@@ -29,6 +30,12 @@ export const LIMITS = {
   companions: 8,
   enum: 100,
   checks: 10,
+  /**
+   * A shared pace slows its callers down, never so far that the site is unusable: at most a minute
+   * between requests (a longer gap answers rate, budget.ts's 10 s wait), and at least one an hour.
+   */
+  paceIntervalMs: [1000, 60_000],
+  perHour: [1, 1000],
 } as const;
 
 const READ_METHODS = new Set(["GET", "HEAD", "POST"]);
@@ -599,6 +606,12 @@ export function vetShared(site: Site, notes?: string): Vetted {
     if (text && text.length > LIMITS.text) errors.push(`${where} is ${text.length} characters; at most ${LIMITS.text}`);
   };
   long("description", site.description);
+  const bounded = (what: string, v: number | undefined, [lo, hi]: readonly [number, number]) => {
+    if (v !== undefined && !(Number.isSafeInteger(v) && v >= lo && v <= hi))
+      errors.push(`pace ${what} is ${v}; a whole number from ${lo} to ${hi}`);
+  };
+  bounded("minIntervalMs", site.pace?.minIntervalMs, LIMITS.paceIntervalMs);
+  bounded("perHour", site.pace?.perHour, LIMITS.perHour);
   const allowed = new Set<string>();
   // `at` says whose problem it is; `path` is where the op sits in the spec, for the secret scan
   const vetOp = (op: Operation, at: (what: string) => string, path: string) => {
@@ -615,6 +628,19 @@ export function vetShared(site: Site, notes?: string): Vetted {
     if (!op.match.host && !op.match.path && !op.match.operationName)
       errors.push(at("its match names no host, path or operationName"));
     long(at("description"), op.description);
+    const key = op.response.key;
+    if (key !== undefined) {
+      const returns = returnedFields(op.response);
+      // read as `changes` reads it: the extractor's own steps
+      const steps = key.length > LIMITS.regex ? undefined : parsePath(key);
+      const first = steps?.[0];
+      if (key.length > LIMITS.regex)
+        errors.push(at(`response key is ${key.length} characters; at most ${LIMITS.regex}`));
+      else if (!steps || steps.some((s) => "all" in s))
+        errors.push(at(`response key ${JSON.stringify(key)} is not a path to one value`));
+      else if (returns && !(first && "key" in first && returns.includes(first.key)))
+        errors.push(at(`response key ${key} is no field it returns (${returns.join(", ")})`));
+    }
     for (const p of op.params) {
       long(at(`param ${p.name} description`), p.description);
       long(at(`param ${p.name} hint`), p.hint);

@@ -1,6 +1,6 @@
 // Read-only workflow. Run after npm install: node examples/research.mjs "agent memory"
 // Add --linkedin to enrich up to three matching companies using your imported session.
-import { call, closeBrowser } from "api-anything";
+import { call, shutdown } from "api-anything";
 
 const query = process.argv[2] || "agent memory";
 const calls = [];
@@ -47,5 +47,5 @@ try {
   console.error(error.message);
   process.exitCode = 1;
 } finally {
-  await closeBrowser();
+  await shutdown();
 }

@@ -45,6 +45,7 @@ export function served(
     baseUrl: s.baseUrl,
     ...(s.displayName ? { displayName: s.displayName } : {}),
     ...(s.description ? { description: s.description } : {}),
+    ...(s.pace ? { pace: s.pace } : {}),
     ...(notes !== undefined ? { notes } : {}),
     operations: s.operations.map((op) => {
       const { version: _v, ...operation } = op;

@@ -808,6 +808,31 @@ describe("admin", () => {
     assert.equal(bad.status, 422);
   });
 
+  test("a site's pace is stored with its context and served with it; one the shared rules refuse is not", async () => {
+    const { env } = registry();
+    const pace = { minIntervalMs: 2000, perHour: 60 };
+    const seeded = await seed(env, { site: { ...site, pace }, operations: [op()] });
+    assert.equal(seeded.status, 200, seeded.text);
+    assert.deepEqual((await send(env, "GET", "/v1/sites/example-com")).body.pace, pace);
+    for (const bad of [{ minIntervalMs: 120_000 }, { perHour: 0 }, { perHour: 5000 }, { every: 1 }])
+      assert.ok(
+        [400, 422].includes((await seed(env, { site: { ...site, pace: bad }, operations: [op()] })).status),
+        JSON.stringify(bad),
+      );
+    // an upload's first context sets it too, under the same rules
+    const fresh = registry().env;
+    const as = install();
+    const up = await send(fresh, "POST", "/v1/versions", { body: upload({ site: { ...site, pace } }), as });
+    assert.equal(up.status, 201, up.text);
+    const own = await send(fresh, "GET", "/v1/sites/example-com", { as });
+    assert.deepEqual(own.body.pace, pace);
+    const refused = await send(registry().env, "POST", "/v1/versions", {
+      body: upload({ site: { ...site, pace: { minIntervalMs: 120_000 } } }),
+      as: install(),
+    });
+    assert.ok(refused.status >= 400, refused.text);
+  });
+
   test("a seeded write is held to an upload's rule: its readback carries the read, never names one", async () => {
     const { readOnly: _r, description: _d, params: _p, ...read } = op();
     const write = (readback: Record<string, unknown>) =>
