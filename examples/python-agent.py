@@ -1,6 +1,6 @@
 # An OpenAI Agents SDK agent that calls websites through the Python client (python/), over HTTP.
 #
-#   pip install api-anything openai-agents
+#   pip install openai-agents "git+https://github.com/goodnight000/api-anything#subdirectory=python"
 #   OPENAI_API_KEY=... python examples/python-agent.py "Top Hacker News stories about sqlite"
 #
 # Client.start() runs `api-anything serve` (or `npx -y api-anything serve`; Node 22.13+ must be on

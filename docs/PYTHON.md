@@ -1,6 +1,12 @@
 # Python
 
-`pip install api-anything` installs a Python client for `api-anything serve`, the local HTTP server.
+The Python client for `api-anything serve`, the local HTTP server, installs from this repository
+(it is not on PyPI yet):
+
+```sh
+pip install "git+https://github.com/goodnight000/api-anything#subdirectory=python"
+```
+
 The import name is `api_anything`. The package has no dependencies beyond the standard library and
 supports Python 3.9 and newer. The server is the npm package and needs Node.js 22.13 or newer.
 

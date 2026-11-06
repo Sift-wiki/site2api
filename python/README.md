@@ -8,8 +8,10 @@ operation repairs itself on the next call. This package is the Python client for
 It has no dependencies beyond the standard library. The server runs on Node.js 22.13 or newer.
 
 ```sh
-pip install api-anything
+pip install "git+https://github.com/goodnight000/api-anything#subdirectory=python"
 ```
+
+It is not on PyPI yet, so install it from the repository as above.
 
 ## Call a site
 

@@ -18,7 +18,7 @@ and listed its tools.
 | Vercel AI SDK (TypeScript) | [examples/vercel-ai-sdk.mjs](../examples/vercel-ai-sdk.mjs) | `npm install ai @ai-sdk/mcp @ai-sdk/anthropic` |
 | LangChain.js | [examples/langchain.mjs](../examples/langchain.mjs) | `npm install langchain @langchain/anthropic @langchain/mcp-adapters @langchain/core @langchain/langgraph` |
 | OpenAI Agents SDK (Python) | [examples/openai-agents.py](../examples/openai-agents.py) | `pip install openai-agents` |
-| Python client over HTTP (`api-anything serve`): LangChain/LangGraph, OpenAI Agents SDK, any framework that takes a JSON Schema | [examples/python-agent.py](../examples/python-agent.py), [PYTHON.md](PYTHON.md) | `pip install api-anything openai-agents` |
+| Python client over HTTP (`api-anything serve`): LangChain/LangGraph, OpenAI Agents SDK, any framework that takes a JSON Schema | [examples/python-agent.py](../examples/python-agent.py), [PYTHON.md](PYTHON.md) | `pip install openai-agents "git+https://github.com/goodnight000/api-anything#subdirectory=python"` |
 | Plain MCP SDK, no model | [examples/mcp-call.mjs](../examples/mcp-call.mjs) | `npm install @modelcontextprotocol/sdk` |
 | Anything that speaks HTTP: n8n, Make, Zapier, Dify, Flowise, Postman, a custom GPT, any language | [SERVE.md](SERVE.md): REST, MCP over HTTP and an OpenAPI document | `npx -y api-anything serve` |
 
@@ -31,7 +31,7 @@ OPENAI_API_KEY=... python examples/openai-agents.py "What does Goodreads rate Pi
 OPENAI_API_KEY=... python examples/python-agent.py "Top Hacker News stories about sqlite"
 ```
 
-The Python client (`pip install api-anything`) starts the server itself and gives each operation a
+The Python client ([PYTHON.md](PYTHON.md) says how to install it) starts the server itself and gives each operation a
 tool of its own, `<site>__<op>`, in OpenAI, Anthropic or plain JSON Schema form, with adapters for
 LangChain and the OpenAI Agents SDK. It also writes typed modules for a site's operations.
 [PYTHON.md](PYTHON.md) covers it.
