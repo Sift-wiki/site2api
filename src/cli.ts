@@ -6,11 +6,12 @@ import { parseArgs } from "node:util";
 import { z } from "zod";
 import { BATCH_CONCURRENCY, BATCH_MAX, type BatchItem, callReads } from "./batch.js";
 import { browserAvailable, closeBrowser, ProfileInUse } from "./browser.js";
+import { parseDuration, sitePace } from "./budget.js";
 import { verifySite } from "./checks.js";
 import { botWall, emptyResults, htmlFinds, loginPath, signInForm } from "./classify.js";
 import { launchOf, printConfig } from "./clients.js";
 import { describeOperation } from "./describe.js";
-import { type CallResult, call, heal, type Tier } from "./execute.js";
+import { type CallOptions, type CallResult, call, heal, type Tier } from "./execute.js";
 import { capOutput, extract, getPath, innerJson, pick, returnedFields, splitPick } from "./extract.js";
 import {
   addOperation,
@@ -190,7 +191,7 @@ const HELP: Record<string, string> = {
   so nothing shows the server reads those params (publish refuses the op until it does).
   An op whose captured response is a bot challenge, a sign-in page, a rate limit or a server failure
   is not saved.`,
-  call: `api-anything call <site> <op> [k=v ...] [--json <args-object>] [--fields a,b] [--max-chars n] [--allow-writes] [--again] [--idempotency-key <k>] [--max-tier 1|2|3] [--force] [--dry]
+  call: `api-anything call <site> <op> [k=v ...] [--json <args-object>] [--fields a,b] [--max-chars n] [--max-age <duration>] [--changes] [--changes-only] [--allow-writes] [--again] [--idempotency-key <k>] [--max-tier 1|2|3] [--force] [--dry]
   Calls an operation: {ok, class, data, tier, healed?, heal?, ms, next?}; a failure also says retry
   (safe, after_wait, after_fix, no), retryAfterMs and nextCall, and a write says write (not_sent,
   not_applied, accepted, may_have_applied, applied: its readback found it). A paged read says
@@ -201,6 +202,15 @@ const HELP: Record<string, string> = {
   --fields a,b     project each extracted item (pick paths, including name=path); not site args
   --max-chars n    data budget, 256 to 200000 JSON characters (default 20000)
   A cut answer has resultId and more: retrieve it locally with api-anything result, not nextPage.
+  --max-age <d>    a read: answer from the last ok answer kept for the same args when it is at most
+                    this old (30s, 10m, 2h, 1d), sending nothing: cached, ageMs. Kept only for calls
+                    with --max-age or --changes, in ~/.api-anything/snapshots (0600, 30 days unused)
+  --changes        a read: changes {since, added, removed, changed, unchanged} against the previous
+                    ok answer for the same args ({first: true} the first time); list items are told
+                    apart by the op's key, an id-like field (id, url, ...) or a hash
+  --changes-only   changes without data, for cheap polling
+  A site's budget (its spec's pace; API_ANYTHING_PACE="interval=2s,perHour=60,<site>:perHour=30"
+  overrides it) answers rate with retryAfterMs and budget, sending nothing, once it is spent.
   --again          send a write refused as a duplicate (the same args within 10 minutes, and the
                     first may have gone through): only when the user checked the site
   --idempotency-key <k>  on the first call: a repeat of the write with the same key returns that
@@ -209,13 +219,14 @@ const HELP: Record<string, string> = {
                     3 minutes) or a block at every tier (10 minutes) calls answer without sending.
                     A forced call that succeeds ends the wait; one limited or blocked again starts
                     it over. A login for the site also ends the wait`,
-  batch: `api-anything batch [--input <file> | -] [--concurrency 1..4] [--limit 1..200] [--max-tier 1|2|3]
+  batch: `api-anything batch [--input <file> | -] [--concurrency 1..4] [--limit 1..200] [--max-tier 1|2|3] [--max-age <duration>] [--changes] [--changes-only]
   Read JSONL {id?, site, op, args?} from a file or stdin (the default), at most 4 MiB.
   Write one JSONL {id, site, op, ...callResult} per line in input order. Missing ids are 1-based
   line numbers. A malformed line answers input without echoing its contents. Empty input is empty.
   Sequential by default; concurrency is across sites only, with the usual pacing and cool-downs.
   --limit lowers the 200-line cap; oversized input is rejected before any calls. Sites must already
-  be installed (pull one first). Writes answer input: "writes are not batched". No caching.
+  be installed (pull one first). Writes answer input: "writes are not batched". --max-age, --changes
+  and --changes-only apply to every item, as for call.
   Exit 0 if every item is ok, otherwise 1. Failures do not stop later items.`,
   result: `api-anything result <resultId> [--offset n] [--fields a,b] [--max-chars n] [--format json]
   Reads a kept answer locally, with no site request or spec change. offset is an item index.
@@ -488,6 +499,9 @@ const OPTIONS = {
   pick: { type: "string" },
   fields: { type: "string" },
   "max-chars": { type: "string" },
+  "max-age": { type: "string" },
+  changes: { type: "boolean" },
+  "changes-only": { type: "boolean" },
   offset: { type: "string" },
   format: { type: "string" },
   html: { type: "string" },
@@ -1064,11 +1078,30 @@ async function cmdBatch({ v, pos }: Parsed): Promise<number> {
     maxItems,
     concurrency,
     maxTier: v["max-tier"] ? (Number(v["max-tier"]) as Tier) : undefined,
+    ...watchOptions(v, "batch"),
   })) {
     if (!out(r)) await new Promise<void>((resolve) => process.stdout.once("drain", resolve));
     if (!r.ok) code = 1;
   }
   return code;
+}
+
+/** --max-age, --changes and --changes-only, as call options. */
+function watchOptions(v: Parsed["v"], command: string): Pick<CallOptions, "maxAgeMs" | "changes" | "changesOnly"> {
+  let maxAgeMs: number | undefined;
+  if (v["max-age"] !== undefined) {
+    maxAgeMs = parseDuration(v["max-age"]);
+    if (maxAgeMs === undefined)
+      throw new Fail(
+        `--max-age must be a duration such as 30s, 10m, 2h or 1d, got "${v["max-age"]}"`,
+        `api-anything ${command} --help`,
+      );
+  }
+  return {
+    ...(maxAgeMs !== undefined ? { maxAgeMs } : {}),
+    ...(v.changes ? { changes: true } : {}),
+    ...(v["changes-only"] ? { changesOnly: true } : {}),
+  };
 }
 
 function callView(v: Parsed["v"]): ResultView {
@@ -1101,6 +1134,7 @@ async function cmdCall({ v, pos }: Parsed): Promise<number> {
   if (v["max-tier"] !== undefined && !/^[123]$/.test(v["max-tier"]))
     throw new Fail(`--max-tier must be 1, 2 or 3, got "${v["max-tier"]}"`, "pass --max-tier 1, 2 or 3");
   const view = callView(v);
+  const watch = watchOptions(v, "call");
   let base: Record<string, unknown> = {};
   if (v.json) {
     if (v.json === "-") {
@@ -1139,6 +1173,7 @@ async function cmdCall({ v, pos }: Parsed): Promise<number> {
     maxTier,
     ignoreCoolDown: v.force,
     view,
+    ...watch,
   });
   out(pulled ? { ...r, pulled: site } : r);
   if (r.heal) process.stderr.write(healNote(site, name, r.heal));
@@ -1405,6 +1440,7 @@ function cmdOps({ pos, v }: Parsed): number {
   }
   if (pos.length !== 1) throw new Fail("use <op> with --schema", `api-anything ops ${site.name} <op> --schema`);
   const notes = siteNotes(site.name);
+  const pace = sitePace(site);
   const about = (p: Operation["params"][number]) => [
     ...(p.description ? [p.description] : []),
     ...(p.example !== undefined ? [`e.g. ${JSON.stringify(p.example)}`] : []),
@@ -1430,8 +1466,10 @@ function cmdOps({ pos, v }: Parsed): number {
         : {}),
       ...(o.readback ? { readback: readbackName(o.readback) } : {}),
       ...(o.unproven ? { unproven: o.unproven.reason } : {}),
+      ...(o.response.key ? { key: o.response.key } : {}),
       trigger: o.trigger.url,
     })),
+    ...(Object.keys(pace).length ? { pace } : {}),
     ...(site.shared ? { shared: SHARED_NOTE } : {}),
     ...(notes ? { notes } : {}),
   });
@@ -1690,10 +1728,26 @@ const COMMANDS: Record<string, { run: (p: Parsed) => number | Promise<number>; f
       "paging",
     ],
   },
-  batch: { run: cmdBatch, flags: ["input", "concurrency", "limit", "max-tier"] },
+  batch: {
+    run: cmdBatch,
+    flags: ["input", "concurrency", "limit", "max-tier", "max-age", "changes", "changes-only"],
+  },
   call: {
     run: cmdCall,
-    flags: ["json", "allow-writes", "again", "idempotency-key", "max-tier", "force", "dry", "fields", "max-chars"],
+    flags: [
+      "json",
+      "allow-writes",
+      "again",
+      "idempotency-key",
+      "max-tier",
+      "force",
+      "dry",
+      "fields",
+      "max-chars",
+      "max-age",
+      "changes",
+      "changes-only",
+    ],
   },
   result: { run: cmdResult, flags: ["offset", "fields", "max-chars", "format"] },
   verify: { run: cmdVerify, flags: ["user", "strict"] },

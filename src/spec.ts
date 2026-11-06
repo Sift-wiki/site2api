@@ -155,6 +155,8 @@ export const ResponseSchema = z.object({
   html: HtmlRecipeSchema.optional(),
   /** capture group 1 is where the JSON starts */
   embedded: z.object({ regex: z.string() }).optional(),
+  /** the path, in each returned item, of the value that identifies it: what `changes` tells items apart by */
+  key: z.string().min(1).optional(),
 });
 
 export const ParamSchema = z
@@ -298,6 +300,16 @@ export const SiteSchema = z.object({
   description: z.string().optional(),
   /** cookie names whose presence means logged in (overrides the heuristic) */
   loginCookies: z.array(z.string()).optional(),
+  /**
+   * The site's request budget, over the default pacing: a longer gap between sends, and a cap on
+   * requests an hour. A call that would exceed it answers `rate` without sending. API_ANYTHING_PACE overrides it.
+   */
+  pace: z
+    .object({
+      minIntervalMs: z.number().int().positive().optional(),
+      perHour: z.number().int().positive().optional(),
+    })
+    .optional(),
   operations: z.array(OperationSchema).default([]),
   /**
    * Where `pull` fetched this spec from. A spec that carries it is someone else's wherever it is

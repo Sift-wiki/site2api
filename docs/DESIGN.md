@@ -772,6 +772,26 @@ option `ignoreCoolDown` (CLI `call --force`), which only a user asks for, sends 
 it: one that succeeds ends it, since the site answered (before a write's readback, which may set it
 again); one the site limits or blocks again sets it anew from that answer, as any call does. MCP has no way to skip it. The idle MCP server's verification of candidates skips a cooling site too.
 
+**A site's budget** (`budget.ts`). Pacing and cool-downs keep one burst polite and leave a site alone
+once it says stop. A scheduled caller (cron every 10 minutes, five fare searches each) never bursts
+and never hears stop until the wall comes: Google serves its anti-bot page after about 50 automated
+requests (issue #84). So a site may carry a budget, `pace: {minIntervalMs?, perHour?}` in its spec,
+which `API_ANYTHING_PACE` overrides: entries `interval=<duration>` and `perHour=<n>` for every site,
+or prefixed `<site>:` for one (its own entry wins), with 0 turning either off; an entry that does not
+parse makes every call `error`, saying so, rather than run unbudgeted. No bundled site has one, so
+nothing is slower by default. `minIntervalMs` replaces the 1 s default pacing interval when larger
+(a caller's own `minIntervalMs` cannot go below it). `perHour` counts every request the site's send
+slots hand out (tier 1, lookups, tier-2 fetches, tier-3 runs) in `sends.json` under its lock, kept for
+the last hour, only while a cap applies to the site. Before anything is sent (after the cool-down,
+before a write's ledger), a call whose site has used its `perHour` this hour, or whose next send slot
+under a budget's interval is more than 10 s off, answers `rate` with `budget: true`, `retryAfterMs`
+(until the oldest counted send leaves the hour, or until the slot) and a `reason` naming the budget;
+a write says `write: "not_sent"`. It sets no cool-down and reports nothing to the registry, since the
+site said nothing. A cached answer (Watching, under Response extraction) spends none of it. `--force`
+does not lift it: the user's own environment does. A write's inline readback is counted, never
+refused. The shared rules bound a spec's `pace`: `minIntervalMs` from 1 s to an hour, `perHour` from 1
+to 1000. `ops` and `list_operations` show it.
+
 | tier | transport | when |
 |---|---|---|
 | 1 | Node `fetch` + domain/path-scoped cookie jar + session values; redirects followed by hand under the redirect policy below (cookies set on a hop ride on the next); Set-Cookie answers are merged into the jar; the body is decoded with its declared charset | default |
@@ -1091,6 +1111,39 @@ the page. For data embedded in the HTML document (for example Google's `AF_initD
 "embedded"` with a regex whose capture group is JSON, followed by `extract`. Seroval/JS-literal
 payloads are out of scope for v1.
 
+**Watching: a cache and what changed** (`snapshots.ts`, `changes.ts`). We do not schedule: cron and
+agent hosts do that. A scheduled read needs two things from a call. A read called with `maxAgeMs`
+or `changes` keeps its `ok` answer (the extracted answer before the call's view, with `nextPage`
+and `hasMore`) in `~/.api-anything/snapshots/<hash>.json`, one file per site, op and args as the
+request takes them (defaults filled, each value as text), the hash of which is the file's name, so
+no arg is written in it. The answer can hold the user's own data: the file is 0600 in a 0700
+directory, every read and write of one goes through a single pair of helpers (where sealing private
+files at rest belongs), and a file nobody read or wrote for 30 days is removed (checked at most hourly
+on a write). An answer over 16 MiB is not kept. Nothing is kept by default: a plain call writes none.
+- `maxAgeMs` (CLI `--max-age 30s|10m|2h|1d`; MCP `call_operation` and `call_batch`; the host's
+  `callPlanned`): when the kept answer is at most that old and its op's response recipe is the same,
+  the call answers it with `cached: true` and `ageMs`, sending nothing, before the cool-down or the
+  budget is consulted; it is not a call of the site, so it adds no call-log line and no report. Only an
+  `ok` answer is ever kept, so a failure is never served, and a failed call leaves the last ok answer
+  in place. A write is never kept or served (each call is the user's action), whatever it is passed;
+  neither is a write's readback.
+- `changes` (CLI `--changes`): the answer gains `changes`, against the kept answer, which this one then
+  replaces (read, compared and written under the file's lock). The first is `{first: true}`. A list is
+  compared item by item: `{since, added: items, removed: earlier items, changed: [{key, item, fields,
+  was}], unchanged: n, key}`. Items are told apart by the op's declared `response.key` (a path in each
+  item), else by the first of `id`, `_id`, `uuid`, `guid`, `objectID`, `key`, `slug`, `url`, `link`,
+  `href`, `permalink` that every item of both answers has, each value distinct; else each item is a hash
+  of itself (`key: "hash"`: an edit is then one removed and one added). A repeated key gets `~2`. Anything
+  else is compared by leaf path (`a.b`, `["x.y"]`; a list inside is one leaf): `added: [{path, to}]`,
+  `removed: [{path, from}]`, `changed: [{path, from, to}]`. With `view.fields` both answers are
+  projected the same way first, so what is compared is what is returned, while an item's key is still
+  read from the whole item (a view without the id still matches items). The changes are capped at the
+  view's `maxChars`: the longest of the three lists loses its last entries, and `truncated` counts them,
+  saying they are not reported again. `changesOnly` (CLI `--changes-only`) answers `changes` with no
+  `data` and keeps no result view, for polling at a few tokens a run. A cached answer compared with
+  itself reports nothing changed. "The previous ok answer" is any kept call's for the same args: two
+  watchers of one query, or a `maxAgeMs` call between two `changes` calls, share it.
+
 A read whose list pages carries `paging: {param, next?}`. `param` is the arg that asks for the
 next page. `next` is a path in the whole answer, read before `extract` and `pick` throw the rest
 away (for `embedded`, in the embedded JSON; never for `html`), to the next page's cursor or number.
@@ -1121,7 +1174,10 @@ the two continuations are independent, and `hasMore` describes the site only.
 
 ## Spec files and where they live
 
-One JSON file per site: `{ name, displayName, baseUrl, description, operations[] }`, zod-validated.
+One JSON file per site: `{ name, displayName, baseUrl, description, pace?, operations[] }`, zod-validated
+(`pace` is the site's budget, under Execution ladder; an op's `response.key` names what tells its
+items apart for `changes`, and the shared rules require it to be a path to one value in a field the
+recipe returns).
 Site names are case-insensitive (lower-cased), so one file never gets two sets of state.
 Resolution order: `~/.api-anything/sites/<site>.json` (user-created and healed copies win) → a
 pulled `~/.api-anything/registry/<site>.json` → the bundled `sites/<site>.json` (community). A heal
@@ -1647,7 +1703,7 @@ independent alternative.
     and `alternatives` URLs are shown the same way, and so are the request URLs and bodies `inspect`
     shows (keeping its `--example` values). None is `data`, which stays the site's answer
   - `add <site> <op> --trigger <url-template> --example k=v [--example2 k=v] [--match ...] [--pick ...] [--paging ...] [--write]`
-  - `call <site> <op> [k=v ...] [--allow-writes] [--again] [--idempotency-key <k>] [--force]` (`--force`: send while the site cools down; a success ends the cool-down)
+  - `call <site> <op> [k=v ...] [--max-age <duration>] [--changes] [--changes-only] [--allow-writes] [--again] [--idempotency-key <k>] [--force]` (`--force`: send while the site cools down; a success ends the cool-down; `--max-age` and `--changes`: see Watching, under Response extraction)
     accepts `--json -` for an args object on stdin (at most 4 MiB); positional `k=v` overrides its keys.
   - `batch [--input <file> | -] [--concurrency 1..4] [--limit 1..200] [--max-tier 1|2|3]`
     reads JSONL `{id?, site, op, args?}` from the file or stdin (the default). `batch.ts`'s
@@ -1659,7 +1715,8 @@ independent alternative.
     different sites, and one site's items (case variants included) never overlap or change order.
     This keeps `store.ts`'s send slots and lets a call record its cool-down before that site's next
     item checks it. Valid reads during a cool-down answer from it without sending. Other failures
-    do not stop later items. No caching, automatic pagination or retry of an entire batch.
+    do not stop later items. `--max-age`, `--changes` and `--changes-only` apply to every item, as for
+    `call`. No automatic pagination or retry of an entire batch.
     Sites must be installed first; a batch does not pull them implicitly. The whole input is bounded
     before any call: at most 200 lines (a lower `--limit` only), 4 MiB. An oversized input fails as a
     whole; a malformed or blank line gets its own `input` result, without quoting its contents. A
@@ -1854,8 +1911,10 @@ independent alternative.
     writes-enabled server. Each item's data uses `asTable`, and its `next`/`nextCall` use MCP
     terms; a retry names `call_operation` with that item's args, never a repeat of the batch.
     As with `call_operation`, a batch still running at the deadline answers with a job, and
-    identical running batches join it. Finished results are kept only by the normal jobs mechanism,
-    not as a cache of read calls. `list_operations` installs a missing site before batching it.
+    identical running batches join it. Its `maxAgeMs`, `changes` and `changesOnly` apply to every item,
+    as `call_operation`'s do (Watching, under Response extraction); the job's own result is kept
+    only by the jobs mechanism. `list_operations` installs a missing site before batching it, and
+    shows a site's `pace` and an op's `key`.
   - Each answer is JSON text and, when it is an object, the same object as `structuredContent`. A
     client gives its model one of the two, never both: Codex and VS Code send the structured one
     and drop the text, Gemini CLI sends the text, so neither costs tokens twice, and a program

@@ -383,6 +383,69 @@ export function reserveSend(site: string, intervalMs: number, now = Date.now()):
   }
 }
 
+/** When the site's next send may go, as pace.json has it (now or earlier: nothing holds it back). */
+export function nextSlot(site: string): number {
+  try {
+    const t = readJson<Record<string, unknown>>(paceFile(), {})?.[site];
+    return Math.max(typeof t === "number" ? t : 0, ownSlots.get(site) ?? 0);
+  } catch {
+    return ownSlots.get(site) ?? 0;
+  }
+}
+
+/* ------------------------------------------------------- per-hour budgets */
+
+const sendsFile = () => join(home(), "sends.json");
+const HOUR_MS = 60 * 60_000;
+/** Sites with a per-hour budget in this process: only their sends are counted. */
+const counted = new Set<string>();
+const ownSends = new Map<string, number[]>();
+
+/** Count this site's sends from now on (a per-hour budget applies to it), or stop counting them. */
+export function countSends(site: string, on: boolean): void {
+  if (on) counted.add(site);
+  else counted.delete(site);
+}
+
+const lastHour = (times: unknown, now: number): number[] =>
+  Array.isArray(times) ? times.filter((t): t is number => typeof t === "number" && t > now - HOUR_MS) : [];
+
+/**
+ * Record one request to `site`, when its sends are counted. Kept in sends.json under its lock, so
+ * separate processes share one count; a home that cannot be written counts this process only.
+ */
+export function recordSend(site: string, now = Date.now()): void {
+  if (!counted.has(site)) return;
+  try {
+    withLock(sendsFile(), () => {
+      let all: Record<string, unknown>;
+      try {
+        all = readJson<Record<string, unknown>>(sendsFile(), {});
+      } catch {
+        all = {};
+      }
+      if (!all || typeof all !== "object" || Array.isArray(all)) all = {};
+      for (const k of Object.keys(all)) if (!lastHour(all[k], now).length) delete all[k];
+      // the cap's bound (LIMITS.perHour) is far below this: a longer list says nothing more
+      all[site] = [...lastHour(all[site], now), now].slice(-5000);
+      writePrivate(sendsFile(), JSON.stringify(all));
+    });
+  } catch {
+    ownSends.set(site, [...lastHour(ownSends.get(site), now), now]);
+  }
+}
+
+/** The site's sends of the last hour, oldest first. */
+export function sendsThisHour(site: string, now = Date.now()): number[] {
+  let kept: number[] = [];
+  try {
+    kept = lastHour(readJson<Record<string, unknown>>(sendsFile(), {})?.[site], now);
+  } catch {
+    /* unreadable: this process's own count */
+  }
+  return [...kept, ...lastHour(ownSends.get(site), now)].sort((a, b) => a - b);
+}
+
 /* ------------------------------------------------------------ write ledger */
 
 /** What a write did, as far as the caller can know; see CallResult.write. */

@@ -12,6 +12,8 @@ import {
   pageFetch,
   profileCookies,
 } from "./browser.js";
+import { overBudget, sitePace } from "./budget.js";
+import { type Changes, capChanges, changesOf } from "./changes.js";
 import { type Class, judge } from "./classify.js";
 import { asText, fillTemplate } from "./codec.js";
 import { getPath } from "./extract.js";
@@ -47,7 +49,7 @@ import {
 } from "./http.js";
 import { loadSettings } from "./identity.js";
 import { derive, LookupFailed, sendDerived } from "./lookup.js";
-import { type ResultCursor, type ResultView, resultView, viewProblem } from "./results.js";
+import { projectView, type ResultCursor, type ResultView, resultView, viewProblem } from "./results.js";
 import { redact } from "./secrets.js";
 import {
   boundSession,
@@ -60,6 +62,7 @@ import {
   sessionFile,
   withLock,
 } from "./session.js";
+import { KEEP_SNAPSHOT_MS, loadSnapshot, recipeOf, type Snapshot, snapshotKey, swapSnapshot } from "./snapshots.js";
 import { type Operation, readbackName, type Site } from "./spec.js";
 import {
   appendCall,
@@ -69,6 +72,7 @@ import {
   clearCoolDown,
   coolDown,
   cooling,
+  countSends,
   lastHealAt,
   loadSite,
   markStale,
@@ -97,6 +101,15 @@ export interface CallOptions {
   callOnly?: boolean;
   /** Shape the classified, extracted answer, never the site's arguments or stored recipe. */
   view?: ResultView;
+  /**
+   * reads: answer from the last ok answer of the same site, op and args (defaults filled) when it is
+   * at most this old, sending nothing (`cached`, `ageMs`); a call that sends keeps its ok answer for the next
+   */
+  maxAgeMs?: number;
+  /** reads: compare the answer with the previous ok one of the same site, op and args (`changes`) */
+  changes?: boolean;
+  /** reads: `changes` without `data`, for cheap polling; implies `changes` */
+  changesOnly?: boolean;
   /** required for any readOnly:false op, at every entry point */
   allowWrites?: boolean;
   /**
@@ -217,6 +230,14 @@ export interface CallResult {
   server?: true;
   /** the site cools down after a rate limit or block: nothing was sent, so no version of the op answered */
   cooling?: true;
+  /** the site's request budget (its spec's pace, or API_ANYTHING_PACE) is spent: nothing was sent */
+  budget?: true;
+  /** answered from the last ok answer kept for these args (maxAgeMs): nothing was sent */
+  cached?: true;
+  /** with cached: how old that answer is */
+  ageMs?: number;
+  /** with the changes option: this answer against the previous ok one of the same site, op and args */
+  changes?: Changes;
 }
 
 type Result = Omit<CallResult, "ms">;
@@ -1037,6 +1058,9 @@ async function readBack(
     idempotencyKey: undefined,
     onAnswered: undefined,
     view: undefined,
+    maxAgeMs: undefined,
+    changes: undefined,
+    changesOnly: undefined,
   };
   const read =
     "op" in rb
@@ -1148,6 +1172,48 @@ function heldBack(g: Exclude<WriteGate, { send: true }>, op: Operation): Result 
   };
 }
 
+/**
+ * An ok answer as the caller asked for it: compared with the last one kept for its args and kept in
+ * its place (`snap`, for `changes` or `maxAgeMs`), then shaped by its view. `hit`: the kept answer
+ * this one is, served from it (compared with itself, nothing changed; nothing kept again).
+ */
+function shape(out: CallResult, op: Operation, opts: CallOptions, snap?: string, hit?: Snapshot): CallResult {
+  let changes: Changes | undefined;
+  if (snap) {
+    const wanted = opts.changes || opts.changesOnly;
+    const now = { full: out.data, shown: projectView(out.data, opts.view) };
+    const compare = (prev?: Snapshot): Changes | undefined =>
+      !wanted
+        ? undefined
+        : prev
+          ? capChanges(
+              changesOf({ full: prev.data, shown: projectView(prev.data, opts.view) }, now, prev.at, op.response.key),
+              opts.view?.maxChars,
+            )
+          : { first: true };
+    changes = hit
+      ? compare(hit)
+      : swapSnapshot(snap, (prev) => ({
+          out: compare(prev),
+          next: {
+            at: Date.now(),
+            recipe: recipeOf(op),
+            data: out.data,
+            ...(out.nextPage !== undefined ? { nextPage: out.nextPage } : {}),
+            ...(out.hasMore !== undefined ? { hasMore: out.hasMore } : {}),
+          },
+        }));
+  }
+  if (opts.changesOnly) {
+    const { data: _data, ...rest } = out;
+    return { ...rest, ...(changes ? { changes } : {}) };
+  }
+  const viewed = resultView(out.data, opts.view, undefined, opts.callOnly);
+  if (viewed.truncated && out.nextPage !== undefined)
+    viewed.truncated += `; nextPage starts after the last item of this page, cut or not${opts.callOnly ? "" : "; more stays on this page"}`;
+  return { ...out, ...viewed, ...(changes ? { changes } : {}) };
+}
+
 /** Call one operation. Never throws for site-side failures; the result carries class, reason and next. */
 export async function call(
   siteName: string,
@@ -1163,6 +1229,16 @@ export async function call(
       class: "input",
       reason: problem,
       next: "check view.fields and view.maxChars; do not put them in the site's args",
+      retry: "after_fix",
+      ms: Date.now() - t0,
+    };
+  const age = opts.maxAgeMs;
+  if (age !== undefined && !(Number.isSafeInteger(age) && age >= 0 && age <= KEEP_SNAPSHOT_MS))
+    return {
+      ok: false,
+      class: "input",
+      reason: `maxAgeMs must be a whole number of milliseconds from 0 to ${KEEP_SNAPSHOT_MS} (30 days)`,
+      next: "pass maxAgeMs as milliseconds (CLI --max-age 30s, 10m, 2h or 1d); do not put it in the site's args",
       retry: "after_fix",
       ms: Date.now() - t0,
     };
@@ -1198,6 +1274,10 @@ async function run(
   let ledger: string | undefined;
   /** the site's cool-down this call was answered from, sending nothing: no news for the registry */
   let held: CoolDown | undefined;
+  /** the site's budget was spent, so nothing was sent: no news for the registry either */
+  let spent = false;
+  /** where this read's last ok answer is kept, when the call asked for maxAgeMs or changes */
+  let snap: string | undefined;
   const done = async (r: Result): Promise<CallResult> => {
     let f = finish(r, op, siteName, log);
     // A forced call the site answered ends the cool-down: before its readback, which may start another.
@@ -1225,22 +1305,33 @@ async function run(
         ...(out.healed ? { healed: true as const } : {}),
         ...(out.write ? { write: out.write } : {}),
       });
-    if (how.source && !proof && !held && !opts.callOnly) {
+    if (how.source && !proof && !held && !spent && !opts.callOnly) {
       const { afterCall } = await import("./report.js");
       afterCall(siteName, op, how.source, out, {
         fetchImpl: opts.fetchImpl,
         minIntervalMs: opts.minIntervalMs,
       });
     }
-    if (out.ok && !proof && out.data !== undefined) {
-      const viewed = resultView(out.data, opts.view, undefined, opts.callOnly);
-      if (viewed.truncated && out.nextPage !== undefined)
-        viewed.truncated += `; nextPage starts after the last item of this page, cut or not${opts.callOnly ? "" : "; more stays on this page"}`;
-      return { ...out, ...viewed };
-    }
+    if (out.ok && !proof && out.data !== undefined) return shape(out, op, opts, snap);
     return out;
   };
   const write = !op.readOnly;
+  let budget: ReturnType<typeof sitePace>;
+  try {
+    budget = sitePace(site);
+  } catch (e) {
+    return done({
+      ok: false,
+      class: "error",
+      reason: (e as Error).message,
+      next: "ask the user to fix API_ANYTHING_PACE (for example interval=2s,perHour=60,<site>:perHour=30)",
+      nextCall: { action: "report" },
+      retry: "after_fix",
+    });
+  }
+  if (budget.minIntervalMs !== undefined)
+    opts = { ...opts, minIntervalMs: Math.max(opts.minIntervalMs ?? 1000, budget.minIntervalMs) };
+  countSends(siteName, budget.perHour !== undefined);
   if (write && !opts.allowWrites) {
     return done({
       ok: false,
@@ -1253,6 +1344,30 @@ async function run(
   if (unknown) return done({ ok: false, class: "input", reason: unknown, next: nextFor("input", siteName, op) });
   // Resolved once: the tier-3 trigger and its answer's match take a default just as the request does.
   args = withDefaults(op, args);
+  // A write is never kept or answered from a kept answer: each call is the user's action.
+  if (!write && !proof && (opts.maxAgeMs !== undefined || opts.changes || opts.changesOnly)) {
+    snap = snapshotKey(siteName, op, args);
+    const hit = opts.maxAgeMs !== undefined ? loadSnapshot(snap) : undefined;
+    const ageMs = hit ? Date.now() - hit.at : -1;
+    // nothing was sent: no call log line, no report, no budget spent
+    if (hit && hit.recipe === recipeOf(op) && ageMs >= 0 && ageMs <= opts.maxAgeMs!)
+      return shape(
+        {
+          ok: true,
+          class: "ok",
+          data: hit.data,
+          ...(hit.nextPage !== undefined ? { nextPage: hit.nextPage } : {}),
+          ...(hit.hasMore !== undefined ? { hasMore: hit.hasMore } : {}),
+          cached: true,
+          ageMs,
+          ms: Date.now() - t0,
+        },
+        op,
+        opts,
+        snap,
+        hit,
+      );
+  }
   let session: Session;
   try {
     if (theirs) dropUnbound(siteName);
@@ -1276,6 +1391,19 @@ async function run(
   // A site that said stop is not asked again until its wait is over: before the write's ledger, as nothing is sent.
   held = opts.ignoreCoolDown ? undefined : cooling(siteName);
   if (held) return done(cooled(held, siteName));
+  // A write's readback is part of the write the user asked for: it is counted, never refused.
+  const over = proof ? undefined : overBudget(siteName, budget);
+  if (over) {
+    spent = true;
+    return done({
+      ok: false,
+      class: "rate",
+      reason: over.reason,
+      retryAfterMs: over.retryAfterMs,
+      budget: true,
+      next: "the site's request budget is spent: do not retry before retryAfterMs; nothing was sent (the budget is the spec's pace, or API_ANYTHING_PACE)",
+    });
+  }
   // auth recovery steps taken this call: 1 re-import, 2 the profile's cookies, 3 a trigger run
   let authStep = 0;
   /** where the user signs in again when a re-import brought back no new login (`reimportIfBrowser`) */

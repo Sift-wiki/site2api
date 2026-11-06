@@ -7,7 +7,7 @@ import { asText, fillSlotTemplate, setAt, templateRefs, walk } from "./codec.js"
 import { matches } from "./learn.js";
 import { cookieHeaderFor, cookieValue, parseSetCookie, type Session } from "./session.js";
 import type { Match, Operation, Param, Request } from "./spec.js";
-import { reserveSend } from "./store.js";
+import { recordSend, reserveSend } from "./store.js";
 import type { StoredCookie } from "./types.js";
 import { badAddress } from "./vet.js";
 
@@ -338,8 +338,10 @@ export class BadHeader extends Error {
 
 /** Reserve the next send slot for a site, then wait for it; concurrent callers, in any process, queue up. */
 export async function pace(site: string, minIntervalMs = 1000): Promise<void> {
-  if (minIntervalMs <= 0) return;
-  const wait = reserveSend(site, minIntervalMs) - Date.now();
+  if (minIntervalMs <= 0) return recordSend(site);
+  const at = reserveSend(site, minIntervalMs);
+  recordSend(site, at);
+  const wait = at - Date.now();
   if (wait > 0) await new Promise((r) => setTimeout(r, wait));
 }
 

@@ -100,6 +100,8 @@ export function viewProblem(view: ResultView | undefined): string | undefined {
 
 // A view must not drop items whose selected fields are absent: offsets name the original items.
 const project = (value: unknown, fields?: string[]): unknown => (fields ? pick(value, fields, true) : value);
+/** What a view's fields leave of an answer, before any cap: for a list, one entry per item. */
+export const projectView = (value: unknown, view?: ResultView): unknown => project(value, view?.fields);
 
 // A call-only host offers no get_result or maxChars, so its note names only what a caller can change.
 const HOST_HINT = "pass fields to keep fewer fields per item, or narrow the arguments";

@@ -88,12 +88,21 @@ type ReadyPlan = Extract<CallPlan, { ok: true }>;
 export type HostOperationDescription = OperationDescription & { resultSchema?: JsonSchema };
 
 /**
- * Host controls transport, write permission and the answer's shape (`view`), never healing, force or
- * duplicate overrides. `view` shapes only the answer, so it is not part of the approved plan.
+ * Host controls transport, write permission and the answer's shape (`view`; a read's `maxAgeMs` and
+ * `changes`), never healing, force or duplicate overrides. Those shape only the answer, so they are
+ * not part of the approved plan.
  */
 export type HostCallOptions = Pick<
   CallOptions,
-  "allowWrites" | "maxTier" | "timeoutMs" | "fetchImpl" | "minIntervalMs" | "view"
+  | "allowWrites"
+  | "maxTier"
+  | "timeoutMs"
+  | "fetchImpl"
+  | "minIntervalMs"
+  | "view"
+  | "maxAgeMs"
+  | "changes"
+  | "changesOnly"
 >;
 export type HostPlanOptions = Pick<CallOptions, "maxTier">;
 
@@ -478,6 +487,9 @@ export async function callPlanned(plan: ReadyPlan, opts: HostCallOptions = {}): 
       fetchImpl: opts.fetchImpl,
       minIntervalMs: opts.minIntervalMs,
       ...(opts.view ? { view: opts.view } : {}),
+      ...(opts.maxAgeMs !== undefined ? { maxAgeMs: opts.maxAgeMs } : {}),
+      ...(opts.changes ? { changes: true } : {}),
+      ...(opts.changesOnly ? { changesOnly: true } : {}),
       callOnly: true,
     });
   } finally {
