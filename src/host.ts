@@ -28,6 +28,7 @@ import {
 import { fillTrigger } from "./heal.js";
 import { buildRequest, filledValues, unknownArgs, withDefaults } from "./http.js";
 import { profileSignedIn } from "./profile-state.js";
+import { callResultSchema, type JsonSchema, opDataSchema } from "./schema.js";
 import { captureLive, redact } from "./secrets.js";
 import { accountCookies, home, loadSession, placeholders, type Session } from "./session.js";
 import type { Operation, Request, Site, Trigger } from "./spec.js";
@@ -77,6 +78,9 @@ export type CallPlan =
   | { ok: false; result: CallResult };
 
 type ReadyPlan = Extract<CallPlan, { ok: true }>;
+
+/** An op's description, with `resultSchema` beside `params`: the JSON Schema of the CallResult its call answers. */
+export type HostOperationDescription = OperationDescription & { resultSchema?: JsonSchema };
 
 /**
  * Host controls transport, write permission and the answer's shape (`view`), never healing, force or
@@ -263,14 +267,17 @@ export function hostSites(): HostSite[] {
 /** Describe one installed site and its caller notes, without pulling, calling or opening a browser. */
 export function hostSite(
   name: string,
-): { site: HostSite; notes?: string; operations: OperationDescription[] } | undefined {
+): { site: HostSite; notes?: string; operations: HostOperationDescription[] } | undefined {
   const r = loadSite(name);
   if (!r) return undefined;
   const notes = siteNotes(r.site.name);
   return {
     site: summary(r, loginDomains()),
     ...(notes ? { notes } : {}),
-    operations: r.site.operations.map((op) => describeOperation(r.site, op.name)),
+    operations: r.site.operations.map((op) => ({
+      ...describeOperation(r.site, op.name),
+      resultSchema: callResultSchema(opDataSchema(op)),
+    })),
   };
 }
 

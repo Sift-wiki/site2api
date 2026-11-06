@@ -477,6 +477,8 @@ test("a learn_site still running at the deadline answers with a job, and its res
   const [a, b] = InMemoryTransport.createLinkedPair();
   await createServer({ waitMs: 150 }).connect(a);
   await client.connect(b);
+  // listed first, so the SDK's client checks every answer against the tool's outputSchema
+  await client.listTools();
   try {
     const read = { method: "GET", path: "/api/search?q={q}", answer: items };
     const first = await client.callTool({
@@ -533,6 +535,8 @@ test("learn_site asks its consent question after it answered with a job, and the
   const [a, b] = InMemoryTransport.createLinkedPair();
   await createServer({ waitMs: 150 }).connect(a);
   await client.connect(b);
+  // listed first, so the SDK's client checks every answer against the tool's outputSchema
+  await client.listTools();
   try {
     const read = { method: "GET", path: "/api/search?q={q}", answer: items };
     const first = await client.callTool({

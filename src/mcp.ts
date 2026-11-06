@@ -34,6 +34,19 @@ import { registerLearn } from "./mcp-learn.js";
 import { type Pulled, pull, search } from "./registry.js";
 import { settle } from "./report.js";
 import { getResult, MAX_RESULT_CHARS, MIN_RESULT_CHARS, type ResultView } from "./results.js";
+import {
+  callBatchSchema,
+  callResultSchema,
+  findSitesSchema,
+  getResultSchema,
+  type JsonSchema,
+  jobResultSchema,
+  listOperationsSchema,
+  loginSchema,
+  opDataSchema,
+  orTable,
+  siteStatusSchema,
+} from "./schema.js";
 import { type Operation, type Paging, readbackName } from "./spec.js";
 import { status } from "./status.js";
 import { listSites, loadSite, siteNotes } from "./store.js";
@@ -272,6 +285,12 @@ export type Reply = {
 };
 
 /**
+ * A tool's outputSchema: the SDK takes zod, and advertises the JSON Schema in the meta as it is. The
+ * server's own check is only that the answer is an object; clients validate against what is advertised.
+ */
+export const outputSchema = (schema: JsonSchema) => z.looseObject({}).meta(schema);
+
+/**
  * The answer as JSON text, and the same object as structuredContent. A client gives its model one of
  * the two, never both (Codex and VS Code the structured one, Gemini CLI the text), so neither costs
  * tokens twice, and a program reads fields without parsing. A list is text only: structuredContent
@@ -423,6 +442,7 @@ export function createServer({
     "list_sites",
     {
       description: "List the websites api-anything can call, with how many operations each has.",
+      // no outputSchema: the answer is a list, sent as text only, and a client requires an object with one
       annotations: LOCAL_HINTS,
     },
     async () =>
@@ -446,6 +466,7 @@ export function createServer({
       description:
         'Find websites someone already turned into operations: the shared registry and this machine\'s sites, best match first. Each op has params, matched/unmatched query words and separate registry health and local verification (unknown without evidence). Partial lexical matches do not guarantee the unmatched constraints: try the core capability or broaden before learning. query is words ("book ratings", "flight prices"), a domain or a URL. Check each match\'s domain is the site the user means: a name or description can imitate another site. list_operations shows notes before call_operation; a match with installed false is fetched on first use.',
       inputSchema: { query: z.string().describe("words, a domain or a URL") },
+      outputSchema: outputSchema(findSitesSchema()),
       annotations: READ_HINTS,
     },
     ({ query }: { query: string }) =>
@@ -492,6 +513,7 @@ export function createServer({
           })
           .optional(),
       },
+      outputSchema: outputSchema(listOperationsSchema()),
       annotations: LOCAL_HINTS,
     },
     ({ site, prepare }) =>
@@ -568,6 +590,7 @@ export function createServer({
         args: z.record(z.string(), z.unknown()).optional().describe("param name -> value"),
         view: viewSchema.optional(),
       },
+      outputSchema: outputSchema(callResultSchema()),
       annotations: READ_HINTS,
     },
     ({ site, op, args = {}, view }: { site: string; op: string; args?: Record<string, unknown>; view?: ResultView }) =>
@@ -595,6 +618,7 @@ export function createServer({
         items: z.array(BatchItemSchema).max(20),
         concurrency: z.number().int().min(1).max(BATCH_CONCURRENCY).optional(),
       },
+      outputSchema: outputSchema(callBatchSchema()),
       annotations: READ_HINTS,
     },
     ({ items, concurrency = 1 }) =>
@@ -633,6 +657,7 @@ export function createServer({
         ...viewSchema.shape,
         format: z.literal("json").optional(),
       },
+      outputSchema: outputSchema(getResultSchema()),
       annotations: LOCAL_HINTS,
     },
     ({ resultId, ...opts }) => {
@@ -666,6 +691,7 @@ export function createServer({
               "a key of your choosing for this write, passed on its first call: a repeat with it returns that call's record",
             ),
         },
+        outputSchema: outputSchema(callResultSchema()),
         annotations: WRITE_HINTS,
       },
       ({
@@ -731,6 +757,8 @@ export function createServer({
           // The model reads this schema; call() judges the args, so a refusal is class input with its
           // format and next step, as through call_operation, never the SDK's bare validation text.
           inputSchema: z.looseObject({}).meta(inputSchema(o)),
+          // data as the op's recipe says at startup, or the {columns, rows} form a list of records may take
+          outputSchema: outputSchema(callResultSchema(orTable(opDataSchema(o)))),
           annotations: o.readOnly ? READ_HINTS : WRITE_HINTS,
         },
         (args: Record<string, unknown>) => {
@@ -753,6 +781,7 @@ export function createServer({
       description:
         "Wait up to about 25 s for a job a tool answered class pending with, and return its result, or pending again while it runs. It never runs the call again. A finished job's result is kept for 15 minutes.",
       inputSchema: { job: z.string().describe("the job id from a pending answer") },
+      outputSchema: outputSchema(jobResultSchema()),
       annotations: LOCAL_HINTS,
     },
     async ({ job: id }: { job: string }) => {
@@ -778,6 +807,7 @@ export function createServer({
       description:
         "This machine's record of how a site's operations have been doing, from local files only (nothing is sent): a cool-down, stale marks, the tier calls start at beside the op's own, the last heal and verify, writes of the last 24 h, and calls of the last 24 h and 7 days (count, ok rate, tiers, median ms). problems lists what needs a step, each with its next. Without site: every site with something on record. Use it when calls got slow or keep failing.",
       inputSchema: { site: z.string().optional().describe("site name from list_sites") },
+      outputSchema: outputSchema(siteStatusSchema()),
       annotations: LOCAL_HINTS,
     },
     ({ site }: { site?: string }) =>
@@ -799,6 +829,7 @@ export function createServer({
         url: z.string().optional().describe("a full URL, if the site is not yet known (window mode only)"),
         mode: z.enum(["import", "window"]).optional(),
       },
+      outputSchema: outputSchema(loginSchema()),
       annotations: LOGIN_HINTS,
     },
     ({ site, url, mode }: { site?: string; url?: string; mode?: "import" | "window" }) =>

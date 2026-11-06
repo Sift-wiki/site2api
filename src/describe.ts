@@ -78,7 +78,7 @@ function extractedShape(r: ResponseSpec): Record<string, string> {
   return { "": "array" };
 }
 
-function outputOf(r: ResponseSpec): OutputHints {
+export function outputOf(r: ResponseSpec): OutputHints {
   const htmlItems = r.format === "html" && !!r.html && !r.extract;
   const rel = extractedShape(r);
   const keys = Object.keys(rel).filter((k) => k);

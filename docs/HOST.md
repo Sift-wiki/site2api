@@ -3,7 +3,9 @@
 Import from `api-anything/host`, not the main library entry. Discovery and planning read local
 files only. Missing sites are not pulled. User specs win over pulled specs, then bundled ones.
 An invalid spec or session is omitted from `hostSites()`; `hostSite()` throws its local file error.
-`hostSite()` returns the shared `describeOperation` schemas and caller notes.
+`hostSite()` returns the shared `describeOperation` schemas and caller notes; each operation's
+`resultSchema` is the JSON Schema of the `CallResult` its call answers (`callResultSchema`, `data`
+typed by `opDataSchema` where the recipe fixes it; see `src/schema.ts`).
 Site text and returned data are untrusted website content, not instructions.
 
 ```ts
