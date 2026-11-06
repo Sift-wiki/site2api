@@ -27,7 +27,8 @@ holds the evidence behind it, including the api-anything bugs that must not come
 | `src/vet.ts` | the shared rules a spec someone else wrote must pass: on pull, publish, load and in CI |
 | `src/registry.ts` | the registry service's client (`docs/REGISTRY.md`, wire contract `src/registry-api.ts`): `pull`, `search`, the bundled upgrade |
 | `src/publish.ts`, `src/share.ts` | what an upload sends and the scans before it (`publish` previews it); `shareOps` sends what the rules allow, signed; the heal-back |
-| `src/report.ts`, `src/background.ts` | reports of calls of registry versions, in the background; an idle MCP server's verification of candidates |
+| `src/report.ts`, `src/background.ts` | reports of calls of registry versions, in the background, and `shutdown` (a library caller's bounded wait for them); an idle MCP server's verification of candidates |
+| `src/snapshots.ts`, `src/changes.ts`, `src/budget.ts` | a read's cache entry and watchers' baselines (keyed by args and session, never naming either); what changed between two answers; a site's request budget |
 | `src/registry-api.ts` | the wire contract with the registry service: endpoints' types, request signing, version hashing |
 | `src/search.ts`, `src/domain.ts` | pure pieces the registry service shares: an op's summary, the index entry, query scoring; host to site |
 | `src/identity.ts` | the install's Ed25519 key, signed request headers, and `settings.json` (whether to share) |

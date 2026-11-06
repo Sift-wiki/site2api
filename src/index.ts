@@ -20,6 +20,7 @@ export { learnOperation, rankCandidates } from "./learn.js";
 export { prepareLink } from "./links.js";
 export { createServer, serveStdio } from "./mcp.js";
 export { pull, search } from "./registry.js";
+export { shutdown } from "./report.js";
 export { type GetResultOptions, getResult, type ResultCursor, type ResultSlice, type ResultView } from "./results.js";
 export {
   type Match,

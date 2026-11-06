@@ -83,6 +83,34 @@ const pathSteps = (path: string) => [...path.matchAll(/\[(\d+)\]|\[(\*)\]|\["((?
 /** Whether a path maps over a list: a `[*]` step as getPath reads it, not one inside a quoted key (`["a[*]"]`). */
 export const hasWildcard = (path: string) => pathSteps(path).some((m) => m[2] !== undefined);
 
+export type PathStep = { key: string } | { index: number } | { all: true };
+
+/**
+ * A path's steps exactly as `getPath` reads them, or undefined when it would skip part of the text
+ * (a stray `.`, `]` or quote) or could not read a quoted key (`["\q"]`).
+ */
+export function parsePath(path: string): PathStep[] | undefined {
+  const out: PathStep[] = [];
+  let at = 0;
+  for (const m of pathSteps(path)) {
+    const bare = m[1] === undefined && m[2] === undefined && m[3] === undefined;
+    // a name after the first step follows a dot; a bracket follows directly
+    if (bare && out.length && path[at] === ".") at++;
+    if (m.index !== at) return undefined;
+    at += m[0].length;
+    if (m[1] !== undefined) out.push({ index: Number(m[1]) });
+    else if (m[2] !== undefined) out.push({ all: true });
+    else if (m[3] !== undefined) {
+      try {
+        out.push({ key: JSON.parse(`"${m[3]}"`) as string });
+      } catch {
+        return undefined;
+      }
+    } else out.push({ key: m[0] });
+  }
+  return at === path.length && out.length ? out : undefined;
+}
+
 function atPath(obj: unknown, steps: RegExpMatchArray[]): unknown {
   const walk = (cur: unknown, i: number): unknown => {
     for (; i < steps.length; i++) {

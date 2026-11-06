@@ -36,6 +36,7 @@ for (const file of readdirSync(dir)
     ...(site.displayName ? { displayName: site.displayName } : {}),
     ...(site.description ? { description: site.description } : {}),
     ...(site.loginCookies ? { loginCookies: site.loginCookies } : {}),
+    ...(site.pace && Object.keys(site.pace).length ? { pace: site.pace } : {}),
     ...(notes ? { notes } : {}),
   };
   const res = await fetch(new URL("/v1/admin/seed", url), {

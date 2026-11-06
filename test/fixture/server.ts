@@ -41,6 +41,8 @@ export interface Fixture {
   listings: Listing[];
   /** the next /api/listings answers have these statuses instead of the list, in order */
   failListings(...statuses: number[]): void;
+  /** the board as it starts (`LISTINGS`), with no failure queued */
+  resetListings(): void;
   close(): Promise<void>;
 }
 
@@ -749,6 +751,11 @@ document.getElementById("gql").onclick=()=>fetch("/api/gql",{method:"POST",heade
       const q = (u.searchParams.get("q") ?? "").toLowerCase();
       return json(res, 200, { listings: listings.filter((l) => l.title.toLowerCase().includes(q)) });
     }
+    // A wall that refuses a client claiming Chrome without Chrome's TLS, and answers a plain one (Hacker News's "Sorry")
+    if (p === "/api/sorry") {
+      if (/Chrome/.test(req.headers["user-agent"] ?? "")) return json(res, 403, { message: "Sorry." });
+      return json(res, 200, { listings });
+    }
     m = p.match(/^\/api\/listings\/([^/]+)$/);
     if (m) {
       const found = listings.find((l) => l.id === m![1]);
@@ -793,6 +800,10 @@ document.getElementById("gql").onclick=()=>fetch("/api/gql",{method:"POST",heade
     listings,
     failListings(...statuses) {
       listingFails.push(...statuses);
+    },
+    resetListings() {
+      listings.splice(0, listings.length, ...LISTINGS());
+      listingFails.length = 0;
     },
     close() {
       server.closeAllConnections();

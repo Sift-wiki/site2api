@@ -3,7 +3,7 @@
 // posted since the run before. One plain HTTP request a run, no browser, no account, no model.
 // Usage: node examples/watch.mjs "api-anything"
 // crontab: */30 * * * * node /path/to/examples/watch.mjs "api-anything" >> ~/hn-mentions.log
-import { call, closeBrowser } from "api-anything";
+import { call, shutdown } from "api-anything";
 
 const query = process.argv[2] ?? "api-anything";
 try {
@@ -26,5 +26,5 @@ try {
       console.log(`${s.created_at}  ${s.title}  https://news.ycombinator.com/item?id=${s.objectID}`);
   }
 } finally {
-  await closeBrowser();
+  await shutdown();
 }

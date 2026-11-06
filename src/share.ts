@@ -200,9 +200,9 @@ const sha = (text: string) => createHash("sha256").update(text).digest("hex");
 
 /** The upload of an op answering a claim: its anonymous form, and the site by its name and address alone. */
 function claimUpload(op: OpPlan): VersionUpload {
-  const { name, domain, baseUrl, loginCookies } = op.upload.site;
+  const { name, domain, baseUrl, loginCookies, pace } = op.upload.site;
   return {
-    site: { name, domain, baseUrl, ...(loginCookies ? { loginCookies } : {}) },
+    site: { name, domain, baseUrl, ...(loginCookies ? { loginCookies } : {}), ...(pace ? { pace } : {}) },
     operation: anonymous(op.upload.operation),
     evidence: { ...op.upload.evidence, learnedLoggedIn: true, cleanReplay: "skipped" },
   };

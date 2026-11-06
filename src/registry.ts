@@ -125,6 +125,7 @@ function siteFrom(name: string, served: ServedSite): Site {
     baseUrl: served.baseUrl,
     ...(served.description ? { description: served.description } : {}),
     ...(served.loginCookies ? { loginCookies: served.loginCookies } : {}),
+    ...(served.pace ? { pace: served.pace } : {}),
     operations: served.operations.map((o) => ({ ...o.operation, version: { hash: o.hash, status: o.status } })),
   });
   if (siteOf(new URL(site.baseUrl).hostname) !== served.domain)

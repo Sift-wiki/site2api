@@ -102,12 +102,20 @@ const watchSchema = {
     .optional()
     .describe("add changes {since, added, removed, changed, unchanged} against the previous ok answer for these args"),
   changesOnly: z.boolean().optional().describe("changes without data, for cheap polling"),
+  watch: z
+    .string()
+    .regex(/^[\w.:-]{1,64}$/)
+    .optional()
+    .describe(
+      'whose baseline changes compares with and moves on (default "default"), so two watchers of one query each see every change; implies changes',
+    ),
 };
-type Watch = Pick<CallOptions, "maxAgeMs" | "changes" | "changesOnly">;
+type Watch = Pick<CallOptions, "maxAgeMs" | "changes" | "changesOnly" | "watch">;
 const watchOf = (w: Watch): Watch => ({
   ...(w.maxAgeMs !== undefined ? { maxAgeMs: w.maxAgeMs } : {}),
   ...(w.changes ? { changes: true } : {}),
   ...(w.changesOnly ? { changesOnly: true } : {}),
+  ...(w.watch !== undefined ? { watch: w.watch } : {}),
 });
 
 /**

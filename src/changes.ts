@@ -3,11 +3,14 @@
  * by a key; or the leaf paths of an object. Pure: the answers come from `snapshots.ts`.
  */
 import { createHash } from "node:crypto";
-import { getPath } from "./extract.js";
+import { getPath, parsePath } from "./extract.js";
 
 /** One item of a list whose key is in both answers, with another value now. */
 export interface ChangedItem {
+  /** the item's key value as text (`#<hash>` for an item identified by itself) */
   key: string;
+  /** the second or later item with the same key in the answer: which one */
+  occurrence?: number;
   item: unknown;
   /** the paths in the item whose value differs, a path new in the item included */
   fields: string[];
@@ -21,9 +24,15 @@ export interface LeafChange {
   to?: unknown;
 }
 
+/** This answer could not be kept as the watcher's baseline: the next call cannot say what changed since it. */
+export interface NotRetained {
+  retained?: false;
+  reason?: string;
+}
+
 export type Changes =
-  | { first: true }
-  | {
+  | ({ first: true } & NotRetained)
+  | ({
       /** when the answer compared with was taken */
       since: string;
       /** a list: the items; one object: `{path, to}` */
@@ -36,7 +45,7 @@ export type Changes =
       /** a list: the field items are told apart by; `hash` when none identifies them */
       key?: string;
       truncated?: string;
-    };
+    } & NotRetained);
 
 /** Fields that name an item on most sites, tried in this order when the op declares no key. */
 export const ID_FIELDS = ["id", "_id", "uuid", "guid", "objectID", "key", "slug", "url", "link", "href", "permalink"];
@@ -60,12 +69,17 @@ const hashOf = (v: unknown) =>
     .digest("hex")
     .slice(0, 12);
 
-const id = (v: unknown): string | undefined =>
-  (typeof v === "string" && v !== "") || (typeof v === "number" && Number.isFinite(v)) ? String(v) : undefined;
+/** A value that can name an item: a non-empty string or a finite number, as it is (1 and "1" are two). */
+const id = (v: unknown): string | number | undefined =>
+  (typeof v === "string" && v !== "") || (typeof v === "number" && Number.isFinite(v)) ? v : undefined;
+
+/** A declared key read as the extractor reads paths; one it cannot read names nothing. */
+const usable = (declared?: string) => (declared && parsePath(declared) ? declared : undefined);
 
 /** The field that tells the items apart: the declared one, else the first id-like one every item has, each value distinct. */
 export function keyField(lists: unknown[][], declared?: string): string | undefined {
-  if (declared) return declared;
+  const own = usable(declared);
+  if (own) return own;
   const all = lists.flat();
   if (!all.length) return undefined;
   return ID_FIELDS.find((f) =>
@@ -73,22 +87,35 @@ export function keyField(lists: unknown[][], declared?: string): string | undefi
       const seen = new Set<string>();
       for (const it of items) {
         const v = id(getPath(it, f));
-        if (v === undefined || seen.has(v)) return false;
-        seen.add(v);
+        if (v === undefined || seen.has(String(v))) return false;
+        seen.add(String(v));
       }
       return true;
     }),
   );
 }
 
-/** Each item's key: its field's value, else a hash of the item; a repeat gets `~2`, `~3`. */
-function keysOf(items: unknown[], field?: string): string[] {
+interface ItemKey {
+  /** what tells it from every other item: kind, value and occurrence, never text that another could repeat */
+  identity: string;
+  shown: string;
+  occurrence: number;
+}
+
+/** Each item's key: its field's value, else a hash of the item (in a namespace of its own); a repeat counts its occurrence. */
+function keysOf(items: unknown[], field?: string): ItemKey[] {
   const count = new Map<string, number>();
   return items.map((it) => {
-    const base = (field !== undefined ? id(getPath(it, field)) : undefined) ?? `#${hashOf(it)}`;
-    const n = (count.get(base) ?? 0) + 1;
-    count.set(base, n);
-    return n > 1 ? `${base}~${n}` : base;
+    const v = field !== undefined ? id(getPath(it, field)) : undefined;
+    const base: [string, string | number] = v !== undefined ? ["key", v] : ["hash", hashOf(it)];
+    const at = JSON.stringify(base);
+    const n = (count.get(at) ?? 0) + 1;
+    count.set(at, n);
+    return {
+      identity: JSON.stringify([...base, n]),
+      shown: v !== undefined ? String(v) : `#${base[1]}`,
+      occurrence: n,
+    };
   });
 }
 
@@ -143,65 +170,68 @@ export function changesOf(before: Answer, after: Answer, since: number, declared
   const field = keyField([bFull, aFull], declared);
   const bKeys = keysOf(bFull, field);
   const aKeys = keysOf(aFull, field);
-  const earlier = new Map(bKeys.map((k, i) => [k, bShown[i]]));
-  const now = new Set(aKeys);
+  const earlier = new Map(bKeys.map((k, i) => [k.identity, bShown[i]]));
+  const now = new Set(aKeys.map((k) => k.identity));
   const added: unknown[] = [];
   const changed: ChangedItem[] = [];
   let unchanged = 0;
   for (const [i, k] of aKeys.entries()) {
     const item = aShown[i];
-    const was = earlier.get(k);
-    if (!earlier.has(k)) added.push(item);
+    const was = earlier.get(k.identity);
+    if (!earlier.has(k.identity)) added.push(item);
     else if (canonical(was) === canonical(item)) unchanged++;
     else {
       const d = leafDiff(was, item);
       const fields = [...d.changed, ...d.added, ...d.removed].map((c) => c.path);
       const old = Object.fromEntries([...d.changed, ...d.removed].map((c) => [c.path, c.from]));
-      changed.push({ key: k, item, fields, was: old });
+      changed.push({ key: k.shown, ...(k.occurrence > 1 ? { occurrence: k.occurrence } : {}), item, fields, was: old });
     }
   }
-  const removed = bKeys.flatMap((k, i) => (now.has(k) ? [] : [bShown[i]]));
+  const removed = bKeys.flatMap((k, i) => (now.has(k.identity) ? [] : [bShown[i]]));
   return { since: at, added, removed, changed, unchanged, key: field ?? "hash" };
 }
 
 /**
- * Changes that fit `maxChars` of JSON: the longest of added, removed and changed loses its last
- * entries until they fit, and `truncated` counts what went. What is cut is not reported again: the
- * next call compares with this answer.
+ * Changes whose JSON, the truncation note included, fits `maxChars`: the longest of added, removed
+ * and changed loses its last entries until it fits, and `truncated` counts what went. What is cut is
+ * not reported again: the next call compares with this answer.
  */
 export function capChanges(c: Changes, maxChars = 20_000): Changes {
   if ("first" in c || JSON.stringify(c).length <= maxChars) return c;
-  const lists = { added: [...c.added], removed: [...c.removed], changed: [...c.changed] as unknown[] };
-  const sizes = {
-    added: lists.added.map((x) => JSON.stringify(x).length + 1),
-    removed: lists.removed.map((x) => JSON.stringify(x).length + 1),
-    changed: lists.changed.map((x) => JSON.stringify(x).length + 1),
-  };
-  const cut = { added: 0, removed: 0, changed: 0 };
   const names = ["added", "removed", "changed"] as const;
-  const sums = {
-    added: sizes.added.reduce((s, x) => s + x, 0),
-    removed: sizes.removed.reduce((s, x) => s + x, 0),
-    changed: sizes.changed.reduce((s, x) => s + x, 0),
-  };
-  // room for the note beside the lists
-  let total = JSON.stringify({ ...c, added: [], removed: [], changed: [] }).length + 200;
-  total += sums.added + sums.removed + sums.changed;
-  while (total > maxChars) {
-    const n = names.reduce((m, x) => (sums[x] > sums[m] ? x : m));
-    if (!sizes[n].length) break;
-    const size = sizes[n].pop()!;
-    sums[n] -= size;
-    total -= size;
-    lists[n].pop();
-    cut[n]++;
-  }
-  const said = names.filter((n) => cut[n]).map((n) => `${cut[n]} ${n}`);
-  return {
+  const lists = { added: [...c.added], removed: [...c.removed], changed: [...c.changed] as unknown[] };
+  const sizes = Object.fromEntries(names.map((n) => [n, lists[n].map((x) => JSON.stringify(x).length + 1)])) as Record<
+    (typeof names)[number],
+    number[]
+  >;
+  const sums = Object.fromEntries(names.map((n) => [n, sizes[n].reduce((s, x) => s + x, 0)])) as Record<
+    (typeof names)[number],
+    number
+  >;
+  const cut = { added: 0, removed: 0, changed: 0 };
+  const build = (): Changes => ({
     ...c,
     added: lists.added,
     removed: lists.removed,
     changed: lists.changed as ChangedItem[],
-    truncated: `cut ${said.join(", ")} to fit maxChars; they are not reported again (the next call compares with this answer): narrow with view.fields or raise view.maxChars`,
+    truncated: `cut ${names
+      .filter((n) => cut[n])
+      .map((n) => `${cut[n]} ${n}`)
+      .join(", ")} to fit maxChars; not reported again`,
+  });
+  /** the size of the entry it cut, 0 when nothing is left to cut */
+  const drop = () => {
+    const n = names.reduce((m, x) => (sums[x] > sums[m] ? x : m));
+    const size = sizes[n].pop();
+    if (size === undefined) return 0;
+    sums[n] -= size;
+    lists[n].pop();
+    cut[n]++;
+    return size;
   };
+  // an estimate first, so a long list is not serialized once per entry; then exactly
+  let total = JSON.stringify(build()).length;
+  for (let size = 1; total > maxChars && size; total -= size) size = drop();
+  while (JSON.stringify(build()).length > maxChars && drop());
+  return build();
 }

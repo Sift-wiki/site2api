@@ -293,6 +293,10 @@ export const OperationSchema = z.object({
   version: z.object({ hash: z.string(), status: z.string() }).optional(),
 });
 
+/** The most a budget can say: an hour between requests, and one a second over the hour (store.ts keeps that many sends). */
+export const MAX_PACE_INTERVAL_MS = 60 * 60_000;
+export const MAX_PER_HOUR = 3600;
+
 export const SiteSchema = z.object({
   name: z.string().regex(/^[a-z0-9][a-z0-9._-]*$/i),
   displayName: z.string().optional(),
@@ -306,8 +310,8 @@ export const SiteSchema = z.object({
    */
   pace: z
     .object({
-      minIntervalMs: z.number().int().positive().optional(),
-      perHour: z.number().int().positive().optional(),
+      minIntervalMs: z.number().int().positive().max(MAX_PACE_INTERVAL_MS).optional(),
+      perHour: z.number().int().positive().max(MAX_PER_HOUR).optional(),
     })
     .optional(),
   operations: z.array(OperationSchema).default([]),

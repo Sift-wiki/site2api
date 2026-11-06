@@ -173,10 +173,11 @@ If re-planning itself fails, its original input/error/blocked result is returned
 reason and recovery step, rather than an approval-mismatch message.
 
 The only call options are `allowWrites`, `maxTier`, `timeoutMs`, `fetchImpl`, `minIntervalMs`,
-`view`, `maxAgeMs`, `changes` and `changesOnly`. `view` (`fields`, `maxChars`) shapes only the answer
+`view`, `maxAgeMs`, `changes`, `changesOnly` and `watch`. `view` (`fields`, `maxChars`) shapes only the answer
 after extraction, never the request, so it is not part of the plan or its approval. `maxAgeMs`,
-`changes` and `changesOnly` work on reads only, as for `call` (DESIGN.md, "Watching"): a cached answer
-sends nothing, so it needs no approval beyond the plan's. A site's budget applies to host calls too.
+`changes`, `changesOnly` and `watch` work on reads only, as for `call` (DESIGN.md, "Watching"): a cached answer
+sends nothing, so it needs no approval beyond the plan's, and is only ever served to the session it
+was answered for. A site's budget applies to host calls too.
 An omitted `maxTier` reuses the plan's cap; changing it requires re-planning and approval.
 The host must grant `allowWrites` separately for an approved write. There is no force, again,
 idempotency override, or operation-learning option. Pacing is at least one second per site,
@@ -215,8 +216,10 @@ Own-profile cookie refresh for reads and a read's tier-3 run may refresh session
 normal transport can still record cookies from the response, and its readback is a separate read,
 not a retry of the write.
 
-`closeHost()` closes the shared browser. A host call already closes it when it is the last user, so
-this matters only for calls still running. Host calls create no background jobs to drain.
+`closeHost()` is the library's `shutdown()`: background registry work the process started outside
+host calls gets up to 2 s, then is stopped, and the shared browser is closed. A host call already
+closes the browser when it is the last user, so this matters only for calls still running. Host
+calls create no background jobs to drain.
 Finish outstanding calls before closing; this is not a write-cancellation API.
 
 ## Bun and compiled hosts

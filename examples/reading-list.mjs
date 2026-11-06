@@ -1,7 +1,7 @@
 // A reading list from Goodreads, with no browser and no model: plain calls to the goodreads
 // operations an agent explored (sites/goodreads.json). Read-only.
 // Usage: node examples/reading-list.mjs "Circe by Madeline Miller" "Piranesi by Susanna Clarke" ...
-import { call, closeBrowser } from "api-anything";
+import { call, shutdown } from "api-anything";
 
 const books = process.argv.slice(2);
 if (!books.length)
@@ -75,5 +75,5 @@ try {
   console.error(error.message);
   process.exitCode = 1;
 } finally {
-  await closeBrowser();
+  await shutdown();
 }

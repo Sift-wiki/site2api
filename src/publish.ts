@@ -224,6 +224,7 @@ export function plan(
     ...(ex.spec.displayName ? { displayName: ex.spec.displayName } : {}),
     ...(ex.spec.description ? { description: ex.spec.description } : {}),
     ...(ex.spec.loginCookies ? { loginCookies: ex.spec.loginCookies } : {}),
+    ...(ex.spec.pace && Object.keys(ex.spec.pace).length ? { pace: ex.spec.pace } : {}),
     ...(notes ? { notes } : {}),
   };
   const warnings = new Set(ex.warnings);

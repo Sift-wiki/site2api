@@ -191,7 +191,7 @@ const HELP: Record<string, string> = {
   so nothing shows the server reads those params (publish refuses the op until it does).
   An op whose captured response is a bot challenge, a sign-in page, a rate limit or a server failure
   is not saved.`,
-  call: `api-anything call <site> <op> [k=v ...] [--json <args-object>] [--fields a,b] [--max-chars n] [--max-age <duration>] [--changes] [--changes-only] [--allow-writes] [--again] [--idempotency-key <k>] [--max-tier 1|2|3] [--force] [--dry]
+  call: `api-anything call <site> <op> [k=v ...] [--json <args-object>] [--fields a,b] [--max-chars n] [--max-age <duration>] [--changes] [--changes-only] [--watch <name>] [--allow-writes] [--again] [--idempotency-key <k>] [--max-tier 1|2|3] [--force] [--dry]
   Calls an operation: {ok, class, data, tier, healed?, heal?, ms, next?}; a failure also says retry
   (safe, after_wait, after_fix, no), retryAfterMs and nextCall, and a write says write (not_sent,
   not_applied, accepted, may_have_applied, applied: its readback found it). A paged read says
@@ -209,6 +209,9 @@ const HELP: Record<string, string> = {
                     ok answer for the same args ({first: true} the first time); list items are told
                     apart by the op's key, an id-like field (id, url, ...) or a hash
   --changes-only   changes without data, for cheap polling
+  --watch <name>   whose baseline --changes compares with and moves on (default "default"): two
+                    watchers of one query each see every change. Implies --changes. A --max-age
+                    answer never moves a baseline
   A site's budget (its spec's pace; API_ANYTHING_PACE="interval=2s,perHour=60,<site>:perHour=30"
   overrides it) answers rate with retryAfterMs and budget, sending nothing, once it is spent.
   --again          send a write refused as a duplicate (the same args within 10 minutes, and the
@@ -219,14 +222,14 @@ const HELP: Record<string, string> = {
                     3 minutes) or a block at every tier (10 minutes) calls answer without sending.
                     A forced call that succeeds ends the wait; one limited or blocked again starts
                     it over. A login for the site also ends the wait`,
-  batch: `api-anything batch [--input <file> | -] [--concurrency 1..4] [--limit 1..200] [--max-tier 1|2|3] [--max-age <duration>] [--changes] [--changes-only]
+  batch: `api-anything batch [--input <file> | -] [--concurrency 1..4] [--limit 1..200] [--max-tier 1|2|3] [--max-age <duration>] [--changes] [--changes-only] [--watch <name>]
   Read JSONL {id?, site, op, args?} from a file or stdin (the default), at most 4 MiB.
   Write one JSONL {id, site, op, ...callResult} per line in input order. Missing ids are 1-based
   line numbers. A malformed line answers input without echoing its contents. Empty input is empty.
   Sequential by default; concurrency is across sites only, with the usual pacing and cool-downs.
   --limit lowers the 200-line cap; oversized input is rejected before any calls. Sites must already
-  be installed (pull one first). Writes answer input: "writes are not batched". --max-age, --changes
-  and --changes-only apply to every item, as for call.
+  be installed (pull one first). Writes answer input: "writes are not batched". --max-age, --changes,
+  --changes-only and --watch apply to every item, as for call.
   Exit 0 if every item is ok, otherwise 1. Failures do not stop later items.`,
   result: `api-anything result <resultId> [--offset n] [--fields a,b] [--max-chars n] [--format json]
   Reads a kept answer locally, with no site request or spec change. offset is an item index.
@@ -502,6 +505,7 @@ const OPTIONS = {
   "max-age": { type: "string" },
   changes: { type: "boolean" },
   "changes-only": { type: "boolean" },
+  watch: { type: "string" },
   offset: { type: "string" },
   format: { type: "string" },
   html: { type: "string" },
@@ -1087,7 +1091,10 @@ async function cmdBatch({ v, pos }: Parsed): Promise<number> {
 }
 
 /** --max-age, --changes and --changes-only, as call options. */
-function watchOptions(v: Parsed["v"], command: string): Pick<CallOptions, "maxAgeMs" | "changes" | "changesOnly"> {
+function watchOptions(
+  v: Parsed["v"],
+  command: string,
+): Pick<CallOptions, "maxAgeMs" | "changes" | "changesOnly" | "watch"> {
   let maxAgeMs: number | undefined;
   if (v["max-age"] !== undefined) {
     maxAgeMs = parseDuration(v["max-age"]);
@@ -1101,6 +1108,7 @@ function watchOptions(v: Parsed["v"], command: string): Pick<CallOptions, "maxAg
     ...(maxAgeMs !== undefined ? { maxAgeMs } : {}),
     ...(v.changes ? { changes: true } : {}),
     ...(v["changes-only"] ? { changesOnly: true } : {}),
+    ...(v.watch !== undefined ? { watch: v.watch } : {}),
   };
 }
 
@@ -1730,7 +1738,7 @@ const COMMANDS: Record<string, { run: (p: Parsed) => number | Promise<number>; f
   },
   batch: {
     run: cmdBatch,
-    flags: ["input", "concurrency", "limit", "max-tier", "max-age", "changes", "changes-only"],
+    flags: ["input", "concurrency", "limit", "max-tier", "max-age", "changes", "changes-only", "watch"],
   },
   call: {
     run: cmdCall,
@@ -1747,6 +1755,7 @@ const COMMANDS: Record<string, { run: (p: Parsed) => number | Promise<number>; f
       "max-age",
       "changes",
       "changes-only",
+      "watch",
     ],
   },
   result: { run: cmdResult, flags: ["offset", "fields", "max-chars", "format"] },

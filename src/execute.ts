@@ -12,7 +12,7 @@ import {
   pageFetch,
   profileCookies,
 } from "./browser.js";
-import { overBudget, sitePace } from "./budget.js";
+import { BudgetSpent, limited, PaceConfigError, type SendBudget, sitePace } from "./budget.js";
 import { type Changes, capChanges, changesOf } from "./changes.js";
 import { type Class, judge } from "./classify.js";
 import { asText, fillTemplate } from "./codec.js";
@@ -62,17 +62,31 @@ import {
   sessionFile,
   withLock,
 } from "./session.js";
-import { KEEP_SNAPSHOT_MS, loadSnapshot, recipeOf, type Snapshot, snapshotKey, swapSnapshot } from "./snapshots.js";
+import {
+  cacheKey,
+  clock,
+  DEFAULT_WATCH,
+  type Identity,
+  KEEP_SNAPSHOT_MS,
+  loadSnapshot,
+  opPrint,
+  recipeOf,
+  type Snapshot,
+  saveSnapshot,
+  sessionPrint,
+  swapSnapshot,
+  watchKey,
+} from "./snapshots.js";
 import { type Operation, readbackName, type Site } from "./spec.js";
 import {
   appendCall,
   BLOCKED_COOL_MS,
   beginWrite,
+  budgetCheck,
   type CoolDown,
   clearCoolDown,
   coolDown,
   cooling,
-  countSends,
   lastHealAt,
   loadSite,
   markStale,
@@ -106,10 +120,15 @@ export interface CallOptions {
    * at most this old, sending nothing (`cached`, `ageMs`); a call that sends keeps its ok answer for the next
    */
   maxAgeMs?: number;
-  /** reads: compare the answer with the previous ok one of the same site, op and args (`changes`) */
+  /** reads: compare the answer with this watcher's previous ok one of the same site, op, args and session (`changes`) */
   changes?: boolean;
   /** reads: `changes` without `data`, for cheap polling; implies `changes` */
   changesOnly?: boolean;
+  /**
+   * reads: the watcher whose baseline `changes` compares with and moves on (default "default"), so two
+   * watchers of one query each see every change; implies `changes`
+   */
+  watch?: string;
   /** required for any readOnly:false op, at every entry point */
   allowWrites?: boolean;
   /**
@@ -135,6 +154,8 @@ export interface CallOptions {
    * in its place, so a record names only the version that answered
    */
   onAnswered?: (op: Operation) => void;
+  /** @internal a write's readback: its sends count against the site's budget and are never refused by it */
+  budgetExempt?: boolean;
   /** send even while the site cools down after a rate limit or a block (CLI --force); only when the user asks. Succeeding ends it */
   ignoreCoolDown?: boolean;
   /**
@@ -269,6 +290,8 @@ interface Ctx {
   seen?: StoredCookie[];
   /** the seed of the op's gen slots: one per call, so the call's own retries send the same values */
   gen: string;
+  /** the site's budget, held to at each send (`pace`) */
+  budget?: SendBudget;
 }
 
 /**
@@ -609,7 +632,7 @@ async function tryTier(ctx: Ctx, op: Operation, tier: Tier): Promise<Attempt> {
   try {
     if (tier === 3) {
       // For a write this is the UI sending it: the one attempt.
-      await pace(ctx.site, ctx.opts.minIntervalMs);
+      await pace(ctx.site, ctx.opts.minIntervalMs, ctx.budget);
       const run = await runOpTrigger(ctx.site, op, ctx.args);
       const judged = run.matched && judgeExchange(op, run.matched);
       // The page is told nothing of a redirect that was stopped, its status included: this is the answer.
@@ -656,6 +679,7 @@ async function tryTier(ctx: Ctx, op: Operation, tier: Tier): Promise<Attempt> {
         // someone else's spec sends only to public addresses; tiers 2 and 3 are the browser's, out of this guard's reach
         publicOnly: !!ctx.shared,
         gen: ctx.gen,
+        budget: ctx.budget,
       });
       // A rotating cookie (a rolling session, __cf_bm) must ride on the next call.
       if (sent.setCookies) {
@@ -684,7 +708,7 @@ async function tryTier(ctx: Ctx, op: Operation, tier: Tier): Promise<Attempt> {
           retryOnNavigation: o.readOnly,
           // the page's own cookies, unless they may not go (`bare`)
           ...(none ? { credentials: "omit" as const } : {}),
-          pace: () => pace(ctx.site, ctx.opts.minIntervalMs),
+          pace: () => pace(ctx.site, ctx.opts.minIntervalMs, ctx.budget),
           // tier 1's policy, one hop at a time: a page's own fetch() would follow with everything aboard
           redirect: async (from, status, location, taken) => {
             const next = nextHop(o, session, from, status, location, taken);
@@ -707,6 +731,8 @@ async function tryTier(ctx: Ctx, op: Operation, tier: Tier): Promise<Attempt> {
       ...(hint ? { hint, step: "login" as const } : {}),
     };
   } catch (thrown) {
+    // nothing was sent: the call ends with the budget's answer (`run`)
+    if (thrown instanceof BudgetSpent) throw thrown;
     const e = thrown instanceof LookupFailed && thrown.cause instanceof ProfileInUse ? thrown.cause : thrown;
     // a derived slot's lookup did not give its value: the op's own request never left
     if (e instanceof LookupFailed) return { tier, ...e.judged, unsent: true };
@@ -1061,6 +1087,8 @@ async function readBack(
     maxAgeMs: undefined,
     changes: undefined,
     changesOnly: undefined,
+    watch: undefined,
+    budgetExempt: true,
   };
   const read =
     "op" in rb
@@ -1172,39 +1200,55 @@ function heldBack(g: Exclude<WriteGate, { send: true }>, op: Operation): Result 
   };
 }
 
+/** Where a read's answers are kept: its cache entry, and the baseline of the watcher a `changes` call compares for. */
+interface Keep {
+  cache: string;
+  watch?: string;
+  /** `opPrint`: what a cache entry must have been answered by */
+  op: string;
+  /** `recipeOf`: what a baseline must have been shaped by */
+  recipe: string;
+}
+
 /**
- * An ok answer as the caller asked for it: compared with the last one kept for its args and kept in
- * its place (`snap`, for `changes` or `maxAgeMs`), then shaped by its view. `hit`: the kept answer
- * this one is, served from it (compared with itself, nothing changed; nothing kept again).
+ * An ok answer as the caller asked for it: kept as the cache entry, compared with its watcher's
+ * baseline and kept in its place, then shaped by its view. `hit`: the cache entry this answer is,
+ * served from it (not kept again). Only a `changes` call moves a baseline.
  */
-function shape(out: CallResult, op: Operation, opts: CallOptions, snap?: string, hit?: Snapshot): CallResult {
+function shape(out: CallResult, op: Operation, opts: CallOptions, keep?: Keep, hit?: Snapshot): CallResult {
   let changes: Changes | undefined;
-  if (snap) {
-    const wanted = opts.changes || opts.changesOnly;
-    const now = { full: out.data, shown: projectView(out.data, opts.view) };
-    const compare = (prev?: Snapshot): Changes | undefined =>
-      !wanted
-        ? undefined
-        : prev
-          ? capChanges(
-              changesOf({ full: prev.data, shown: projectView(prev.data, opts.view) }, now, prev.at, op.response.key),
-              opts.view?.maxChars,
-            )
-          : { first: true };
-    changes = hit
-      ? compare(hit)
-      : swapSnapshot(snap, (prev) => ({
-          out: compare(prev),
-          next: {
-            at: Date.now(),
-            recipe: recipeOf(op),
-            data: out.data,
-            ...(out.nextPage !== undefined ? { nextPage: out.nextPage } : {}),
-            ...(out.hasMore !== undefined ? { hasMore: out.hasMore } : {}),
-          },
-        }));
+  if (keep) {
+    const kept = {
+      data: out.data,
+      ...(out.nextPage !== undefined ? { nextPage: out.nextPage } : {}),
+      ...(out.hasMore !== undefined ? { hasMore: out.hasMore } : {}),
+    };
+    const at = hit?.at ?? clock.now();
+    if (!hit) saveSnapshot(keep.cache, { at, op: keep.op, ...(out.tier ? { tier: out.tier } : {}), ...kept });
+    if (keep.watch) {
+      const now = { full: out.data, shown: projectView(out.data, opts.view) };
+      const swapped = swapSnapshot(keep.watch, (prev) => {
+        // a baseline of another recipe answers another shape: no comparison, a new start
+        const base = prev && prev.op === keep.recipe ? prev : undefined;
+        // a cache entry older than the baseline would move it back
+        if (base && base.at > at) return { out: changesOf(asAnswer(base, opts), now, base.at, op.response.key) };
+        return {
+          out: base ? changesOf(asAnswer(base, opts), now, base.at, op.response.key) : { first: true as const },
+          next: { at, op: keep.recipe, ...kept },
+        };
+      });
+      changes = swapped.out;
+      if (swapped.saved && !swapped.saved.kept)
+        changes = {
+          ...changes,
+          retained: false,
+          reason: `this answer was not kept as the baseline: ${swapped.saved.reason}; the next call compares with the one before it`,
+        };
+      changes = capChanges(changes, opts.view?.maxChars);
+    }
   }
-  if (opts.changesOnly) {
+  // a write keeps its data: changesOnly is a read's
+  if (opts.changesOnly && op.readOnly) {
     const { data: _data, ...rest } = out;
     return { ...rest, ...(changes ? { changes } : {}) };
   }
@@ -1213,6 +1257,8 @@ function shape(out: CallResult, op: Operation, opts: CallOptions, snap?: string,
     viewed.truncated += `; nextPage starts after the last item of this page, cut or not${opts.callOnly ? "" : "; more stays on this page"}`;
   return { ...out, ...viewed, ...(changes ? { changes } : {}) };
 }
+
+const asAnswer = (s: Snapshot, opts: CallOptions) => ({ full: s.data, shown: projectView(s.data, opts.view) });
 
 /** Call one operation. Never throws for site-side failures; the result carries class, reason and next. */
 export async function call(
@@ -1239,6 +1285,15 @@ export async function call(
       class: "input",
       reason: `maxAgeMs must be a whole number of milliseconds from 0 to ${KEEP_SNAPSHOT_MS} (30 days)`,
       next: "pass maxAgeMs as milliseconds (CLI --max-age 30s, 10m, 2h or 1d); do not put it in the site's args",
+      retry: "after_fix",
+      ms: Date.now() - t0,
+    };
+  if (opts.watch !== undefined && !(typeof opts.watch === "string" && /^[\w.:-]{1,64}$/.test(opts.watch)))
+    return {
+      ok: false,
+      class: "input",
+      reason: "watch must be a name of 1 to 64 letters, digits, _ . : or -",
+      next: "pass watch as a short name for this watcher (CLI --watch <name>); do not put it in the site's args",
       retry: "after_fix",
       ms: Date.now() - t0,
     };
@@ -1274,10 +1329,10 @@ async function run(
   let ledger: string | undefined;
   /** the site's cool-down this call was answered from, sending nothing: no news for the registry */
   let held: CoolDown | undefined;
-  /** the site's budget was spent, so nothing was sent: no news for the registry either */
+  /** the site's budget was spent, or API_ANYTHING_PACE is wrong, so nothing was sent: no news for the registry either */
   let spent = false;
-  /** where this read's last ok answer is kept, when the call asked for maxAgeMs or changes */
-  let snap: string | undefined;
+  /** where this read's answers are kept, when the call asked for maxAgeMs or changes */
+  let keep: Keep | undefined;
   const done = async (r: Result): Promise<CallResult> => {
     let f = finish(r, op, siteName, log);
     // A forced call the site answered ends the cool-down: before its readback, which may start another.
@@ -1292,8 +1347,8 @@ async function run(
     if (f.next) f.next = hide(f.next, sessions);
     if (f.heal) f.heal = { ...f.heal, changes: f.heal.changes.map((c) => hide(c, sessions)) };
     if (ledger) settleWrite(ledger, f.write ?? "may_have_applied", f);
-    // a proof's rate limit or block is the site's, as any call's
-    coolAfter(siteName, op, f, log);
+    // a proof's rate limit or block is the site's, as any call's; a spent budget is no answer of the site
+    if (!spent) coolAfter(siteName, op, f, log);
     const out = { ...f, ms: Date.now() - t0 };
     if (!proof)
       appendCall({
@@ -1312,7 +1367,7 @@ async function run(
         minIntervalMs: opts.minIntervalMs,
       });
     }
-    if (out.ok && !proof && out.data !== undefined) return shape(out, op, opts, snap);
+    if (out.ok && !proof && out.data !== undefined) return shape(out, op, opts, keep);
     return out;
   };
   const write = !op.readOnly;
@@ -1320,10 +1375,13 @@ async function run(
   try {
     budget = sitePace(site);
   } catch (e) {
+    if (!(e instanceof PaceConfigError)) throw e;
+    // the user's own setting: nothing about the site or its spec, so nothing for the registry
+    spent = true;
     return done({
       ok: false,
       class: "error",
-      reason: (e as Error).message,
+      reason: e.message,
       next: "ask the user to fix API_ANYTHING_PACE (for example interval=2s,perHour=60,<site>:perHour=30)",
       nextCall: { action: "report" },
       retry: "after_fix",
@@ -1331,7 +1389,21 @@ async function run(
   }
   if (budget.minIntervalMs !== undefined)
     opts = { ...opts, minIntervalMs: Math.max(opts.minIntervalMs ?? 1000, budget.minIntervalMs) };
-  countSends(siteName, budget.perHour !== undefined);
+  // A write's readback is part of the write the user asked for: its sends are counted, never refused.
+  const sendBudget: SendBudget | undefined = limited(budget)
+    ? { site: siteName, pace: budget, ...(proof || opts.budgetExempt ? { exempt: true } : {}) }
+    : undefined;
+  const overBudget = (over: BudgetSpent): Promise<CallResult> => {
+    spent = true;
+    return done({
+      ok: false,
+      class: "rate",
+      reason: over.message,
+      retryAfterMs: over.retryAfterMs,
+      budget: true,
+      next: "the site's request budget is spent: do not retry before retryAfterMs; nothing more was sent (the budget is the spec's pace, or API_ANYTHING_PACE)",
+    });
+  };
   if (write && !opts.allowWrites) {
     return done({
       ok: false,
@@ -1344,13 +1416,36 @@ async function run(
   if (unknown) return done({ ok: false, class: "input", reason: unknown, next: nextFor("input", siteName, op) });
   // Resolved once: the tier-3 trigger and its answer's match take a default just as the request does.
   args = withDefaults(op, args);
+  // The session before any kept answer: one is only ever served to the session it was for.
+  let session: Session;
+  try {
+    if (theirs) dropUnbound(siteName);
+    jar = loadSession(siteName);
+    session = callSession(site, op, jar, theirs);
+  } catch (e) {
+    return done(badSession(siteName, e));
+  }
+  // the args as the request takes them: one that cannot go is refused before any kept answer is looked up
+  try {
+    buildRequest(op, args, session);
+  } catch (e) {
+    return done(unsendable(siteName, op, e));
+  }
+  const watching = opts.changes || opts.changesOnly || opts.watch !== undefined;
   // A write is never kept or answered from a kept answer: each call is the user's action.
-  if (!write && !proof && (opts.maxAgeMs !== undefined || opts.changes || opts.changesOnly)) {
-    snap = snapshotKey(siteName, op, args);
-    const hit = opts.maxAgeMs !== undefined ? loadSnapshot(snap) : undefined;
-    const ageMs = hit ? Date.now() - hit.at : -1;
+  if (!write && !proof && (opts.maxAgeMs !== undefined || watching)) {
+    const id: Identity = { site: siteName, op, args, session: sessionPrint(op, session, site.loginCookies) };
+    keep = {
+      cache: cacheKey(id),
+      ...(watching ? { watch: watchKey(id, opts.watch ?? DEFAULT_WATCH) } : {}),
+      op: opPrint(site, op),
+      recipe: recipeOf(op),
+    };
+    const hit = opts.maxAgeMs !== undefined ? loadSnapshot(keep.cache) : undefined;
+    const ageMs = hit ? clock.now() - hit.at : -1;
+    const cap = callTiers(site, op, opts.maxTier).maxTier;
     // nothing was sent: no call log line, no report, no budget spent
-    if (hit && hit.recipe === recipeOf(op) && ageMs >= 0 && ageMs <= opts.maxAgeMs!)
+    if (hit && hit.op === keep.op && (hit.tier ?? 1) <= cap && ageMs >= 0 && ageMs <= opts.maxAgeMs!)
       return shape(
         {
           ok: true,
@@ -1364,22 +1459,9 @@ async function run(
         },
         op,
         opts,
-        snap,
+        keep,
         hit,
       );
-  }
-  let session: Session;
-  try {
-    if (theirs) dropUnbound(siteName);
-    jar = loadSession(siteName);
-    session = callSession(site, op, jar, theirs);
-  } catch (e) {
-    return done(badSession(siteName, e));
-  }
-  try {
-    buildRequest(op, args, session);
-  } catch (e) {
-    return done(unsendable(siteName, op, e));
   }
   const capped = unconfirmed(site, op);
   // a proof's op is named by a label, not one the site holds
@@ -1391,19 +1473,9 @@ async function run(
   // A site that said stop is not asked again until its wait is over: before the write's ledger, as nothing is sent.
   held = opts.ignoreCoolDown ? undefined : cooling(siteName);
   if (held) return done(cooled(held, siteName));
-  // A write's readback is part of the write the user asked for: it is counted, never refused.
-  const over = proof ? undefined : overBudget(siteName, budget);
-  if (over) {
-    spent = true;
-    return done({
-      ok: false,
-      class: "rate",
-      reason: over.reason,
-      retryAfterMs: over.retryAfterMs,
-      budget: true,
-      next: "the site's request budget is spent: do not retry before retryAfterMs; nothing was sent (the budget is the spec's pace, or API_ANYTHING_PACE)",
-    });
-  }
+  // An early answer, before a write's ledger; each send is held to the budget again as it goes (`reserveSend`).
+  const over = sendBudget && !sendBudget.exempt ? budgetCheck(siteName, budget) : undefined;
+  if (over) return overBudget(over);
   // auth recovery steps taken this call: 1 re-import, 2 the profile's cookies, 3 a trigger run
   let authStep = 0;
   /** where the user signs in again when a re-import brought back no new login (`reimportIfBrowser`) */
@@ -1479,156 +1551,166 @@ async function run(
     shared: site.shared,
     unconfirmed: capped,
     gen,
+    ...(sendBudget ? { budget: sendBudget } : {}),
   };
   // Why a call ran above tier 1, so a slow call explains itself.
   const notes: string[] = tier > op.minTier ? [`started at tier ${tier}: an earlier call escalated there`] : [];
   const noted = (a: Attempt) => success(a, notes.length ? { reason: notes.join("; ") } : {});
   let examplesChecked = false;
   let plainTried = false;
-  for (;;) {
-    if (tier > ctx.maxTier) return done(tierBlocked(site, op, { tier, maxTier: ctx.maxTier }, opts.maxTier, notes));
-    if (tier > 1 && !browserAvailable()) {
-      return done({
-        ok: false,
-        class: "blocked",
-        tier,
-        reason: `tier ${tier} needs a Chromium browser (Google Chrome, Brave, Edge or Chromium)`,
-        next: "install one, or set API_ANYTHING_BROWSER to its path, then retry once",
-        nextCall: { action: "install_browser" },
-      });
-    }
-    const a = await attempt(ctx, op, tier);
-    if (a.note) notes.push(a.note);
-    if (a.class === "ok") {
-      // Only an escalation is remembered; a tier the spec itself asks for is not, so editing minTier takes effect.
-      const keep = tier > op.minTier ? tier : undefined;
-      if (remembered !== keep && !proof) rememberTier(siteName, op.name, keep);
-      return done(noted(a));
-    }
-    const fail = (x = a, reason = a.note ? `${a.reason}; ${a.note}` : a.reason): Promise<CallResult> =>
-      done({
-        ok: false,
-        class: x.class,
-        tier,
-        reason,
-        next: nextFor(x.class, siteName, op, x, signIn?.text),
-        ...(x.class === "auth" && signIn ? { nextCall: signIn.step } : {}),
-        ...stepOf(x),
-        ...(x.server ? { server: true as const } : {}),
-      });
-    // Approval covers this transport and session, not a retry in another profile or with refreshed cookies.
-    if (write && (opts.callOnly || !notRun(a))) return fail();
-    // Plain HTTP refused a read from a site with no login on record. Some walls refuse a client that
-    // claims to be Chrome without Chrome's TLS (Hacker News's 419 "Sorry"): the same request goes once
-    // more without the browser's identity headers, before any recovery or browser. Nothing is kept, so
-    // the next call sends the stored template first and pays this one fast request again.
-    const plain =
-      tier === 1 && !write && !plainTried && (a.class === "auth" || a.class === "blocked") && withoutIdentity(op);
-    if (plain && noLogin()) {
-      plainTried = true;
-      const b = await attempt(ctx, plain, 1);
-      const why = `tier 1 said ${a.class} (${a.reason})`;
-      if (b.class === "ok") {
-        if (remembered !== undefined) rememberTier(siteName, op.name, undefined);
-        const reason = [...notes, `${why}; plain HTTP answered without the browser's identity headers`];
-        return done(success(b, { reason: reason.join("; ") }));
-      }
-      // a 429 is the site's answer to this client too: a browser would only add load
-      if (b.class === "rate") return fail(b, `${why}; without the browser's identity headers: ${b.reason}`);
-    }
-    // A bare 403 is a wall or a refusal of this one entity (a private profile): if the example args
-    // answer through the same tier, the args are the problem, and a browser run would not help.
-    if (a.class === "blocked" && a.missing && !write && !examplesChecked && !opts.callOnly) {
-      examplesChecked = true;
-      const examples = exampleArgs(op);
-      if (
-        examples &&
-        !sameArgs(examples, args, op) &&
-        (await attempt({ ...ctx, args: examples }, op, tier)).class === "ok"
-      ) {
+  // A send the budget refuses, at any tier or retry, ends the call: nothing more went.
+  const ladder = async (): Promise<CallResult> => {
+    for (;;) {
+      if (tier > ctx.maxTier) return done(tierBlocked(site, op, { tier, maxTier: ctx.maxTier }, opts.maxTier, notes));
+      if (tier > 1 && !browserAvailable()) {
         return done({
           ok: false,
-          class: "input",
+          class: "blocked",
           tier,
-          reason: `refused for these args (${a.reason}); the example args still return data, so the operation works`,
-          next: `check the args (a private, restricted or missing entity is refused this way) against: api-anything ops ${siteName}; do not heal or re-add`,
+          reason: `tier ${tier} needs a Chromium browser (Google Chrome, Brave, Edge or Chromium)`,
+          next: "install one, or set API_ANYTHING_BROWSER to its path, then retry once",
+          nextCall: { action: "install_browser" },
         });
       }
-    }
-    // a 451 is the site's answer to this network: a browser on it gets the same
-    if (a.class === "blocked" && tier < (write ? 2 : 3) && a.status !== 451) {
-      notes.push(`tier ${tier} was blocked (${a.reason})`);
-      tier++;
-      continue;
-    }
-    // Each step once per call, at any tier; a retry that still says auth goes on to the next step (a
-    // changed analytics cookie is a changed request, not a renewed token). A write gets here only
-    // when it certainly did not run.
-    if (a.class === "auth" && authStep < 3) {
-      // An imported session is a mirror of the everyday browser: silently re-import from the same
-      // profile once (browserless), in case the human re-signed in there. It lands in the jar and
-      // in the Chrome profile tiers 2 and 3 send from. Then retry.
-      if (authStep < 1 && (await reimport())) continue;
-      // tier 3 ran the site's own page: the profile's cookies and session values are what it just used
-      if (tier === 3 || ctx.maxTier <= 1) return fail();
-      if (authStep < 2) {
-        authStep = 2;
-        // the profile's cookies into the jar: none of the user's session is touched for an unconfirmed op
-        if (!ctx.unconfirmed && (await refreshCookies(ctx, op, tier))) continue;
+      const a = await attempt(ctx, op, tier);
+      if (a.note) notes.push(a.note);
+      if (a.class === "ok") {
+        // Only an escalation is remembered; a tier the spec itself asks for is not, so editing minTier takes effect.
+        const keep = tier > op.minTier ? tier : undefined;
+        if (remembered !== keep && !proof) rememberTier(siteName, op.name, keep);
+        return done(noted(a));
       }
-      authStep = 3;
-      // Session values (a bearer, a guest token) come from the site's own requests: a trigger run
-      // refreshes them, and for a read its answer is this call's answer.
-      if (
-        op.readOnly &&
-        ctx.maxTier >= 3 &&
-        browserAvailable() &&
-        op.slots.some((s) => s.ref?.startsWith("session:"))
-      ) {
-        const b = await attempt(ctx, op, 3);
+      const fail = (x = a, reason = a.note ? `${a.reason}; ${a.note}` : a.reason): Promise<CallResult> =>
+        done({
+          ok: false,
+          class: x.class,
+          tier,
+          reason,
+          next: nextFor(x.class, siteName, op, x, signIn?.text),
+          ...(x.class === "auth" && signIn ? { nextCall: signIn.step } : {}),
+          ...stepOf(x),
+          ...(x.server ? { server: true as const } : {}),
+        });
+      // Approval covers this transport and session, not a retry in another profile or with refreshed cookies.
+      if (write && (opts.callOnly || !notRun(a))) return fail();
+      // Plain HTTP refused a read from a site with no login on record. Some walls refuse a client that
+      // claims to be Chrome without Chrome's TLS (Hacker News's 419 "Sorry"): the same request goes once
+      // more without the browser's identity headers, before any recovery or browser. Nothing is kept, so
+      // the next call sends the stored template first and pays this one fast request again.
+      const plain =
+        tier === 1 && !write && !plainTried && (a.class === "auth" || a.class === "blocked") && withoutIdentity(op);
+      if (plain && noLogin()) {
+        plainTried = true;
+        const b = await attempt(ctx, plain, 1);
+        const why = `tier 1 said ${a.class} (${a.reason})`;
         if (b.class === "ok") {
-          const why = [...notes, `tier ${tier} said ${a.class} (${a.reason})`].join("; ");
-          return done(success(b, { reason: `${why}; refreshed the session through the site's own request` }));
+          if (remembered !== undefined) rememberTier(siteName, op.name, undefined);
+          const reason = [...notes, `${why}; plain HTTP answered without the browser's identity headers`];
+          return done(success(b, { reason: reason.join("; ") }));
         }
-        // The run answered other args (a trigger fixed to one page), but it refreshed the session values: retry once.
+        // a 429 is the site's answer to this client too: a browser would only add load
+        if (b.class === "rate") return fail(b, `${why}; without the browser's identity headers: ${b.reason}`);
+      }
+      // A bare 403 is a wall or a refusal of this one entity (a private profile): if the example args
+      // answer through the same tier, the args are the problem, and a browser run would not help.
+      if (a.class === "blocked" && a.missing && !write && !examplesChecked && !opts.callOnly) {
+        examplesChecked = true;
+        const examples = exampleArgs(op);
+        if (
+          examples &&
+          !sameArgs(examples, args, op) &&
+          (await attempt({ ...ctx, args: examples }, op, tier)).class === "ok"
+        ) {
+          return done({
+            ok: false,
+            class: "input",
+            tier,
+            reason: `refused for these args (${a.reason}); the example args still return data, so the operation works`,
+            next: `check the args (a private, restricted or missing entity is refused this way) against: api-anything ops ${siteName}; do not heal or re-add`,
+          });
+        }
+      }
+      // a 451 is the site's answer to this network: a browser on it gets the same
+      if (a.class === "blocked" && tier < (write ? 2 : 3) && a.status !== 451) {
+        notes.push(`tier ${tier} was blocked (${a.reason})`);
+        tier++;
         continue;
       }
-      // A write's page-issued token (a CSRF field, fb_dtsg) went stale, and a login renews only cookies:
-      // run the trigger as learning does, the write intercepted and never sent, to refresh it; retry once.
-      if (
-        !op.readOnly &&
-        ctx.maxTier >= 3 &&
-        browserAvailable() &&
-        op.slots.some((s) => s.ref?.startsWith("session:"))
-      ) {
-        try {
-          await runOpTrigger(siteName, op, args, { intercept: true });
+      // Each step once per call, at any tier; a retry that still says auth goes on to the next step (a
+      // changed analytics cookie is a changed request, not a renewed token). A write gets here only
+      // when it certainly did not run.
+      if (a.class === "auth" && authStep < 3) {
+        // An imported session is a mirror of the everyday browser: silently re-import from the same
+        // profile once (browserless), in case the human re-signed in there. It lands in the jar and
+        // in the Chrome profile tiers 2 and 3 send from. Then retry.
+        if (authStep < 1 && (await reimport())) continue;
+        // tier 3 ran the site's own page: the profile's cookies and session values are what it just used
+        if (tier === 3 || ctx.maxTier <= 1) return fail();
+        if (authStep < 2) {
+          authStep = 2;
+          // the profile's cookies into the jar: none of the user's session is touched for an unconfirmed op
+          if (!ctx.unconfirmed && (await refreshCookies(ctx, op, tier))) continue;
+        }
+        authStep = 3;
+        // Session values (a bearer, a guest token) come from the site's own requests: a trigger run
+        // refreshes them, and for a read its answer is this call's answer.
+        if (
+          op.readOnly &&
+          ctx.maxTier >= 3 &&
+          browserAvailable() &&
+          op.slots.some((s) => s.ref?.startsWith("session:"))
+        ) {
+          const b = await attempt(ctx, op, 3);
+          if (b.class === "ok") {
+            const why = [...notes, `tier ${tier} said ${a.class} (${a.reason})`].join("; ");
+            return done(success(b, { reason: `${why}; refreshed the session through the site's own request` }));
+          }
+          // The run answered other args (a trigger fixed to one page), but it refreshed the session values: retry once.
           continue;
-        } catch {
-          // no browser run: the call keeps its auth answer
+        }
+        // A write's page-issued token (a CSRF field, fb_dtsg) went stale, and a login renews only cookies:
+        // run the trigger as learning does, the write intercepted and never sent, to refresh it; retry once.
+        if (
+          !op.readOnly &&
+          ctx.maxTier >= 3 &&
+          browserAvailable() &&
+          op.slots.some((s) => s.ref?.startsWith("session:"))
+        ) {
+          try {
+            await runOpTrigger(siteName, op, args, { intercept: true });
+            continue;
+          } catch {
+            // no browser run: the call keeps its auth answer
+          }
         }
       }
-    }
-    // a proof that drifted is no answer: the write stays as it was, and its read is not healed here
-    if (a.class === "drift" && !proof) return done(await onDrift(ctx, site, op, a));
-    // Recovery is spent, plain HTTP still says auth, and the site has no login on record that could
-    // have run out: a wall that answers 419 or 401 to what is not a browser looks the same. One tier-2
-    // attempt tells them apart, for a read only: a page can send a request more than once (its own
-    // scripts, a retry after a navigation or a reset), and a write is sent once. When the attempt does
-    // not get the data, the call ends with tier 1's answer.
-    if (a.class === "auth" && tier === 1 && !write && ctx.maxTier >= 2 && browserAvailable() && noLogin()) {
-      const b = await attempt(ctx, op, 2);
-      if (b.class === "ok") {
-        if (!proof) rememberTier(siteName, op.name, 2);
-        const why = `tier 1 said auth with no login on record for this site (${a.reason}); a real page got the answer`;
-        return done(success(b, { reason: why }));
+      // a proof that drifted is no answer: the write stays as it was, and its read is not healed here
+      if (a.class === "drift" && !proof) return done(await onDrift(ctx, site, op, a));
+      // Recovery is spent, plain HTTP still says auth, and the site has no login on record that could
+      // have run out: a wall that answers 419 or 401 to what is not a browser looks the same. One tier-2
+      // attempt tells them apart, for a read only: a page can send a request more than once (its own
+      // scripts, a retry after a navigation or a reset), and a write is sent once. When the attempt does
+      // not get the data, the call ends with tier 1's answer.
+      if (a.class === "auth" && tier === 1 && !write && ctx.maxTier >= 2 && browserAvailable() && noLogin()) {
+        const b = await attempt(ctx, op, 2);
+        if (b.class === "ok") {
+          if (!proof) rememberTier(siteName, op.name, 2);
+          const why = `tier 1 said auth with no login on record for this site (${a.reason}); a real page got the answer`;
+          return done(success(b, { reason: why }));
+        }
       }
+      // A credential marked public (a web app's shared bearer) answers auth when the site rotated it,
+      // which no login fixes: re-learn it from the page, as for drift.
+      if (a.class === "auth" && op.readOnly && op.public?.length && noLogin() && !proof && !opts.callOnly)
+        return done(await onDrift(ctx, site, op, { ...a, class: "drift" }));
+      return fail();
     }
-    // A credential marked public (a web app's shared bearer) answers auth when the site rotated it,
-    // which no login fixes: re-learn it from the page, as for drift.
-    if (a.class === "auth" && op.readOnly && op.public?.length && noLogin() && !proof && !opts.callOnly)
-      return done(await onDrift(ctx, site, op, { ...a, class: "drift" }));
-    return fail();
+  };
+  try {
+    return await ladder();
+  } catch (e) {
+    if (e instanceof BudgetSpent) return overBudget(e);
+    throw e;
   }
 }
 

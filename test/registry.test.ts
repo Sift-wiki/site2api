@@ -442,6 +442,18 @@ beforeEach(() => {
 const share = (s: Site, notes?: string) => fake.sites.set(s.name, served(s, notes));
 const json = (body: unknown) => new Response(JSON.stringify(body), { headers: { "content-type": "application/json" } });
 
+test("pull: a served pace lands in the copy, and one the shared rules refuse fails the pull", async () => {
+  share(spec({ pace: { minIntervalMs: 2000, perHour: 60 } }));
+  await pull("demo");
+  assert.deepEqual(loadSite("demo")!.site.pace, { minIntervalMs: 2000, perHour: 60 });
+  // a pace that would make the site unusable, as the registry might serve it
+  fake.sites.set("demo", { ...served(spec()), pace: { minIntervalMs: 120_000 } });
+  await assert.rejects(pull("demo"), /pace minIntervalMs is 120000/);
+  fake.sites.set("demo", { ...served(spec()), pace: { perHour: 1e20 } });
+  await assert.rejects(pull("demo"));
+  assert.deepEqual(loadSite("demo")!.site.pace, { minIntervalMs: 2000, perHour: 60 }, "the last good copy stays");
+});
+
 test("pull: someone's site lands in the registry copy, marked as theirs, each op its version, and calls like any other", async () => {
   share(spec(), "Search is stories only.\n");
   const r = await pull("demo");

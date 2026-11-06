@@ -73,6 +73,22 @@ export async function settle(ms: number): Promise<void> {
   }
 }
 
+/** How long `shutdown` gives background work (a bundled site's upgrade, queued reports) before stopping it. */
+export const SHUTDOWN_MS = 2_000;
+
+/**
+ * Let a library caller's process exit: background registry work gets up to `SHUTDOWN_MS` to finish
+ * and flush queued reports, then whatever is still in flight is aborted, and the browser is closed.
+ */
+export async function shutdown(): Promise<void> {
+  try {
+    await settle(SHUTDOWN_MS);
+  } finally {
+    const { closeBrowser } = await import("./browser.js");
+    await closeBrowser();
+  }
+}
+
 /**
  * After a call of `op` (its spec as the call found it). A healed op is reported as a failure of the
  * version it was, whose stored request drifted, and its repair is shared back (share.ts healBack).

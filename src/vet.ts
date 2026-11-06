@@ -6,7 +6,7 @@
 import { parse } from "tldts";
 import { walk } from "./codec.js";
 import { siteOf } from "./domain.js";
-import { returnedFields } from "./extract.js";
+import { parsePath, returnedFields } from "./extract.js";
 import { linkProblems } from "./links.js";
 import {
   credentialName,
@@ -30,8 +30,11 @@ export const LIMITS = {
   companions: 8,
   enum: 100,
   checks: 10,
-  /** a shared pace may slow its callers down, never past an hour a request, and caps them at no more than this an hour */
-  paceIntervalMs: [1000, 60 * 60_000],
+  /**
+   * A shared pace slows its callers down, never so far that the site is unusable: at most a minute
+   * between requests (a longer gap answers rate, budget.ts's 10 s wait), and at least one an hour.
+   */
+  paceIntervalMs: [1000, 60_000],
   perHour: [1, 1000],
 } as const;
 
@@ -604,7 +607,8 @@ export function vetShared(site: Site, notes?: string): Vetted {
   };
   long("description", site.description);
   const bounded = (what: string, v: number | undefined, [lo, hi]: readonly [number, number]) => {
-    if (v !== undefined && (v < lo || v > hi)) errors.push(`pace ${what} is ${v}; from ${lo} to ${hi}`);
+    if (v !== undefined && !(Number.isSafeInteger(v) && v >= lo && v <= hi))
+      errors.push(`pace ${what} is ${v}; a whole number from ${lo} to ${hi}`);
   };
   bounded("minIntervalMs", site.pace?.minIntervalMs, LIMITS.paceIntervalMs);
   bounded("perHour", site.pace?.perHour, LIMITS.perHour);
@@ -627,11 +631,14 @@ export function vetShared(site: Site, notes?: string): Vetted {
     const key = op.response.key;
     if (key !== undefined) {
       const returns = returnedFields(op.response);
+      // read as `changes` reads it: the extractor's own steps
+      const steps = key.length > LIMITS.regex ? undefined : parsePath(key);
+      const first = steps?.[0];
       if (key.length > LIMITS.regex)
         errors.push(at(`response key is ${key.length} characters; at most ${LIMITS.regex}`));
-      else if (!ONE_VALUE_PATH.test(key))
+      else if (!steps || steps.some((s) => "all" in s))
         errors.push(at(`response key ${JSON.stringify(key)} is not a path to one value`));
-      else if (returns && !returns.includes(key.split(/[.[]/)[0]!))
+      else if (returns && !(first && "key" in first && returns.includes(first.key)))
         errors.push(at(`response key ${key} is no field it returns (${returns.join(", ")})`));
     }
     for (const p of op.params) {
