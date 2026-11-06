@@ -386,8 +386,8 @@ go — avoid heavy automated traffic on it. Other ways in:
 - `api-anything logout <site>` deletes the stored session (it needs no key, so it also resets a sealed
   session whose key is lost).
 
-**How the session is stored.** The session file (`~/.api-anything/sessions/<site>.json`) and
-captures are sealed with AES-256-GCM, so a backup, a synced folder or a copied home does not carry
+**How the session is stored.** The session file (`~/.api-anything/sessions/<site>.json`),
+captures and the answers kept for `--max-age` and `--changes` (`snapshots/`) are sealed with AES-256-GCM, so a backup, a synced folder or a copied home does not carry
 your logins. The key is made on first use and kept in the macOS Keychain (item `api-anything`,
 created by `security`, so reading it shows no dialog), the Secret Service on Linux (`secret-tool`),
 or DPAPI on Windows. On a machine with none of those, such as a container or CI, set
@@ -395,7 +395,7 @@ or DPAPI on Windows. On a machine with none of those, such as a container or CI,
 sealed files cannot be read, and a wrong one is an error, not an empty session. Keep `key-salt.json`
 too: if it goes missing while passphrase-sealed files exist, api-anything refuses to make a new one
 and says to restore it. To start over, run `api-anything logout <site>` for each site, delete the
-files in `captures/`, and log in again.
+files in `captures/` and `snapshots/`, and log in again.
 
 A sealed file starts with the line `#api-anything-sealed`. api-anything 0.3.2 and earlier refuse such
 a file as corrupt instead of reading it as an empty session, so going back to an older version does

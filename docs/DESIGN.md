@@ -1722,8 +1722,10 @@ synced home folder, a stray `git add` or a lost disk carries them. So both are s
 AES-256-GCM (node:crypto) under one 32-byte data key. On macOS, `login` decrypts cookies Chrome keeps
 behind the Keychain; storing them less protected than the browser did would undo that.
 
-- **What is sealed**: `sessions/<site>.json` and `captures/<id>.json`, through `readSealed` and
-  `writeSealed`, not through `writePrivate`, so no other file changes. Captures keep their values,
+- **What is sealed**: `sessions/<site>.json`, `captures/<id>.json` and the kept answers in
+  `snapshots/<hash>.json` (a signed-in read's answer is the user's data), through `readSealed` and
+  `writeSealed`, not through `writePrivate`, so no other file changes. A snapshot that cannot be
+  opened is a cache miss, and one that cannot be sealed is not kept (`Saved.reason`). Captures keep their values,
   because learning reads them: `learnOrExplain` takes the capture's `cookies` and `storage` as the
   live values (`ownSession`, `known`), `sentCookies` reads each request's `cookie` header, and add and
   learn_site merge the run's cookies and the session values found in its headers into the jar
@@ -1789,9 +1791,9 @@ behind the Keychain; storing them less protected than the browser did would undo
   both (it does not turn sealing off where a key exists).
 - **Migration**: a plaintext file still reads, and is written sealed the next time it is saved. The
   first time a process has a key for a home whose `sealed.json` does not say `migrated`, the existing
-  session and capture files are sealed in place (captures keep their modification time, which
-  pruning reads). Each session is re-read and sealed under the same lock its writers take
-  (`tryLock(sessionFile(site))`), so an update made meanwhile is not lost; `withLock` is re-entrant
+  session, capture and snapshot files are sealed in place (captures keep their modification time, which
+  pruning reads). Each session (and snapshot) is re-read and sealed under the same lock its writers
+  take (`tryLock(sessionFile(site))`), so an update made meanwhile is not lost; `withLock` is re-entrant
   within a process, so a caller already holding that lock (migration starts inside the first save)
   seals it at once. A session whose lock stays busy for 1 s, or a corrupt or unwritable file, is left
   for the next process or the next `status` (which retries even in a long-lived MCP server), and

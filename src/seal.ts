@@ -1,9 +1,9 @@
 /**
- * Files that hold credential values (session jars, captures) are sealed with AES-256-GCM under one
- * 32-byte data key. The key lives in the OS store (macOS Keychain, Linux Secret Service, Windows
- * DPAPI) or comes from the `API_ANYTHING_KEY` passphrase. Only a home that has never sealed a file,
- * on a machine with no key store at all, writes 0600 plaintext (and the caller is told once); any
- * other key failure refuses the write.
+ * Files that hold credential values or signed-in answers (session jars, captures, kept answers in
+ * snapshots/) are sealed with AES-256-GCM under one 32-byte data key. The key lives in the OS store
+ * (macOS Keychain, Linux Secret Service, Windows DPAPI) or comes from the `API_ANYTHING_KEY`
+ * passphrase. Only a home that has never sealed a file, on a machine with no key store at all,
+ * writes 0600 plaintext (and the caller is told once); any other key failure refuses the write.
  */
 import { spawnSync } from "node:child_process";
 import { createCipheriv, createDecipheriv, createHmac, randomBytes, scryptSync } from "node:crypto";
@@ -238,6 +238,7 @@ const markerFile = () => join(home(), "sealed.json");
 const DIRS = [
   ["sessions", "session"],
   ["captures", "capture"],
+  ["snapshots", "snapshot"],
 ] as const;
 
 interface Marker {
@@ -274,7 +275,7 @@ function head(file: string, n = 512): string {
   }
 }
 
-/** The `key` of each sealed session or capture file here (its envelope's source), one per file. */
+/** The `key` of each sealed session, capture or snapshot file here (its envelope's source), one per file. */
 function sealedKeys(): string[] {
   const keys: string[] = [];
   for (const [dir] of DIRS) {
@@ -367,7 +368,7 @@ function passphraseKey(pass: string): DataKey {
     } catch (e) {
       kept = { salt: firstLine(e) };
     }
-    const reset = `run api-anything logout <site> for each site in ${join(home(), "sessions")}, delete the files in ${join(home(), "captures")}, then log in again`;
+    const reset = `run api-anything logout <site> for each site in ${join(home(), "sessions")}, delete the files in ${join(home(), "captures")} and ${join(home(), "snapshots")}, then log in again`;
     if (kept !== undefined && (typeof kept?.salt !== "string" || typeof kept.kid !== "string"))
       throw new SealError(
         `${saltFile()} is damaged, so the passphrase's key cannot be made`,
@@ -457,7 +458,7 @@ function dataKey(sealedWith?: string): DataKey | undefined {
     `this home's credential files are sealed with the ${source} key, which is not available here (${got.none}); nothing is written unsealed`,
     source === "passphrase"
       ? "set API_ANYTHING_KEY to the passphrase they were sealed with"
-      : `run api-anything where the ${source} key store is available; or, to start over unsealed here, delete ${markerFile()} and the files in ${join(home(), "sessions")} and ${join(home(), "captures")}, then log in again`,
+      : `run api-anything where the ${source} key store is available; or, to start over unsealed here, delete ${markerFile()} and the files in ${join(home(), "sessions")}, ${join(home(), "captures")} and ${join(home(), "snapshots")}, then log in again`,
   );
 }
 
@@ -644,9 +645,9 @@ function migrateOne(k: DataKey, file: string, label: string): boolean {
 }
 
 /**
- * The first time a process has a key for a home whose migration is not done: seal the session and
- * capture files written before sealing, in place. Each session is re-read and sealed under the lock
- * its writers take, so an update made meanwhile is kept. A file that could not be sealed is left for
+ * The first time a process has a key for a home whose migration is not done: seal the session,
+ * capture and snapshot files written before sealing, in place. Each session and snapshot is re-read
+ * and sealed under the lock its writers take, so an update made meanwhile is kept. A file that could not be sealed is left for
  * the next process (and `status` reports it); completion is recorded only when none is left.
  */
 function migrate(k: DataKey): void {
@@ -668,7 +669,8 @@ function migrate(k: DataKey): void {
       const file = join(home(), dir, f);
       const one = () => migrateOne(k, file, `${kind}:${f.slice(0, -5)}`);
       try {
-        const done = kind === "session" ? tryLock(file, one)?.value : one();
+        // sessions and snapshots are read-modify-written under a lock; a capture is written once
+        const done = kind === "capture" ? one() : tryLock(file, one)?.value;
         if (!done) left++;
       } catch {
         left++; // a corrupt or unwritable file is left for its reader to report

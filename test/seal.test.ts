@@ -38,6 +38,7 @@ import {
   writeSealed,
 } from "../src/seal.js";
 import { CAPTURE_TTL_MS, loadSession, mergeCapture, saveSession, sessionFile } from "../src/session.js";
+import { loadSnapshot, saveSnapshot } from "../src/snapshots.js";
 import { status } from "../src/status.js";
 import type { StoredCookie } from "../src/types.js";
 
@@ -711,4 +712,35 @@ test("status reads a sealed session as sealed (the whole prefix, not a 64-charac
   saveSession("site", { cookies: jar(), values: { authorization: "Bearer abcdef" } });
   assert.deepEqual(plaintextProblems(), []);
   assert.deepEqual(status().storage, { sealed: true, key: "memory" });
+});
+
+test("kept answers in snapshots/ are sealed; a key error keeps none in plaintext; a plaintext one is migrated", () => {
+  const store = memoryStore();
+  setKeyStore(store);
+  const answer = { at: Date.now(), op: "op1", data: { inbox: SECRET } };
+  assert.deepEqual(saveSnapshot("k1", answer), { kept: true });
+  const raw = readFileSync(join(home, "snapshots", "k1.json"), "utf8");
+  assert.ok(isSealedText(raw) && !raw.includes(SECRET));
+  assert.deepEqual(loadSnapshot("k1"), answer);
+
+  setKeyStore({
+    name: "flaky",
+    get() {
+      throw new Error("locked keychain");
+    },
+    put() {},
+  });
+  const r = saveSnapshot("k2", answer);
+  assert.equal(r.kept, false);
+  assert.ok(!existsSync(join(home, "snapshots", "k2.json")));
+  assert.equal(loadSnapshot("k1"), undefined, "a key error is a miss, not a plaintext answer");
+
+  const other = mkdtempSync(join(tmpdir(), "aa-seal-snap-"));
+  process.env.API_ANYTHING_HOME = other;
+  mkdirSync(join(other, "snapshots"), { recursive: true });
+  writeFileSync(join(other, "snapshots", "k3.json"), JSON.stringify(answer));
+  setKeyStore(store);
+  sealing();
+  assert.ok(isSealedText(readFileSync(join(other, "snapshots", "k3.json"), "utf8")));
+  assert.deepEqual(loadSnapshot("k3"), answer);
 });
