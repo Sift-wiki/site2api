@@ -765,11 +765,14 @@ against the local test site the suite uses. No write operation is bundled.
 ## What leaves your machine
 
 Calls run on your machine, your network and your sessions. The catalog stores specs and counts
-reports; it never proxies your calls.
+reports; it never proxies your calls. Its only request to a site is the "try it" endpoint for a few
+public operations ([REGISTRY.md](REGISTRY.md)), which a visitor runs from the catalog's page.
 
 Whether sharing is on or off, a search goes to the catalog: the words, domain or URL your agent passes
 to `find_sites`, and the name of a shared site it calls before this machine has it. The catalog keeps
-no search words. With sharing on:
+no search words. Local-only mode (`api-anything setup --local-only`, or `API_ANYTHING_LOCAL_ONLY=1`)
+stops every registry request, searches included; searches then cover this machine only and say so.
+With sharing on:
 
 - **Operations learned from public pages.** Shared automatically only when it is a read, it was
   learned signed out, and the replay with no cookies answered (with the data, or with a bot wall
@@ -780,8 +783,10 @@ no search words. With sharing on:
   3 networks learned exactly the same thing.
 - **Reports.** After a call: which version ran, the outcome, the transport tier and the time. No
   arguments and no data. Each is signed by your install's anonymous key.
-- **Background checks.** An idle MCP server calls a few new operations a day (at most 20) with their
-  published examples, over plain HTTP with no cookies, only to https addresses on public hosts.
+- **Background checks, only with verification on too.** Verification is a separate question, asked
+  after a yes to sharing and defaulting to no (`setup --verify` or `--no-verify`). With it on, an idle
+  MCP server calls a few new operations a day (at most 20) with their published examples, from your
+  network over plain HTTP with no cookies, only to https addresses on public hosts.
 - **Repairs.** When a call heals a public operation that drifted, the repaired version is shared.
 
 With sharing off (`api-anything setup --no-share --share-only`), or before you answered, nothing is
