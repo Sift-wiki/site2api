@@ -114,17 +114,26 @@ class HttpError extends Error {
   }
 }
 
-/** The request's JSON body, at most BODY_MAX bytes; an empty one is undefined. */
+/**
+ * The request's JSON body, at most BODY_MAX bytes; an empty one is undefined. Past the cap it keeps
+ * none of it but lets the rest arrive (node discards a body left unread once the answer is sent):
+ * a socket closed under a client still sending makes it see a reset, never the 413.
+ */
 async function readBody(req: IncomingMessage): Promise<unknown> {
-  const declared = Number(req.headers["content-length"] ?? 0);
-  if (declared > BODY_MAX) throw new HttpError(413, `body over ${BODY_MAX} bytes`);
+  const tooBig = new HttpError(413, `body over ${BODY_MAX} bytes`);
+  if (Number(req.headers["content-length"] ?? 0) > BODY_MAX) throw tooBig;
   const chunks: Buffer[] = [];
   let size = 0;
-  for await (const chunk of req as AsyncIterable<Buffer>) {
-    size += chunk.length;
-    if (size > BODY_MAX) throw new HttpError(413, `body over ${BODY_MAX} bytes`);
-    chunks.push(chunk);
-  }
+  await new Promise<void>((resolve, reject) => {
+    req.on("data", (chunk: Buffer) => {
+      size += chunk.length;
+      if (size <= BODY_MAX) return void chunks.push(chunk);
+      chunks.length = 0;
+      reject(tooBig); // once settled, later calls do nothing
+    });
+    req.once("end", () => resolve());
+    req.once("error", reject);
+  });
   const text = Buffer.concat(chunks).toString("utf8");
   if (!text.trim()) return undefined;
   try {
@@ -378,8 +387,7 @@ export async function serve(o: ServeOptions = {}): Promise<Served> {
         });
       await route(req, res, url);
     } catch (e) {
-      if (e instanceof HttpError)
-        return fail(res, e.status, e.message, e.status === 413 ? { connection: "close" } : {});
+      if (e instanceof HttpError) return fail(res, e.status, e.message);
       log(`serve: ${req.method} ${url.pathname}: ${(e as Error).stack ?? e}`);
       fail(res, 500, `internal error: ${(e as Error).message.split("\n")[0]}`);
     } finally {

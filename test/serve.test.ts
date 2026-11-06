@@ -106,7 +106,14 @@ function http(
   s: Served,
   method: string,
   path: string,
-  o: { headers?: Record<string, string>; body?: unknown; raw?: string | Buffer; auth?: boolean } = {},
+  o: {
+    headers?: Record<string, string>;
+    body?: unknown;
+    raw?: string | Buffer;
+    /** sent in these pieces, chunked: no content-length */
+    pieces?: Buffer[];
+    auth?: boolean;
+  } = {},
 ): Promise<Answer> {
   const payload = o.raw ?? (o.body === undefined ? undefined : JSON.stringify(o.body));
   return new Promise((resolve, reject) => {
@@ -131,6 +138,7 @@ function http(
       },
     );
     r.on("error", reject);
+    for (const piece of o.pieces ?? []) r.write(piece);
     r.end(payload);
   });
 }
@@ -347,13 +355,19 @@ test("serve: malformed bodies and args that fail the schema are 400; unknown rou
   }
 });
 
-test("serve: a body over 1 MB is refused before it is read whole", async () => {
+test("serve: a body over 1 MB is a 413 the client reads, with or without a declared length", async () => {
   const s = await started();
   try {
     const big = Buffer.alloc(BODY_MAX + 1, 0x20);
-    const r = await http(s, "POST", `/v1/call/${SITE}/user`, { raw: big });
-    assert.equal(r.status, 413);
-    assert.equal(r.body.ok, false);
+    // the answer comes before the upload ends: a socket closed under the sender would be a reset
+    for (let i = 0; i < 10; i++) {
+      const r = await http(s, "POST", `/v1/call/${SITE}/user`, { raw: big });
+      assert.equal(r.status, 413);
+      assert.equal(r.body.ok, false);
+      const piece = Buffer.alloc(256 * 1024, 0x20);
+      const chunked = await http(s, "POST", `/v1/call/${SITE}/user`, { pieces: Array(8).fill(piece) });
+      assert.equal(chunked.status, 413);
+    }
     const fits = await http(s, "POST", `/v1/call/${SITE}/user`, {
       raw: `{"args":{"name":"eve"}}${" ".repeat(1000)}`,
     });
