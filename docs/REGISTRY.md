@@ -201,10 +201,10 @@ the JSON (the CSP adds `connect-src 'self'` for it), and without the script the 
 
 It runs only when all of these hold, checked on every request:
 
-- the site and op are in `TRY_OPS`, a list in the code: hacker-news `frontPage` and `getItem`, wikipedia
-  `searchArticles` and `getSummary`, openlibrary `getWork` and `getAuthor`, usgs-earthquakes `recent` and
-  `getEvent`, nasa-images `search`. Bundled public reads of harmless data, answered over plain HTTP by
-  hosts that answer a datacenter's address. Anything else is a 404 with nothing read or sent;
+- the site and op are in `TRY_OPS`, a list in the code: wikipedia `searchArticles` and `getSummary`,
+  openlibrary `getWork` and `getAuthor`, usgs-earthquakes `recent` and `getEvent`, nasa-images `search`.
+  Bundled public reads of harmless data, answered over plain HTTP by hosts that answer a datacenter's
+  address (Hacker News answers the Worker with HTTP 419, so it is not listed). Anything else is a 404 with nothing read or sent;
 - `TRY_ENABLED` is `true` (`registry/wrangler.jsonc` sets it; unset or any other value is off, a 503).
 
 What runs is the op as reviewed in the repo: the Worker build imports those sites' `sites/<name>.json`,
