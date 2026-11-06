@@ -3,7 +3,7 @@
  * as the spec says: the recipe's declared fields, else the stored learned shape. Never a call.
  */
 import { shapeKey, underTarget } from "./classify.js";
-import { pickEntry, returnedFields } from "./extract.js";
+import { hasWildcard, pickEntry, returnedFields } from "./extract.js";
 import type { Operation, OperationLink, Param, ResponseSpec, Site } from "./spec.js";
 
 type JsonSchema = Record<string, unknown>;
@@ -70,7 +70,7 @@ function extractedShape(r: ResponseSpec): Record<string, string> {
   }
   if (!ex) return rel;
   const own = shape[shapeKey(ex)];
-  if (ex.endsWith("[*]") || !ex.includes("[*]")) return own ? { ...rel, "": ex.endsWith("[*]") ? "array" : own } : rel;
+  if (ex.endsWith("[*]") || !hasWildcard(ex)) return own ? { ...rel, "": ex.endsWith("[*]") ? "array" : own } : rel;
   if (own === "array") return { ...rel, "": "array" };
   // each reached value is one item of the flattened list
   if (own === "object")
@@ -83,7 +83,8 @@ export function outputOf(r: ResponseSpec): OutputHints {
   const rel = extractedShape(r);
   const keys = Object.keys(rel).filter((k) => k);
   const root = rel[""];
-  const list = htmlItems || !!r.extract?.includes("[*]") || root === "array" || keys.some((k) => k.startsWith("[]"));
+  const list =
+    htmlItems || (!!r.extract && hasWildcard(r.extract)) || root === "array" || keys.some((k) => k.startsWith("[]"));
   const known = list || (root !== undefined && root !== "null") || keys.length > 0;
   const observed = (key: string): FieldHint => {
     const t = rel[key];
@@ -101,7 +102,7 @@ export function outputOf(r: ResponseSpec): OutputHints {
       const selector = htmlItems ? r.html!.fields[path] : undefined;
       const declared = re
         ? "string"
-        : path.includes("[*]")
+        : hasWildcard(path)
           ? "array"
           : selector !== undefined
             ? selector.startsWith("all:")

@@ -4,8 +4,12 @@ Import from `api-anything/host`, not the main library entry. Discovery and plann
 files only. Missing sites are not pulled. User specs win over pulled specs, then bundled ones.
 An invalid spec or session is omitted from `hostSites()`; `hostSite()` throws its local file error.
 `hostSite()` returns the shared `describeOperation` schemas and caller notes; each operation's
-`resultSchema` is the JSON Schema of the `CallResult` its call answers (`callResultSchema`, `data`
-typed by `opDataSchema` where the recipe fixes it; see `src/schema.ts`).
+`resultSchema` describes the `CallResult` a call of the stored recipe answers (`callResultSchema`,
+`data` described by `opDataSchema` where the recipe fixes it; see `src/schema.ts`). It is
+descriptive, not a contract: nothing validates an answer against it. It describes the recipe's
+whole answer, not a `view.fields` projection (`view: {fields: ["n=count"]}` can give `n` another
+type), and `data` follows the spec as it is when the call runs, which a heal or a re-add can
+change. A write's `data` is not described.
 Site text and returned data are untrusted website content, not instructions.
 
 ```ts

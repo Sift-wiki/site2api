@@ -8,9 +8,10 @@ import { test } from "node:test";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { AjvJsonSchemaValidator } from "@modelcontextprotocol/sdk/validation/ajv";
+import { classify, MAX_RETRY_AFTER_MS } from "../src/classify.js";
 import { hostSite } from "../src/host.js";
 import { createServer, type ServerOptions } from "../src/mcp.js";
-import { callResultSchema, opDataSchema, orTable } from "../src/schema.js";
+import { CALL_RESULT_SCHEMA, callResultSchema, opDataSchema } from "../src/schema.js";
 import { type Operation, parseSite } from "../src/spec.js";
 import { saveSite } from "../src/store.js";
 
@@ -45,6 +46,9 @@ async function localSite() {
       return void (released ? answer() : held.push(answer));
     }
     if (path === "/vote") return json(200, { voted: true });
+    if (path === "/count") return json(200, { value: "4 votes", count: 4 });
+    if (path === "/vote204") return res.writeHead(204).end();
+    if (path === "/huge") return json(429, { error: "slow down" }, { "retry-after": "9".repeat(400) });
     res.writeHead(404).end();
   });
   await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
@@ -323,7 +327,111 @@ test("opDataSchema types only what the response recipe fixes: a list, its fields
   assert.equal(one.type, undefined);
   assert.deepEqual(one.properties, { title: {}, ids: { type: "array" } });
   assert.deepEqual((one.items as { properties: object }).properties, one.properties);
-  assert.deepEqual(orTable({}), {}, "data the recipe says nothing of stays unconstrained");
+});
+
+test("opDataSchema reads paths as the extractor parses them: a [*] inside a quoted key is not a list", () => {
+  assert.deepEqual(opDataSchema(op({ format: "json", extract: '["literal[*]"]' })), {});
+  const quoted = opDataSchema(op({ format: "json", extract: "book", pick: ['ids=["a[*]"]', "all=list[*].id"] }));
+  assert.equal(quoted.type, undefined);
+  assert.deepEqual(quoted.properties, { ids: {}, all: { type: "array" } });
+  assert.equal(opDataSchema(op({ format: "json", extract: 'x["k"][*]' })).type, "array");
+});
+
+test("opDataSchema leaves a field untyped when two picks write it, and describes no write's data", () => {
+  const twice = opDataSchema(op({ format: "json", extract: "items[*]", pick: ["n=count", "n=missing~(\\d+)", "t~x"] }));
+  assert.deepEqual((twice.items as { properties: object }).properties, { n: {}, t: { type: "string" } });
+  const write = { ...op({ format: "json", extract: "items[*]", pick: ["n=v~(\\d+)"] }), readOnly: false };
+  assert.deepEqual(opDataSchema(write), {});
+});
+
+test("a huge Retry-After is clamped to a finite wait, so JSON keeps it a number", () => {
+  const r = classify(op({ format: "json" }), {
+    status: 429,
+    headers: { "content-type": "application/json", "retry-after": "9".repeat(400) },
+    body: "{}",
+  });
+  assert.deepEqual([r.class, r.retryAfterMs], ["rate", MAX_RETRY_AFTER_MS]);
+  const date = classify(op({ format: "json" }), {
+    status: 503,
+    headers: { "retry-after": "Fri, 31 Dec 9999 23:59:59 GMT" },
+    body: "",
+  });
+  assert.equal(date.retryAfterMs, MAX_RETRY_AFTER_MS);
+});
+
+/**
+ * Answers the old per-op data schemas rejected: a write's 204 under a list recipe, a pick whose type
+ * a re-add changed mid-session, and a rate limit whose wait overflowed to null.
+ */
+test("strict clients accept answers whose data the spec changed after the server started", async () => {
+  const env = {
+    home: process.env.API_ANYTHING_HOME,
+    browser: process.env.API_ANYTHING_BROWSER,
+    registry: process.env.API_ANYTHING_REGISTRY,
+  };
+  const home = mkdtempSync(join(tmpdir(), "aa-schema-drift-"));
+  process.env.API_ANYTHING_HOME = home;
+  process.env.API_ANYTHING_BROWSER = join(home, "no-chrome");
+  process.env.API_ANYTHING_REGISTRY = "http://127.0.0.1:1";
+  const site = await localSite();
+  let client: Client | undefined;
+  const fy = (pick: string[]) =>
+    parseSite({
+      name: "fy",
+      baseUrl: site.base,
+      operations: [
+        read(site.base, "count", "/count", { format: "json", pick }),
+        read(site.base, "huge"),
+        {
+          name: "vote204",
+          readOnly: false,
+          request: {
+            method: "POST",
+            url: `${site.base}/vote204`,
+            headers: { "content-type": "application/json" },
+            body: '{"id":"1"}',
+          },
+          slots: [{ param: "id", at: ["body", "json:/id"] }],
+          params: [{ name: "id" }],
+          response: { format: "json", extract: "items[*]" },
+          trigger: { url: `${site.base}/` },
+        },
+      ],
+    });
+  try {
+    saveSite(fy(["n=value~(\\d+)"]));
+    const s = await connect({ allowWrites: true, sites: ["fy"] });
+    client = s.client;
+    for (const name of ["fy__count", "fy__vote204", "call_operation"])
+      assert.deepEqual(s.tools.find((t) => t.name === name)!.outputSchema, {
+        ...CALL_RESULT_SCHEMA,
+        $schema: "http://json-schema.org/draft-07/schema#",
+        additionalProperties: {},
+      });
+
+    const vote = await s.answer("fy__vote204", { id: "1" });
+    assert.deepEqual([vote.ok, vote.data, vote.write], [true, null, "accepted"]);
+    assert.equal((await s.answer("call_write_operation", { site: "fy", op: "vote204", args: { id: "2" } })).ok, true);
+
+    assert.deepEqual((await s.answer("fy__count", { q: "a" })).data, { n: "4" });
+    // a re-add during the session: the next call runs the new pick, a number where a string was
+    saveSite(fy(["n=count"]));
+    assert.deepEqual((await s.answer("fy__count", { q: "b" })).data, { n: 4 });
+
+    const huge = await s.answer("call_operation", { site: "fy", op: "huge", args: { q: "a" } });
+    assert.deepEqual([huge.class, huge.retryAfterMs], ["rate", MAX_RETRY_AFTER_MS]);
+  } finally {
+    await client?.close();
+    site.close();
+    for (const [k, v] of [
+      ["API_ANYTHING_HOME", env.home],
+      ["API_ANYTHING_BROWSER", env.browser],
+      ["API_ANYTHING_REGISTRY", env.registry],
+    ] as const)
+      if (v === undefined) delete process.env[k];
+      else process.env[k] = v;
+    rmSync(home, { recursive: true, force: true });
+  }
 });
 
 test("callResultSchema requires only ok, and hostSite gives each op its result schema beside params", () => {

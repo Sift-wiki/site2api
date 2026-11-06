@@ -1858,28 +1858,32 @@ independent alternative.
     own errors have no `ok`). A type is given only where the code fixes it; the enums (`class`,
     `write`, `retry`, `tier`, `nextCall.action`) are checked by tsc against the code's own unions,
     so a new value cannot reach an answer before it reaches the schema. `get_job`'s is a call's
-    result widened to any job's answer. The SDK takes zod, so each JSON Schema is the meta of a
+    result widened to any job's answer. No validated schema constrains `data`, a per-op tool's
+    included: a tool's schema is fixed when the server starts, but each call runs the spec as it
+    is then, so a heal from the registry or a re-add during the session could change a pick's type
+    and fail a good answer (and a write's 204 has no data, whatever its recipe). Only the envelope,
+    which the code's own types fix, is typed. The SDK takes zod, so each JSON Schema is the meta of a
     loose zod object: the server's own check is only that the answer is an object, and the
     advertised JSON Schema is the contract. They are plain draft-07 with no type lists or
     `const`, so an OpenAPI 3.0 document can embed them. They name fields and types only, with no
     descriptions (the tools' descriptions say what the fields mean) and no
-    `additionalProperties` (the default allows them): `tools/list` is sent with every request, and
-    the schemas add about 15.7 KB of JSON to the meta-tools' and about 2.1 KB to each per-op tool,
-    paid by a client that hands them to its model. `callResultSchema(dataSchema?)` and
-    `opDataSchema(op)` are what other interfaces import, and `hostSite()` gives each op its
-    `resultSchema` beside `params`.
-  - A per-op tool's `data` is typed by `opDataSchema`, from the op's response recipe only, never
-    the learned shape (one capture's, and a learned `null` marks a field some items lack): a list
-    when the recipe always makes one (an HTML recipe's items, an extract path through `[*]`), the
-    fields its pick or HTML recipe names, none required, and a type only where the recipe fixes
-    it (a pick regex's string, an HTML field's text or `all:` list, a `[*]` pick path's list). An
-    item of a pick's list is not typed an object, since a pick keeps a non-object item as it is.
-    It allows the `{columns, rows}` form beside it (`orTable`). The schema is the op's at server
-    start: a heal from the registry or a re-add during the session can change the recipe, and a
-    pick field whose fixed type changed would then fail a strict client until the server restarts.
-    `call_operation` leaves `data` open: `view.fields` reshapes it.
+    `additionalProperties` (the default allows them). The call tools and per-op tools share one
+    envelope object, and `call_batch`, `get_result` and `learn_site` name only the fields their
+    answers carry: `tools/list` is sent with every request, and the schemas take the default tool
+    list from 16.6 KB to 29.6 KB of JSON and add about 1.8 KB to each per-op tool, paid by a client
+    that hands them to its model. `CALL_RESULT_SCHEMA` is what other interfaces validate against.
+  - `opDataSchema(op)` describes a read's `data`, for documentation only (an OpenAPI document,
+    `hostSite()`'s `resultSchema` through `callResultSchema(dataSchema)`); nothing validates an
+    answer against it. It reads the response recipe only, never the learned shape (one capture's,
+    and a learned `null` marks a field some items lack): a list when the recipe always makes one
+    (an HTML recipe's items, an extract path through a `[*]` step, as the extractor parses it, so
+    a quoted key `["a[*]"]` is not one), the fields its pick or HTML recipe names, none required,
+    and a type only where the recipe fixes it (a pick regex's string, an HTML field's text or
+    `all:` list, a path through `[*]`'s list). A field two picks write is untyped. An item of a
+    pick's list is not typed an object, since a pick keeps a non-object item as it is. A write's
+    `data` is `{}`. It describes the stored recipe's whole answer, not a `view.fields` projection.
     `test/schema.test.ts` drives the server with the SDK's own client and checks every tool's real
-    answers against what it advertises.
+    answers against what it advertises, including after the spec changes on disk mid-session.
   - `call_operation` sends `data` that is a list of two or more records as `{columns, rows}` (a
     missing field is null) when that makes the JSON smaller. A sparse table can be larger than the
     original records, so those stay a list to preserve the output cap. The keys, repeated in every

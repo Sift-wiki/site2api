@@ -35,16 +35,14 @@ import { type Pulled, pull, search } from "./registry.js";
 import { settle } from "./report.js";
 import { getResult, MAX_RESULT_CHARS, MIN_RESULT_CHARS, type ResultView } from "./results.js";
 import {
+  CALL_RESULT_SCHEMA,
   callBatchSchema,
-  callResultSchema,
   findSitesSchema,
   getResultSchema,
   type JsonSchema,
   jobResultSchema,
   listOperationsSchema,
   loginSchema,
-  opDataSchema,
-  orTable,
   siteStatusSchema,
 } from "./schema.js";
 import { type Operation, type Paging, readbackName } from "./spec.js";
@@ -590,7 +588,7 @@ export function createServer({
         args: z.record(z.string(), z.unknown()).optional().describe("param name -> value"),
         view: viewSchema.optional(),
       },
-      outputSchema: outputSchema(callResultSchema()),
+      outputSchema: outputSchema(CALL_RESULT_SCHEMA),
       annotations: READ_HINTS,
     },
     ({ site, op, args = {}, view }: { site: string; op: string; args?: Record<string, unknown>; view?: ResultView }) =>
@@ -691,7 +689,7 @@ export function createServer({
               "a key of your choosing for this write, passed on its first call: a repeat with it returns that call's record",
             ),
         },
-        outputSchema: outputSchema(callResultSchema()),
+        outputSchema: outputSchema(CALL_RESULT_SCHEMA),
         annotations: WRITE_HINTS,
       },
       ({
@@ -757,8 +755,8 @@ export function createServer({
           // The model reads this schema; call() judges the args, so a refusal is class input with its
           // format and next step, as through call_operation, never the SDK's bare validation text.
           inputSchema: z.looseObject({}).meta(inputSchema(o)),
-          // data as the op's recipe says at startup, or the {columns, rows} form a list of records may take
-          outputSchema: outputSchema(callResultSchema(orTable(opDataSchema(o)))),
+          // data stays open: the call runs the spec as it is then, which a re-add or a heal can change
+          outputSchema: outputSchema(CALL_RESULT_SCHEMA),
           annotations: o.readOnly ? READ_HINTS : WRITE_HINTS,
         },
         (args: Record<string, unknown>) => {

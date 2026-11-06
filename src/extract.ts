@@ -80,6 +80,9 @@ export function getPath(obj: unknown, path?: string): unknown {
 
 const pathSteps = (path: string) => [...path.matchAll(/\[(\d+)\]|\[(\*)\]|\["((?:[^"\\]|\\.)*)"\]|[^.[\]]+/g)];
 
+/** Whether a path maps over a list: a `[*]` step as getPath reads it, not one inside a quoted key (`["a[*]"]`). */
+export const hasWildcard = (path: string) => pathSteps(path).some((m) => m[2] !== undefined);
+
 function atPath(obj: unknown, steps: RegExpMatchArray[]): unknown {
   const walk = (cur: unknown, i: number): unknown => {
     for (; i < steps.length; i++) {

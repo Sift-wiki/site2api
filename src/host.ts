@@ -79,7 +79,12 @@ export type CallPlan =
 
 type ReadyPlan = Extract<CallPlan, { ok: true }>;
 
-/** An op's description, with `resultSchema` beside `params`: the JSON Schema of the CallResult its call answers. */
+/**
+ * An op's description, with `resultSchema` beside `params`: a JSON Schema describing the CallResult
+ * of a call of the stored recipe, its whole answer rather than a `view.fields` projection of it.
+ * Descriptive, not a contract: nothing validates an answer against it, and `data` follows the spec
+ * as it is when the call runs, which a heal or a re-add can change.
+ */
 export type HostOperationDescription = OperationDescription & { resultSchema?: JsonSchema };
 
 /**
