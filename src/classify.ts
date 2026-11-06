@@ -82,7 +82,7 @@ const CHALLENGES: [string, RegExp | undefined, RegExp?][] = [
   ["Anubis", /<script id="anubis-main"|Making sure you(?:'|&#39;)re not a bot!/i],
   ["Kasada", undefined, /\/[0-9a-f]{8}-[0-9a-f-]{27}\/[0-9a-f]{8}-[0-9a-f-]{27}\/ips\.js/i],
   // a proof-of-work page that solves itself and resubmits (Reddit)
-  ["JS challenge", /name=["']?js_challenge|[?&]js_challenge=1/i],
+  ["JavaScript", /name=["']?js_challenge|[?&]js_challenge=1/i],
   ["reCAPTCHA", /Prove your humanity/i],
 ];
 // A CAPTCHA widget is the challenge on a bare page, and a guard on the login when it sits in a sign-in form.

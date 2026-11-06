@@ -30,10 +30,10 @@ agent gets JSON from one request.
 npx -y api-anything setup
 ```
 
-Setup connects the MCP server and the skill to the agents it finds (Claude Code, Codex, Cursor,
-Claude Desktop, Hermes, Gemini CLI, VS Code), asking before each one; `--agents` names them instead.
-Then it asks one question: help build the shared catalog? `setup --local-only` keeps everything on
-this machine. Node 22.13 or newer; no account, no API key. Or tell your coding agent: *Set up API
+Setup lists the agents it finds (Claude Code, Codex, Cursor, Claude Desktop, Gemini CLI, VS Code)
+and asks which to connect the MCP server and the skill to; `--agents` names them instead, and the
+always-on Hermes gateway is added only by name. Then it asks whether to help build the shared
+catalog. `setup --local-only` keeps everything on this machine. Node 22.13 or newer; no account, no API key. Or tell your coding agent: *Set up API
 Anything for me: https://github.com/goodnight000/api-anything/blob/main/INSTALL.md*.
 [What setup changes, and every client](docs/QUICKSTART.md)
 
@@ -60,7 +60,7 @@ different APIs with their own keys, OAuth apps and client libraries.
 [`examples/mentions.mjs`](examples/mentions.mjs) asks Hacker News, Reddit, YouTube, GitHub and
 Mastodon at once, from an empty home, with no account:
 
-[![Demo: 65 mentions of duckdb from Hacker News, YouTube, GitHub and Mastodon in 1.8 s, with Reddit reported as blocked](docs/demos/mentions.gif)](docs/demos/README.md#6-whos-talking-about-a-project)
+[![Demo: 66 mentions of duckdb from Hacker News, YouTube, GitHub and Mastodon in 1.9 s, with Reddit reported as blocked](docs/demos/mentions.gif)](docs/demos/README.md#6-whos-talking-about-a-project)
 
 The core of it is six reads in parallel, each capped at plain HTTP:
 
@@ -132,18 +132,22 @@ site, one model and a few runs. [Method, raw numbers and limits](bench/README.md
 </picture>
 
 - **MCP over stdio**, for any agent: `find_sites`, `call_operation`, `learn_site` and
-  [the other tools](docs/QUICKSTART.md#the-tools-an-agent-gets). Each tool declares a typed output
-  schema. [Frameworks](docs/INTEGRATIONS.md): Vercel AI SDK, LangChain.js, OpenAI Agents SDK.
+  [the other tools](docs/QUICKSTART.md#the-tools-an-agent-gets), which declare output schemas for
+  clients that check results. [Frameworks](docs/INTEGRATIONS.md): Vercel AI SDK, LangChain.js, OpenAI Agents SDK.
 - **HTTP**: `api-anything serve` answers REST, publishes an OpenAPI document at `/openapi.json`,
   and serves MCP at `/mcp`. It listens on loopback only and needs a token. [docs/SERVE.md](docs/SERVE.md)
-- **Python**: `pip install api-anything` gives a `Client`, tools for agent frameworks, and typed
-  code generated from an operation's schema. [docs/PYTHON.md](docs/PYTHON.md)
+- **Python**: `pip install "git+https://github.com/goodnight000/api-anything#subdirectory=python"`
+  gives a `Client` that starts the server for you, tools for agent frameworks, and typed code
+  generated from an operation's schema. [docs/PYTHON.md](docs/PYTHON.md)
 - **TypeScript**: `import { call } from "api-anything"`, or [`api-anything/host`](docs/HOST.md) for
   an agent host that only calls installed operations. [CLI and library at a glance](docs/REFERENCE.md#the-cli-and-the-library-at-a-glance)
-- **Watching**: `--changes` returns only what was added since the last call, and `--max-age`
-  answers from a recent result instead of asking the site again.
+- **Watching**: `--changes` reports what was added, removed or changed since the last call (name a
+  watcher with `--watch`), `--max-age` answers from a recent result instead of asking the site
+  again, and a site's request budget keeps a cron job at human volume.
+  [`examples/watch.mjs`](examples/watch.mjs)
 - **No install**: the [catalog](https://api-anything-registry.forth-site.workers.dev) lets you try a
-  few public operations from its page.
+  few public operations (Wikipedia, Open Library, USGS earthquakes, NASA images) from their pages, or
+  with curl: `curl 'https://api-anything-registry.forth-site.workers.dev/v1/try/wikipedia/getSummary?title=SQLite'`.
 
 ## Teach it a new site
 

@@ -2,7 +2,7 @@
 // repositories and Mastodon, searched at once over plain HTTP and merged newest first.
 // No browser, no account, no API keys. Read-only.
 // Usage: node examples/mentions.mjs <project> [--days 7] [--limit 12] [--json]
-import { call } from "api-anything";
+import { call, shutdown } from "api-anything";
 
 const argv = process.argv.slice(2);
 const option = (name, fallback) => {
@@ -97,6 +97,8 @@ const results = await Promise.all(
   }),
 );
 const seconds = ((Date.now() - t0) / 1000).toFixed(1);
+// lets queued reports finish (at most 2 s) and closes any browser, so the process exits now
+await shutdown();
 // Newest first. YouTube's results have no date: its own filter kept them to the window, and they come last.
 const mentions = results.flatMap((r) => r.items).sort((a, b) => (Date.parse(b.at) || 0) - (Date.parse(a.at) || 0));
 

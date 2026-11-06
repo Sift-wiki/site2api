@@ -198,7 +198,7 @@ says to check the site first. The list holds one "pay rent", not two.
 
 ## 6. Who's talking about a project
 
-[![Demo 6 still: mentions of duckdb from Hacker News, YouTube, GitHub and Mastodon, with Reddit blocked](mentions.png)](mentions.gif)
+[![Demo 6 still: 66 mentions of duckdb from Hacker News, YouTube, GitHub and Mastodon, with Reddit blocked](mentions.png)](mentions.gif)
 
 [Recording](mentions.gif) (11 s) · [transcript](mentions.txt) · [tape](mentions.tape) ·
 [script](../../examples/mentions.mjs)
@@ -217,7 +217,8 @@ this week" filter, `github.searchRepos` for repositories created in the window, 
 Every call is capped at tier 1 (`maxTier: 1`), so nothing opens a browser. A site that would need one
 answers `blocked` with its reason, and the script prints that and keeps the others.
 
-In the recording, 5 of 6 calls answered in 1.8 s, and the whole process took 2.1 s. `reddit.search`
+In the recording (re-made later the same day, after `shutdown()` landed), 5 of 6 calls answered in
+1.9 s and found 66 mentions, and the whole process took 2.1 s. `reddit.search`
 answered `blocked`: Reddit served a JavaScript challenge to plain HTTP from this network, as it did
 on every run that day. YouTube's search answers with more header bytes than Node's `fetch` reads,
 so its call is sent once more without the browser's identity headers, still over plain HTTP. In one
