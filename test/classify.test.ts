@@ -27,6 +27,19 @@ const html = (status: number, body: string): Observed => ({
 });
 const cls = (o: Operation, r: Observed) => classify(o, r).class;
 
+test("a body nested past the parser's stack is error, and names the depth instead of quoting it", () => {
+  const deep = "[".repeat(20_000) + "]".repeat(20_000);
+  const reason = "response is not JSON: the body nests too deeply to parse";
+  const judged = judge(op(), json(200, deep));
+  assert.equal(judged.class, "error");
+  assert.equal(judged.reason, reason);
+  // the same body where the extract path would read it, and an op with no extract at all
+  assert.equal(judge(op(), json(200, `{"data":${deep}}`)).reason, reason);
+  assert.equal(judge(op({ response: { format: "json" } }), json(200, deep)).reason, reason);
+  // a shallow body still reads as the shape it is
+  assert.equal(judge(op(), json(200, { data: { user: { id: 1 } } })).class, "ok");
+});
+
 test("judge classifies raw JSON before projection and shares only its own call's data", () => {
   const operation = op({ response: { format: "json", extract: "data.user", pick: ["id", "name"] } });
   const first = judge(operation, json(200, '{"data":{"user":{"id":9007199254740993,"name":"first"}}}'));

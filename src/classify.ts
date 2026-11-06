@@ -1,6 +1,6 @@
 /** Classify every response, never by status code alone. See DESIGN.md "Failure classifier". */
 import { type HTMLElement, parse as parseHtml } from "node-html-parser";
-import { templateRefs } from "./codec.js";
+import { BodyTooDeep, templateRefs } from "./codec.js";
 import {
   extract,
   extractEmbedded,
@@ -694,7 +694,7 @@ function classifyResponse(
   let data: unknown;
   try {
     data = readJson();
-  } catch {
+  } catch (error) {
     if (!op.readOnly) {
       if (isHtml && !/html/i.test(op.response.contentType ?? "") && signInForm(body))
         return is("auth", "a sign-in form where the write's answer was expected");
@@ -718,6 +718,10 @@ function classifyResponse(
           unfinished: away,
         };
       if (!body.trim()) return missing(`HTTP ${r.status} with an empty body`);
+      // A body no reader here can walk is not a moved shape: nothing was compared, and healing would
+      // re-learn from the same answer. The site did send JSON, so say what its depth did rather than
+      // quoting it back, and let the caller see the cause instead of a snippet.
+      if (error instanceof BodyTooDeep) return is("error", `response is not JSON: ${error.message}`);
       return is("drift", isHtml ? "HTML where JSON was expected" : `response is not JSON: ${snippet(body)}`);
     }
   }
