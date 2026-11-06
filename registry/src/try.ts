@@ -8,7 +8,6 @@
  * serves is ever run here: anyone can upload a version under an allowlisted name and get it promoted.
  */
 
-import hackerNews from "../../sites/hacker-news.json" with { type: "json" };
 import nasaImages from "../../sites/nasa-images.json" with { type: "json" };
 import openlibrary from "../../sites/openlibrary.json" with { type: "json" };
 import usgsEarthquakes from "../../sites/usgs-earthquakes.json" with { type: "json" };
@@ -28,9 +27,9 @@ import { versionHash } from "./upload.js";
  * The ops a visitor may try, by site: bundled public reads whose data is harmless, answered over plain
  * HTTP, from hosts that answer a datacenter's address. Each op's value lists the origins besides its
  * own that a redirect may go to (https on port 443 only). Nothing else is ever sent from the catalog.
+ * Hacker News is left out: it answers a Worker's address with HTTP 419.
  */
 export const TRY_OPS: Readonly<Record<string, Readonly<Record<string, readonly string[]>>>> = {
-  "hacker-news": { frontPage: [], getItem: [] },
   wikipedia: { searchArticles: [], getSummary: [] },
   openlibrary: { getWork: [], getAuthor: [] },
   "usgs-earthquakes": { recent: [], getEvent: [] },
@@ -39,7 +38,6 @@ export const TRY_OPS: Readonly<Record<string, Readonly<Record<string, readonly s
 
 /** The specs TRY_OPS names, from sites/ at build time. */
 const BUNDLED: Readonly<Record<string, unknown>> = {
-  "hacker-news": hackerNews,
   wikipedia,
   openlibrary,
   "usgs-earthquakes": usgsEarthquakes,
