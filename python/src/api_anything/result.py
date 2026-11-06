@@ -59,6 +59,11 @@ class Result(Dict[str, Any], Generic[T]):
         return self.get("nextCall")
 
     @property
+    def next_request(self) -> Optional[Dict[str, Any]]:
+        """`nextRequest`: the REST step to take next, `{method, path, body?}`, when the server has one."""
+        return self.get("nextRequest")
+
+    @property
     def next_page(self) -> Any:
         return self.get("nextPage")
 

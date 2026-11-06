@@ -192,8 +192,8 @@ class Client:
     ) -> Result[Any]:
         status, payload = self._send(method, path, body, query, timeout)
         if isinstance(payload, dict):
-            # a refusal the server explains as a CallResult (bad args, writes off) is an answer, not a crash
-            if 200 <= status < 300 or (status in (400, 403, 404) and isinstance(payload.get("class"), str)):
+            # a refusal the server explains as a CallResult (bad args, writes off, busy) is an answer, not a crash
+            if 200 <= status < 300 or (status in (400, 403, 404, 429) and isinstance(payload.get("class"), str)):
                 return Result(payload)
         raise _http_error(status, payload)
 

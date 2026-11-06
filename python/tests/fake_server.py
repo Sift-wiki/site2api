@@ -166,6 +166,8 @@ class FakeServer:
             return 400, {"ok": False, "class": "input", "reason": "query: required", "retry": "after_fix"}
         if op == "badbody":
             return 400, {"error": "args must be an object"}
+        if op == "busy":
+            return 429, {"ok": False, "class": "rate", "reason": "server busy", "retryAfterMs": 2000}
         if op.startswith("fail-"):
             klass = op[len("fail-") :]
             return 200, {"ok": False, "class": klass, "reason": f"{klass} happened", **FAILURES.get(klass, {})}

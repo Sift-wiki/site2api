@@ -156,6 +156,14 @@ class Transport(WithFake):
         self.assertEqual(r.job, "job-2")
         self.assertGreater(len(self.fake.requests), 1)
 
+    def test_a_busy_server_is_a_rate_answer(self) -> None:
+        r = self.client().call("hacker-news", "busy")
+        self.assertFalse(r.ok)
+        self.assertEqual(r.klass, "rate")
+        self.assertEqual(r.retry_after, 2.0)
+        with self.assertRaises(RateLimited):
+            r.raise_for_status()
+
     def test_classes_raise_their_exception(self) -> None:
         expected = {
             "auth": AuthError,
