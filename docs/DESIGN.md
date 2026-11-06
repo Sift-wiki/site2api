@@ -1808,7 +1808,8 @@ independent alternative.
     directly with its `inputSchema` and a read's or a write's hints; writes only with
     `--allow-writes`. The model calls it without `list_operations` first, at about 200 tokens of
     tool list per op, sent with every request (the five meta-tools are about 950; goodreads' five
-    ops add about 1,000, all 25 bundled ops about 5,700), which is why it is opt-in. A name is at most 40 characters (Gemini
+    ops add about 1,000, all 25 bundled ops about 5,700; those counts predate output schemas, which
+    add more for a client that shows them to its model: see Output schemas), which is why it is opt-in. A name is at most 40 characters (Gemini
     CLI cuts `mcp_<server>_<tool>` past 63, and Cursor is reported to drop a tool whose server and
     tool names pass 60); a longer one is cut and ends in 8 hex characters of a hash of the whole,
     so two stay distinct. The description is the op's, the keys its items carry, and where its
@@ -1859,9 +1860,47 @@ independent alternative.
     client gives its model one of the two, never both: Codex and VS Code send the structured one
     and drop the text, Gemini CLI sends the text, so neither costs tokens twice, and a program
     reads the fields without parsing. `list_sites` (a list) is text only: before the 2026-07-28
-    revision structuredContent is an object. No tool declares an `outputSchema`: the SDK would
-    then reject an answer that does not match it, and a failure's shape differs from a success's.
-    `isError` is true exactly when `ok` is false, except for `pending`.
+    revision structuredContent is an object. `isError` is true exactly when `ok` is false, except
+    for `pending`.
+  - **Output schemas** (`schema.ts`). Every tool but `list_sites` declares an `outputSchema`, so a
+    framework can validate answers and a model sees the field names. A schema that does not match
+    an answer breaks the call: the SDK's server checks only a non-error answer, but its client (as
+    other strict clients) checks the `structuredContent` of every answer, `isError` ones included,
+    and refuses a non-error answer with none. So `list_sites`, whose answer is a list, declares
+    none, and each schema covers every answer its tool gives: success, each failure class, a
+    pending job, the tool's own `{ok: false, error, next}`, and a cut answer. They are
+    permissive: every object allows fields it does not name, and a field is required only when
+    every answer carries it (`ok`, on the call tools, `call_batch`, `get_job`, `get_result`,
+    `site_status` and `learn_site`; nothing on `list_operations`, `find_sites` and `login`, whose
+    own errors have no `ok`). A type is given only where the code fixes it; the enums (`class`,
+    `write`, `retry`, `tier`, `nextCall.action`) are checked by tsc against the code's own unions,
+    so a new value cannot reach an answer before it reaches the schema. `get_job`'s is a call's
+    result widened to any job's answer. No validated schema constrains `data`, a per-op tool's
+    included: a tool's schema is fixed when the server starts, but each call runs the spec as it
+    is then, so a heal from the registry or a re-add during the session could change a pick's type
+    and fail a good answer (and a write's 204 has no data, whatever its recipe). Only the envelope,
+    which the code's own types fix, is typed. The SDK takes zod, so each JSON Schema is the meta of a
+    loose zod object: the server's own check is only that the answer is an object, and the
+    advertised JSON Schema is the contract. They are plain draft-07 with no type lists or
+    `const`, so an OpenAPI 3.0 document can embed them. They name fields and types only, with no
+    descriptions (the tools' descriptions say what the fields mean) and no
+    `additionalProperties` (the default allows them). The call tools and per-op tools share one
+    envelope object, and `call_batch`, `get_result` and `learn_site` name only the fields their
+    answers carry: `tools/list` is sent with every request, and the schemas take the default tool
+    list from 16.6 KB to 29.6 KB of JSON and add about 1.8 KB to each per-op tool, paid by a client
+    that hands them to its model. `CALL_RESULT_SCHEMA` is what other interfaces validate against.
+  - `opDataSchema(op)` describes a read's `data`, for documentation only (an OpenAPI document,
+    `hostSite()`'s `resultSchema` through `callResultSchema(dataSchema)`); nothing validates an
+    answer against it. It reads the response recipe only, never the learned shape (one capture's,
+    and a learned `null` marks a field some items lack): a list when the recipe always makes one
+    (an HTML recipe's items, an extract path through a `[*]` step, as the extractor parses it, so
+    a quoted key `["a[*]"]` is not one), the fields its pick or HTML recipe names, none required,
+    and a type only where the recipe fixes it (a pick regex's string, an HTML field's text or
+    `all:` list, a path through `[*]`'s list). A field two picks write is untyped. An item of a
+    pick's list is not typed an object, since a pick keeps a non-object item as it is. A write's
+    `data` is `{}`. It describes the stored recipe's whole answer, not a `view.fields` projection.
+    `test/schema.test.ts` drives the server with the SDK's own client and checks every tool's real
+    answers against what it advertises, including after the spec changes on disk mid-session.
   - `call_operation` sends `data` that is a list of two or more records as `{columns, rows}` (a
     missing field is null) when that makes the JSON smaller. A sparse table can be larger than the
     original records, so those stay a list to preserve the output cap. The keys, repeated in every

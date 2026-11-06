@@ -31,6 +31,7 @@ holds the evidence behind it, including the api-anything bugs that must not come
 | `src/registry-api.ts` | the wire contract with the registry service: endpoints' types, request signing, version hashing |
 | `src/search.ts`, `src/domain.ts` | pure pieces the registry service shares: an op's summary, the index entry, query scoring; host to site |
 | `src/identity.ts` | the install's Ed25519 key, signed request headers, and `settings.json` (whether to share) |
+| `src/schema.ts` | JSON Schemas of the answers: a call's result, an op's data, each MCP tool's `outputSchema`; permissive, since a mismatch breaks the call |
 | `src/clean.ts` | a call with no cookies or session values, over plain HTTP: whether an op is public |
 | `src/learnsite.ts` | `learn_site`: add's two runs with the user's args, the pick from the outline, a holdout call, a clean replay, then share |
 | `src/setup.ts` | `setup`: connect the MCP server and the skill to each agent, the key, the one question |

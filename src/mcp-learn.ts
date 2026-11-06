@@ -5,7 +5,8 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { type LearnSiteInput, type LearnSiteResult, learnSite } from "./learnsite.js";
-import { asTable, mcpNext, mcpNextCall, type Reply, reply } from "./mcp.js";
+import { asTable, mcpNext, mcpNextCall, outputSchema, type Reply, reply } from "./mcp.js";
+import { learnSiteSchema } from "./schema.js";
 import { PagingSchema, TriggerStepSchema } from "./spec.js";
 import { badAddress } from "./vet.js";
 
@@ -84,6 +85,7 @@ export function registerLearn(
           "how the list pages, when the automatic pick is wrong: param takes the next page, next is the path in the whole answer to its value (path~regex keeps group 1 of a string there, e.g. a next-page URL). Without next, the pages are numbered: put param in args, args2 and args3",
         ),
       },
+      outputSchema: outputSchema(learnSiteSchema()),
       annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
     },
     (input: LearnSiteInput) =>

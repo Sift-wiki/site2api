@@ -239,15 +239,19 @@ export function emptyResults(body: string, recipe: { items: string; empty?: stri
   }
 }
 
+/** The longest wait a Retry-After is taken at: a huge one would be Infinity, which JSON sends as null. */
+export const MAX_RETRY_AFTER_MS = 24 * 3600_000;
+
 /** " (retry after 120 s)" and its wait in ms, from a Retry-After header in seconds or as an HTTP date. */
 function retryAfter(headers: Record<string, string>, now = Date.now()): { text: string; ms?: number } {
   const v = headers["retry-after"]?.trim();
   if (!v) return { text: "" };
-  if (/^\d+$/.test(v)) return { text: ` (the server says retry after ${v} s)`, ms: Number(v) * 1000 };
+  const wait = (ms: number) => Math.min(Math.max(0, ms), MAX_RETRY_AFTER_MS);
+  if (/^\d+$/.test(v)) return { text: ` (the server says retry after ${v} s)`, ms: wait(Number(v) * 1000) };
   const t = Date.parse(v);
   return Number.isNaN(t)
     ? { text: "" }
-    : { text: ` (the server says retry after ${new Date(t).toISOString()})`, ms: Math.max(0, t - now) };
+    : { text: ` (the server says retry after ${new Date(t).toISOString()})`, ms: wait(t - now) };
 }
 
 /** A GraphQL errors array's verdict; `input` for a not-found entity. */
