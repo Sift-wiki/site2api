@@ -294,6 +294,7 @@ export function siteStatusSchema(): JsonSchema {
   return object(
     {
       ok: bool,
+      storage: anyObject,
       sites: { type: "array", items: object({ site: str, cooling: anyObject, ops: objects }) },
       problems: { type: "array", items: object({ site: str, op: str, problem: str, detail: str, next: str }) },
       error: str,

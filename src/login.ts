@@ -4,7 +4,7 @@
  * are the other two sources. This module wires the pure import (import.ts) to the session store
  * and the persistent browser profile, and re-imports on a self-healing auth failure.
  */
-import { readFileSync } from "node:fs";
+import { readFileSync, rmSync } from "node:fs";
 import { addCookiesToProfile, browserAvailable, clearProfileCookies, login } from "./browser.js";
 import { profileDir } from "./heal.js";
 import {
@@ -291,7 +291,8 @@ export const windowRetry = (site: string, how: string) =>
 /** logout: clear the jar and this site's cookies in the profile. */
 export async function logout(site: string): Promise<void> {
   safeName(site);
-  withLock(sessionFile(site), () => saveSession(site, { cookies: [], values: {} }));
+  // removed, not overwritten with an empty jar: a sealed file whose key is lost must still be resettable
+  withLock(sessionFile(site), () => rmSync(sessionFile(site), { force: true }));
   if (browserAvailable()) {
     try {
       let domain = site.toLowerCase();

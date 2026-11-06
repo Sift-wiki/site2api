@@ -6,6 +6,7 @@
 import { readdirSync } from "node:fs";
 import { join } from "node:path";
 import { loadRecord, type Outcome, opHash } from "./checks.js";
+import { plaintextFiles, plaintextSessions, SealError, type Sealing, sealing } from "./seal.js";
 import { home } from "./session.js";
 import type { Operation } from "./spec.js";
 import { type CallRecord, coolList, loadCalls, loadHeals, loadSite, loadWrites, staleList, tierList } from "./store.js";
@@ -48,13 +49,15 @@ export interface SiteStatus {
 export interface Problem {
   site: string;
   op?: string;
-  problem: "cooling" | "stale" | "escalated" | "degraded" | "failing" | "verify" | "write";
+  problem: "cooling" | "stale" | "escalated" | "degraded" | "failing" | "verify" | "write" | "plaintext";
   detail: string;
   next: string;
 }
 
 export interface Status {
   ok: true;
+  /** whether session and capture files are sealed here, and if not, why */
+  storage: Sealing | { sealed: false; why: string; error: true };
   sites: SiteStatus[];
   problems: Problem[];
 }
@@ -345,6 +348,61 @@ function siteStatus(name: string, now: number, named: boolean): { status: SiteSt
   return { status, problems };
 }
 
+/** Sealing here, and a problem for each session file it leaves in plaintext that the user did not choose. */
+function storageStatus(site: string | undefined): { storage: Status["storage"]; problems: Problem[] } {
+  let storage: Status["storage"];
+  try {
+    storage = sealing();
+  } catch (e) {
+    const why = (e as Error).message;
+    const next = e instanceof SealError ? e.next : "fix the key store, then retry";
+    return {
+      storage: { sealed: false, why, error: true },
+      problems: [{ site: site ?? "*", problem: "plaintext", detail: why, next }],
+    };
+  }
+  if (storage.sealed) {
+    // files the migration to sealing could not seal yet (busy, corrupt or unwritable): it retries on the next run
+    const left = plaintextSessions().filter((s) => !site || s === site);
+    const captures = site ? [] : plaintextFiles("captures");
+    return {
+      storage,
+      problems: [
+        ...left.map(
+          (s): Problem => ({
+            site: s,
+            problem: "plaintext",
+            detail: "its session file is still unsealed (0600 plaintext): sealing it in place did not succeed yet",
+            next: `run status again (each run retries); if it stays, the file is corrupt or not writable: fix that, or sign in again: api-anything login ${s}`,
+          }),
+        ),
+        ...(captures.length
+          ? [
+              {
+                site: "*",
+                problem: "plaintext" as const,
+                detail: `${captures.length} capture file(s) are still unsealed (0600 plaintext): sealing them in place did not succeed yet`,
+                next: `run status again (each run retries); if it stays, delete the files in ${join(home(), "captures")} (a later learn captures again)`,
+              },
+            ]
+          : []),
+      ],
+    };
+  }
+  if (storage.chosen) return { storage, problems: [] };
+  const problems = plaintextSessions()
+    .filter((s) => !site || s === site)
+    .map(
+      (s): Problem => ({
+        site: s,
+        problem: "plaintext",
+        detail: `its session file holds cookies unsealed (0600 plaintext): ${storage.why}`,
+        next: "set API_ANYTHING_KEY to a passphrase in this environment (the next run seals it), or API_ANYTHING_PLAINTEXT=1 to keep plaintext",
+      }),
+    );
+  return { storage, problems };
+}
+
 /** The status of one site, or of every site with something on record here. */
 export function status(site?: string, now = Date.now()): Status {
   const names = site ? [site] : sitesWithState(now);
@@ -355,5 +413,6 @@ export function status(site?: string, now = Date.now()): Status {
     if (site || r.status.ops.length || r.status.cooling) sites.push(r.status);
     problems.push(...r.problems);
   }
-  return { ok: true, sites, problems };
+  const kept = storageStatus(site);
+  return { ok: true, storage: kept.storage, sites, problems: [...problems, ...kept.problems] };
 }

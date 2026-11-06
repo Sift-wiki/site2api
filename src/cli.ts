@@ -16,6 +16,7 @@ import { capOutput, extract, getPath, innerJson, pick, returnedFields, splitPick
 import {
   addOperation,
   type CaptureFile,
+  CaptureUnavailable,
   capturePage,
   captureTrigger,
   fillTrigger,
@@ -47,6 +48,7 @@ import { plan, uploadName } from "./publish.js";
 import { pull, RegistryError, reportInterface, search } from "./registry.js";
 import { settle } from "./report.js";
 import { getResult, type ResultView, viewProblem } from "./results.js";
+import { onPlaintext, plaintextWarning, SealError } from "./seal.js";
 import { captureLive, redact } from "./secrets.js";
 import { loadSession, placeholders } from "./session.js";
 import { AGENTS, type Agent, askYesNo, setup, summary } from "./setup.js";
@@ -952,6 +954,8 @@ function pagingOf(flag: string | undefined): Paging | undefined {
 /** What a repair says it changed: the op was kept, and one thing in it replaced. */
 async function cmdAdd({ v, pos, steps }: Parsed): Promise<number> {
   const [site, name] = pos;
+  // one instant for every capture this add reads: a pair is not half-refused at the 24 h edge
+  const admitted = Date.now();
   if (!site || !name) throw new Fail("missing <site> <op>", "api-anything add --help");
   if (!v.trigger && !v.from) throw new Fail("missing --trigger (or --from <captureId>)", "api-anything add --help");
   const ex1 = kv(v.example);
@@ -968,7 +972,7 @@ async function cmdAdd({ v, pos, steps }: Parsed): Promise<number> {
   if (v.from2 && !ex2)
     throw new Fail("--from2 needs --example2 (the values that capture was made with)", "api-anything add --help");
   if (v.from && ex2 && !v.from2) {
-    const c = loadCapture(v.from);
+    const c = loadCapture(v.from, admitted);
     const write = !!(c.write || v.write);
     const again = captureAgain(c, ex1, ex2, write);
     throw new Fail(
@@ -998,14 +1002,14 @@ async function cmdAdd({ v, pos, steps }: Parsed): Promise<number> {
     },
     public: v.public ? v.public.split(",").map((s) => s.trim().toLowerCase()) : undefined,
     from: v.from
-      ? { capture: loadCapture(v.from), id: v["pick-request"] ? Number(v["pick-request"]) : undefined }
+      ? { capture: loadCapture(v.from, admitted), id: v["pick-request"] ? Number(v["pick-request"]) : undefined }
       : undefined,
-    from2: v.from2 ? loadCapture(v.from2) : undefined,
+    from2: v.from2 ? loadCapture(v.from2, admitted) : undefined,
     allowed: allowedOf(v),
     paging: pagingOf(v.paging),
   });
   const op = r.operation;
-  const c = v.from && !v.paging && !op.paging ? loadCapture(v.from) : undefined;
+  const c = v.from && !v.paging && !op.paging ? loadCapture(v.from, admitted) : undefined;
   // the request learned, or the one before it, is one of two pages of a list the capture loaded
   const paged =
     c &&
@@ -1833,6 +1837,7 @@ async function run(argv: string[]): Promise<number> {
   return c.run({ v, pos, steps: stepsOf(v.steps) });
 }
 
+onPlaintext((why) => process.stderr.write(`${plaintextWarning(why)}\n`));
 try {
   const code = await run(process.argv.slice(2));
   if (code >= 0) {
@@ -1848,6 +1853,7 @@ try {
   out({ ok: false, error: oneLine((e as Error).message), ...(f?.extra ?? {}) });
   const next =
     f?.next ??
+    (e instanceof CaptureUnavailable || e instanceof SealError ? e.next : undefined) ??
     (e instanceof ProfileInUse ? PROFILE_HINT : `api-anything ${process.argv[2] ?? ""} --help`.replace(/\s+/g, " "));
   process.stderr.write(`next: ${next}\n`);
   process.exitCode = 1;

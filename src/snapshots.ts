@@ -2,14 +2,16 @@
  * A read's kept `ok` answers, in `~/.api-anything/snapshots/<hash>.json`: a cache entry (what
  * `maxAgeMs` answers from) and, apart from it, each watcher's baseline (what `changes` compares
  * with). Kept only for a call that asked for one of them. The answer can hold the user's own data, so
- * each file is 0600, its name says nothing of the args or the session, and one unused for 30 days is removed.
+ * each file is sealed like a session (seal.ts) and 0600, its name says nothing of the args or the
+ * session, and one unused for 30 days is removed.
  */
 import { createHash, createHmac, randomBytes } from "node:crypto";
-import { readdirSync, readFileSync, rmSync, statSync, utimesSync } from "node:fs";
-import { join } from "node:path";
+import { readdirSync, rmSync, statSync, utimesSync } from "node:fs";
+import { basename, join } from "node:path";
 import { canonical } from "./changes.js";
 import { asText } from "./codec.js";
 import { filledValues, requestArgs } from "./http.js";
+import { readSealed, writeSealed } from "./seal.js";
 import { cookiesFor, home, mayCarryAccount, readJson, type Session, withLock, writePrivate } from "./session.js";
 import type { Operation, Site } from "./spec.js";
 
@@ -142,15 +144,17 @@ export const recipeOf = (op: Operation): string =>
 
 const fileOf = (key: string) => join(dir(), `${key}.json`);
 
-// Every snapshot goes to and from disk through these two: sealing private files at rest belongs here.
-const put = (file: string, text: string) => writePrivate(file, text);
-const get = (file: string) => readFileSync(file, "utf8");
+// Every snapshot goes to and from disk through these two, sealed. A key error is a miss on read, and
+// on save an answer not kept (`Saved.reason`), never one kept in plaintext.
+const label = (file: string) => `snapshot:${basename(file, ".json")}`;
+const put = (file: string, text: string) => writeSealed(file, text, label(file));
+const get = (file: string) => readSealed<Snapshot | undefined>(file, undefined, label(file), `delete ${file}`);
 
 /** The kept answer, if any; reading it counts as use for the 30 days. */
 export function loadSnapshot(key: string, now = Date.now()): Snapshot | undefined {
   const file = fileOf(key);
   try {
-    const s = JSON.parse(get(file)) as Snapshot;
+    const s = get(file);
     if (!s || typeof s !== "object" || typeof s.at !== "number" || typeof s.op !== "string") return undefined;
     try {
       utimesSync(file, new Date(now), new Date(now));

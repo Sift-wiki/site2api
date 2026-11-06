@@ -1,4 +1,4 @@
-/** Per-site cookie jar and session values under ~/.api-anything (0700 dirs, 0600 files). */
+/** Per-site cookie jar and session values under ~/.api-anything (0700 dirs, 0600 files, sealed by seal.ts). */
 import {
   chmodSync,
   closeSync,
@@ -15,6 +15,7 @@ import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { getDomain } from "tldts";
 import { siteOf } from "./domain.js";
+import { readSealed, writeSealed } from "./seal.js";
 import { besideOrigins, credentialsOf, originsOf } from "./secrets.js";
 import type { StoredCookie } from "./types.js";
 
@@ -93,21 +94,17 @@ export function readJson<T>(file: string, fallback: T): T {
   }
 }
 
-const pause = (ms: number) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+export const pause = (ms: number) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 
-/**
- * Run fn holding an exclusive lock file next to `file`, so a read-modify-write in one process
- * never drops another process's update. A lock older than 10 s is a crashed holder's and is taken over.
- */
-export function withLock<T>(file: string, fn: () => T): T {
-  ensureDir(dirname(file));
-  const lock = `${file}.lock`;
-  const deadline = Date.now() + 10_000;
-  let held = false;
-  while (!held) {
+/** Lock files this process holds: a nested lock of the same file runs inside the outer one. */
+const holding = new Set<string>();
+
+function acquire(lock: string, waitMs: number): boolean {
+  const deadline = Date.now() + waitMs;
+  for (;;) {
     try {
       closeSync(openSync(lock, "wx", 0o600));
-      held = true;
+      return true;
     } catch (e) {
       if ((e as NodeJS.ErrnoException).code !== "EEXIST") throw e;
       try {
@@ -115,19 +112,44 @@ export function withLock<T>(file: string, fn: () => T): T {
       } catch {
         /* released meanwhile */
       }
-      // ponytail: after 10 s of contention go ahead unlocked rather than hang a call
-      if (Date.now() > deadline) break;
+      if (Date.now() > deadline) return false;
       pause(2);
     }
   }
+}
+
+function held<T>(lock: string, fn: () => T): T {
+  holding.add(lock);
   try {
     return fn();
   } finally {
-    if (held) rmSync(lock, { force: true });
+    holding.delete(lock);
+    rmSync(lock, { force: true });
   }
 }
 
-const CAPTURE_TTL_MS = 24 * 60 * 60_000;
+/**
+ * Run fn holding an exclusive lock file next to `file`, so a read-modify-write in one process
+ * never drops another process's update. A lock older than 10 s is a crashed holder's and is taken over.
+ * Re-entrant within a process: fn may lock the same file again.
+ */
+export function withLock<T>(file: string, fn: () => T): T {
+  ensureDir(dirname(file));
+  const lock = `${file}.lock`;
+  if (holding.has(lock)) return fn();
+  // ponytail: after 10 s of contention go ahead unlocked rather than hang a call
+  return acquire(lock, 10_000) ? held(lock, fn) : fn();
+}
+
+/** `withLock` that gives up after `waitMs` instead of going ahead unlocked: undefined when it did not run. */
+export function tryLock<T>(file: string, fn: () => T, waitMs = 1000): { value: T } | undefined {
+  ensureDir(dirname(file));
+  const lock = `${file}.lock`;
+  if (holding.has(lock)) return { value: fn() };
+  return acquire(lock, waitMs) ? { value: held(lock, fn) } : undefined;
+}
+
+export const CAPTURE_TTL_MS = 24 * 60 * 60_000;
 const CAPTURES_KEPT = 20;
 
 /**
@@ -151,10 +173,17 @@ export function pruneCaptures(now = Date.now()): void {
 }
 
 export const sessionFile = (site: string) => join(home(), "sessions", `${safeName(site)}.json`);
+/** What a sealed session file is bound to: one site's file cannot be read as another's. */
+const sessionLabel = (site: string) => `session:${safeName(site)}`;
 
 export function loadSession(site: string): Session {
   const file = sessionFile(site);
-  const s = readJson<Partial<Session>>(file, {});
+  const s = readSealed<Partial<Session>>(
+    file,
+    {},
+    sessionLabel(site),
+    `delete ${file} and sign in again: api-anything login ${safeName(site)}`,
+  );
   if (!s || typeof s !== "object" || (s.cookies !== undefined && !Array.isArray(s.cookies)))
     throw new Error(`${file} is not a session file; delete it and log in again`);
   return {
@@ -212,9 +241,13 @@ function recordProtection(site: string, s: Session, urls: (string | undefined)[]
  * an operation being learned, whose origins count as the site's own for this write only.
  */
 export function saveSession(site: string, s: Session, urls: (string | undefined)[] = []): Session {
-  const sealed = recordProtection(site, s, urls);
-  writePrivate(sessionFile(site), JSON.stringify({ ...sealed, updatedAt: new Date().toISOString() }, null, 1));
-  return sealed;
+  const recorded = recordProtection(site, s, urls);
+  writeSealed(
+    sessionFile(site),
+    JSON.stringify({ ...recorded, updatedAt: new Date().toISOString() }, null, 1),
+    sessionLabel(site),
+  );
+  return recorded;
 }
 
 const expired = (c: StoredCookie, now: number) => c.expires > 0 && c.expires * 1000 <= now;

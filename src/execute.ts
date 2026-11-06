@@ -50,6 +50,7 @@ import {
 import { loadSettings } from "./identity.js";
 import { derive, LookupFailed, sendDerived } from "./lookup.js";
 import { projectView, type ResultCursor, type ResultView, resultView, viewProblem } from "./results.js";
+import { SealError } from "./seal.js";
 import { redact } from "./secrets.js";
 import {
   boundSession,
@@ -371,7 +372,10 @@ export const badSession = (site: string, e: unknown): Result => ({
   ok: false,
   class: "error",
   reason: (e as Error).message,
-  next: `delete ${sessionFile(site)}, then ask the user to run api-anything login ${site} if the site needs an account`,
+  next:
+    e instanceof SealError
+      ? e.next
+      : `delete ${sessionFile(site)}, then ask the user to run api-anything login ${site} if the site needs an account`,
   nextCall: { action: "report" },
   retry: "after_fix",
 });

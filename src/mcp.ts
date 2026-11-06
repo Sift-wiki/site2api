@@ -45,6 +45,7 @@ import {
   loginSchema,
   siteStatusSchema,
 } from "./schema.js";
+import { SealError } from "./seal.js";
 import { KEEP_SNAPSHOT_MS } from "./snapshots.js";
 import { type Operation, type Paging, readbackName } from "./spec.js";
 import { status } from "./status.js";
@@ -343,9 +344,12 @@ async function guard(fn: () => Promise<Reply>): Promise<Reply> {
       {
         ok: false,
         error: msg,
-        next: /invalid site name|no site/.test(msg)
-          ? "list_sites"
-          : "fix or delete the file named in error, then retry once",
+        next:
+          e instanceof SealError
+            ? mcpNext(e.next)
+            : /invalid site name|no site/.test(msg)
+              ? "list_sites"
+              : "fix or delete the file named in error, then retry once",
       },
       true,
     );
@@ -854,7 +858,7 @@ export function createServer({
     "site_status",
     {
       description:
-        "This machine's record of how a site's operations have been doing, from local files only (nothing is sent): a cool-down, stale marks, the tier calls start at beside the op's own, the last heal and verify, writes of the last 24 h, and calls of the last 24 h and 7 days (count, ok rate, tiers, median ms). problems lists what needs a step, each with its next. Without site: every site with something on record. Use it when calls got slow or keep failing.",
+        "This machine's record of how a site's operations have been doing, from local files only (nothing is sent): a cool-down, stale marks, the tier calls start at beside the op's own, the last heal and verify, writes of the last 24 h, and calls of the last 24 h and 7 days (count, ok rate, tiers, median ms). storage says whether session and capture files are sealed here. problems lists what needs a step, each with its next. Without site: every site with something on record. Use it when calls got slow or keep failing.",
       inputSchema: { site: z.string().optional().describe("site name from list_sites") },
       outputSchema: outputSchema(siteStatusSchema()),
       annotations: LOCAL_HINTS,
