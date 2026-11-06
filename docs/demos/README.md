@@ -196,6 +196,40 @@ call to `list`, never a resend) finds the new item, so `write` is `applied`. The
 within 10 minutes is refused as `duplicate` and not sent; its `next` (on stderr, in the recording)
 says to check the site first. The list holds one "pay rent", not two.
 
+## 6. Who's talking about a project
+
+[![Demo 6 still: mentions of duckdb from Hacker News, YouTube, GitHub and Mastodon, with Reddit blocked](mentions.png)](mentions.gif)
+
+[Recording](mentions.gif) (11 s) · [transcript](mentions.txt) · [tape](mentions.tape) ·
+[script](../../examples/mentions.mjs)
+
+Recorded on 2026-11-06 (UTC) on macOS with Node 25.2.1, from a build of commit `6617d9e` plus
+this script, with an empty `API_ANYTHING_HOME`. Live, no cuts, no speed-up.
+
+```sh
+node examples/mentions.mjs duckdb --limit 10    # --days 7 is the default; --json prints every link
+```
+
+[`examples/mentions.mjs`](../../examples/mentions.mjs) sends six reads at once: Hacker News stories
+and comments (`hacker-news.searchByDate`), `reddit.search`, `youtube.search` with YouTube's "uploaded
+this week" filter, `github.searchRepos` for repositories created in the window, and
+`mastodon.tagTimeline` for the hashtag. It keeps what falls in the window and sorts it newest first.
+Every call is capped at tier 1 (`maxTier: 1`), so nothing opens a browser. A site that would need one
+answers `blocked` with its reason, and the script prints that and keeps the others.
+
+In the recording, 5 of 6 calls answered in 1.8 s, and the whole process took 2.1 s. `reddit.search`
+answered `blocked`: Reddit served a JavaScript challenge to plain HTTP from this network, as it did
+on every run that day. YouTube's search answers with more header bytes than Node's `fetch` reads,
+so its call is sent once more without the browser's identity headers, still over plain HTTP. In one
+early run that day the retry overflowed too, and YouTube answered `blocked` while the other sites
+answered.
+
+On five more runs from empty homes, the script took 1.4 to 1.7 s and the process 1.8 to 2.0 s. Each
+found the same 65 mentions, with 5 of 6 calls ok and Reddit `blocked`. Those runs, and this
+recording, were made with `NODE_USE_SYSTEM_CA` unset. With it set to `1`, Node 25 on macOS reads the
+keychain's certificate trust settings in a thread it waits for at exit. On this Mac, that wait made
+two of six runs take 38 s and 134 s after printing their answer.
+
 ## Re-recording
 
 ```sh
@@ -203,7 +237,7 @@ brew install vhs              # also needs jq, Google Chrome and network access
 docs/demos/record.sh          # or: docs/demos/record.sh teach-once
 ```
 
-Demos 2 and 3 reuse demo 1's install, so run them in order. Demos 4 and 5 run this checkout's
+Demos 2 and 3 reuse demo 1's install, so run them in order. Demos 4 to 6 run this checkout's
 build (`record.sh` builds it), and demo 5 needs `npm ci` for the fixture. Demo 3 reads the LinkedIn session
 from `~/.api-anything` and never writes to it. Check each GIF's first and last frames before
 committing a new recording.
