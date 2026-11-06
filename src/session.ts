@@ -94,21 +94,17 @@ export function readJson<T>(file: string, fallback: T): T {
   }
 }
 
-const pause = (ms: number) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+export const pause = (ms: number) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 
-/**
- * Run fn holding an exclusive lock file next to `file`, so a read-modify-write in one process
- * never drops another process's update. A lock older than 10 s is a crashed holder's and is taken over.
- */
-export function withLock<T>(file: string, fn: () => T): T {
-  ensureDir(dirname(file));
-  const lock = `${file}.lock`;
-  const deadline = Date.now() + 10_000;
-  let held = false;
-  while (!held) {
+/** Lock files this process holds: a nested lock of the same file runs inside the outer one. */
+const holding = new Set<string>();
+
+function acquire(lock: string, waitMs: number): boolean {
+  const deadline = Date.now() + waitMs;
+  for (;;) {
     try {
       closeSync(openSync(lock, "wx", 0o600));
-      held = true;
+      return true;
     } catch (e) {
       if ((e as NodeJS.ErrnoException).code !== "EEXIST") throw e;
       try {
@@ -116,16 +112,41 @@ export function withLock<T>(file: string, fn: () => T): T {
       } catch {
         /* released meanwhile */
       }
-      // ponytail: after 10 s of contention go ahead unlocked rather than hang a call
-      if (Date.now() > deadline) break;
+      if (Date.now() > deadline) return false;
       pause(2);
     }
   }
+}
+
+function held<T>(lock: string, fn: () => T): T {
+  holding.add(lock);
   try {
     return fn();
   } finally {
-    if (held) rmSync(lock, { force: true });
+    holding.delete(lock);
+    rmSync(lock, { force: true });
   }
+}
+
+/**
+ * Run fn holding an exclusive lock file next to `file`, so a read-modify-write in one process
+ * never drops another process's update. A lock older than 10 s is a crashed holder's and is taken over.
+ * Re-entrant within a process: fn may lock the same file again.
+ */
+export function withLock<T>(file: string, fn: () => T): T {
+  ensureDir(dirname(file));
+  const lock = `${file}.lock`;
+  if (holding.has(lock)) return fn();
+  // ponytail: after 10 s of contention go ahead unlocked rather than hang a call
+  return acquire(lock, 10_000) ? held(lock, fn) : fn();
+}
+
+/** `withLock` that gives up after `waitMs` instead of going ahead unlocked: undefined when it did not run. */
+export function tryLock<T>(file: string, fn: () => T, waitMs = 1000): { value: T } | undefined {
+  ensureDir(dirname(file));
+  const lock = `${file}.lock`;
+  if (holding.has(lock)) return { value: fn() };
+  return acquire(lock, waitMs) ? { value: held(lock, fn) } : undefined;
 }
 
 export const CAPTURE_TTL_MS = 24 * 60 * 60_000;

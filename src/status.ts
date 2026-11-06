@@ -6,7 +6,7 @@
 import { readdirSync } from "node:fs";
 import { join } from "node:path";
 import { loadRecord, type Outcome, opHash } from "./checks.js";
-import { plaintextSessions, SealError, type Sealing, sealing } from "./seal.js";
+import { plaintextFiles, plaintextSessions, SealError, type Sealing, sealing } from "./seal.js";
 import { home } from "./session.js";
 import type { Operation } from "./spec.js";
 import { type CallRecord, coolList, loadCalls, loadHeals, loadSite, loadWrites, staleList, tierList } from "./store.js";
@@ -361,7 +361,35 @@ function storageStatus(site: string | undefined): { storage: Status["storage"]; 
       problems: [{ site: site ?? "*", problem: "plaintext", detail: why, next }],
     };
   }
-  if (storage.sealed || storage.chosen) return { storage, problems: [] };
+  if (storage.sealed) {
+    // files the migration to sealing could not seal yet (busy, corrupt or unwritable): it retries on the next run
+    const left = plaintextSessions().filter((s) => !site || s === site);
+    const captures = site ? [] : plaintextFiles("captures");
+    return {
+      storage,
+      problems: [
+        ...left.map(
+          (s): Problem => ({
+            site: s,
+            problem: "plaintext",
+            detail: "its session file is still unsealed (0600 plaintext): sealing it in place did not succeed yet",
+            next: `run status again (each run retries); if it stays, the file is corrupt or not writable: fix that, or sign in again: api-anything login ${s}`,
+          }),
+        ),
+        ...(captures.length
+          ? [
+              {
+                site: "*",
+                problem: "plaintext" as const,
+                detail: `${captures.length} capture file(s) are still unsealed (0600 plaintext): sealing them in place did not succeed yet`,
+                next: `run status again (each run retries); if it stays, delete the files in ${join(home(), "captures")} (a later learn captures again)`,
+              },
+            ]
+          : []),
+      ],
+    };
+  }
+  if (storage.chosen) return { storage, problems: [] };
   const problems = plaintextSessions()
     .filter((s) => !site || s === site)
     .map(

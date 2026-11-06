@@ -954,6 +954,8 @@ function pagingOf(flag: string | undefined): Paging | undefined {
 /** What a repair says it changed: the op was kept, and one thing in it replaced. */
 async function cmdAdd({ v, pos, steps }: Parsed): Promise<number> {
   const [site, name] = pos;
+  // one instant for every capture this add reads: a pair is not half-refused at the 24 h edge
+  const admitted = Date.now();
   if (!site || !name) throw new Fail("missing <site> <op>", "api-anything add --help");
   if (!v.trigger && !v.from) throw new Fail("missing --trigger (or --from <captureId>)", "api-anything add --help");
   const ex1 = kv(v.example);
@@ -970,7 +972,7 @@ async function cmdAdd({ v, pos, steps }: Parsed): Promise<number> {
   if (v.from2 && !ex2)
     throw new Fail("--from2 needs --example2 (the values that capture was made with)", "api-anything add --help");
   if (v.from && ex2 && !v.from2) {
-    const c = loadCapture(v.from);
+    const c = loadCapture(v.from, admitted);
     const write = !!(c.write || v.write);
     const again = captureAgain(c, ex1, ex2, write);
     throw new Fail(
@@ -1000,14 +1002,14 @@ async function cmdAdd({ v, pos, steps }: Parsed): Promise<number> {
     },
     public: v.public ? v.public.split(",").map((s) => s.trim().toLowerCase()) : undefined,
     from: v.from
-      ? { capture: loadCapture(v.from), id: v["pick-request"] ? Number(v["pick-request"]) : undefined }
+      ? { capture: loadCapture(v.from, admitted), id: v["pick-request"] ? Number(v["pick-request"]) : undefined }
       : undefined,
-    from2: v.from2 ? loadCapture(v.from2) : undefined,
+    from2: v.from2 ? loadCapture(v.from2, admitted) : undefined,
     allowed: allowedOf(v),
     paging: pagingOf(v.paging),
   });
   const op = r.operation;
-  const c = v.from && !v.paging && !op.paging ? loadCapture(v.from) : undefined;
+  const c = v.from && !v.paging && !op.paging ? loadCapture(v.from, admitted) : undefined;
   // the request learned, or the one before it, is one of two pages of a list the capture loaded
   const paged =
     c &&

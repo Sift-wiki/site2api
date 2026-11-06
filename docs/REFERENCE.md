@@ -282,7 +282,8 @@ nothing and needs no browser. Output is one line of JSON:
   answer there forgets the escalation), `degraded`, `failing` (the last call failed for a reason
   other than its args), `verify` (the last verify on this version failed), `write` (a write may
   have gone through), `plaintext` (a session file is stored unsealed because no key is available,
-  or `API_ANYTHING_KEY` is wrong). `next` is phrased as a call's `next`;
+  a session or capture written before sealing is not sealed yet, or the key fails, such as a wrong
+  `API_ANYTHING_KEY`). `next` is phrased as a call's `next`;
 - `storage`: whether session and capture files are sealed here, `{sealed: true, key}` with the key's
   source, or `{sealed: false, why, chosen}`. Finding out may create the key in the OS store, as the
   first save would.
@@ -382,7 +383,8 @@ go — avoid heavy automated traffic on it. Other ways in:
   the second factor is done. It counts only if a login cookie appeared or changed while it was open;
   otherwise `login` answers `ok: false`, says why, and keeps the session you had.
 - `--cookies <file>` imports a `cookies.txt` (Netscape) or JSON export, for servers/CI with no browser.
-- `api-anything logout <site>` clears the stored session.
+- `api-anything logout <site>` deletes the stored session (it needs no key, so it also resets a sealed
+  session whose key is lost).
 
 **How the session is stored.** The session file (`~/.api-anything/sessions/<site>.json`) and
 captures are sealed with AES-256-GCM, so a backup, a synced folder or a copied home does not carry
@@ -390,13 +392,23 @@ your logins. The key is made on first use and kept in the macOS Keychain (item `
 created by `security`, so reading it shows no dialog), the Secret Service on Linux (`secret-tool`),
 or DPAPI on Windows. On a machine with none of those, such as a container or CI, set
 `API_ANYTHING_KEY` to a passphrase; it overrides the OS store. Keep the passphrase: without it the
-sealed files cannot be read, and a wrong one is an error, not an empty session. To start over, delete
-`key-salt.json`, `sessions/` and `captures/` in the home and log in again.
+sealed files cannot be read, and a wrong one is an error, not an empty session. Keep `key-salt.json`
+too: if it goes missing while passphrase-sealed files exist, api-anything refuses to make a new one
+and says to restore it. To start over, run `api-anything logout <site>` for each site, delete the
+files in `captures/`, and log in again.
 
-With no key at all, files stay 0600 plaintext JSON as before: the CLI says so once on stderr, and
-`status` lists a `plaintext` problem for each such session. Set `API_ANYTHING_PLAINTEXT=1` if that is
-your choice, to silence both. Files written before sealing still read, and are sealed in place the
-first time a key is available.
+A sealed file starts with the line `#api-anything-sealed`. api-anything 0.3.2 and earlier refuse such
+a file as corrupt instead of reading it as an empty session, so going back to an older version does
+not overwrite your sealed sessions (it cannot use them either).
+
+On a machine with no key store at all, a home that has never sealed a file keeps 0600 plaintext JSON
+as before: the CLI says so once on stderr, and `status` lists a `plaintext` problem for each such
+session. Set `API_ANYTHING_PLAINTEXT=1` if that is your choice, to silence both. Any other key problem
+is an error and nothing is written in plaintext: a locked or failing key store, any error with
+`API_ANYTHING_KEY` set, or a missing key store in a home that has sealed files. The error's `next`
+says what to fix; the next command asks the key store again. Files written before sealing still
+read, and are sealed in place the first time a key is available; one that cannot be sealed yet (busy
+or corrupt) is retried by the next run and listed by `status` as `plaintext` until then.
 
 A trigger step never signs in: a `--steps` fill into a password or one-time-code field (the page's
 `type=password`, or `autocomplete` `current-password`, `new-password`, `one-time-code`) fails the run

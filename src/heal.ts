@@ -611,6 +611,8 @@ export class CaptureUnavailable extends Error {
   constructor(
     message: string,
     readonly next: string,
+    /** a fresh capture is the whole fix (missing, expired); false when `next` carries another step, such as a key */
+    readonly recapture = true,
   ) {
     super(message);
   }
@@ -629,7 +631,7 @@ export function loadCapture(id: string, now = Date.now()): CaptureFile {
   try {
     c = readSealed<CaptureFile | undefined>(file, undefined, captureLabel(id), `delete ${file}, then ${RECAPTURE}`);
   } catch (e) {
-    if (e instanceof SealError) throw new CaptureUnavailable(e.message, e.next);
+    if (e instanceof SealError) throw new CaptureUnavailable(e.message, e.next, false);
     throw e;
   }
   if (!c) throw new CaptureUnavailable(`no capture "${id}"`, RECAPTURE);

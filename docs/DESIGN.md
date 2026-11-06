@@ -1712,7 +1712,8 @@ or whose literal (outside `{param}`s) is random-looking; add's save and `export`
   duplicate guard records the write, so a call that sends nothing leaves nothing for a repeat to be
   held back by. Nothing sent means the send-once rule is untouched. This check ignores `guestCookies` (see above), so a guest's write still
   reaches the server, whose 401 or 403 is retried as any write's is.
-- **`logout <site>`** clears the jar and that site's cookies in the profile.
+- **`logout <site>`** deletes the session file (it needs no key, so it also resets a sealed jar whose
+  key is lost) and clears that site's cookies in the profile.
 
 ### Sealed files (`seal.ts`)
 
@@ -1730,16 +1731,26 @@ behind the Keychain; storing them less protected than the browser did would undo
   `state.json`, `calls.jsonl`, `checks/`, the write ledger (digests under `write.key`) and settings
   stay plaintext. `key.json` (the install's registry signing key) and `write.key` are secrets but not
   logins, and sealing them would tie the install's identity to the key store; they stay 0600.
-- **Format**: `{"sealed":"api-anything/1","alg":"A256GCM","key":<source>,"kid":<16 hex>,"iv","tag","data"}`.
-  The version marker lets a later format be told apart; one this version does not know is refused
-  with "upgrade". The AAD is the file's role and name (`session:<site>`, `capture:<id>`), so a sealed
-  file renamed to another site's is refused. `kid` is an HMAC of the key, so a file sealed under
-  another key says which one (`key`) instead of failing as tampered. A failed tag is "failed its
-  integrity check", never an empty session.
+- **Format**: a first line `#api-anything-sealed`, then
+  `{"sealed":"api-anything/1","alg":"A256GCM","key":<source>,"kid":<16 hex>,"iv","tag","data"}`.
+  The first line is deliberately not JSON. api-anything 0.3.2 and earlier read a session file with
+  `JSON.parse` and throw on anything else ("is corrupt; fix or delete it"), and every write they make
+  to a session loads it first (`logout` aside), so an older version that meets a sealed home refuses
+  it loudly. A JSON envelope would have read there as an empty session, and the next save would have
+  replaced the sealed jar with plaintext. The version marker lets a later format be told apart. An
+  unknown or malformed marker, a malformed envelope, a 12-byte IV or 16-byte tag of any other length,
+  and a JSON file that carries a `sealed` field without the first line are all "failed its integrity
+  check", never a plaintext session; the decipher is created with `authTagLength: 16`, so a truncated
+  tag cannot pass. The AAD is the file's role and name (`session:<site>`, `capture:<id>`), so a
+  sealed file renamed to another site's is refused. `kid` is an HMAC of the key, so a file sealed
+  under another key says which one (`key`) instead of failing as tampered.
 - **The key**, looked up once per process and cached:
   - `API_ANYTHING_KEY`, when set, overrides the OS store: scrypt (N=2^15, r=8, p=1) of the passphrase
     under a random salt kept in `key-salt.json` with the key's `kid`, so a wrong passphrase is a
-    clear error before anything is read or written. Containers and CI use this.
+    clear error before anything is read or written. Containers and CI use this. A damaged
+    `key-salt.json`, or a missing one while passphrase-sealed files exist, is an error whose `next`
+    says to restore the original from a backup, or to start over (`logout` each site, delete the
+    captures, log in again): a new salt would make another key and orphan those files.
   - macOS: the login Keychain through `/usr/bin/security`, service `api-anything`, account
     `data-key`, created on first need. The secret goes in on stdin (`security -i`), never on the
     command line, and without `-U`, so a key another process added first is kept and read back. An
@@ -1749,18 +1760,43 @@ behind the Keychain; storing them less protected than the browser did would undo
   - Linux: `secret-tool` (libsecret), when it is on PATH and a session bus answers.
   - Windows: DPAPI (CurrentUser) through PowerShell's `ProtectedData`; the protected blob is
     `data-key.dpapi` in the home, readable only by the same Windows account.
-  - The key store is one small interface (`KeyStore`: `get`, `put`); tests inject an in-memory one,
-    and a process under `node:test` (`NODE_TEST_CONTEXT`) never reaches an OS store.
-- **No key** (a headless container, Linux with no session bus): saving is not refused, since that
-  would break the container and CI use INTEGRATIONS.md supports. Files stay 0600 plaintext and that is
-  said once: the CLI prints one warning on stderr per process when it writes one, `status` lists a
-  `plaintext` problem for each unsealed session file, and `status` and `site_status` carry
+  - The key store is one small interface (`KeyStore`: `get`, `put`, `lock`); tests inject an
+    in-memory one, and a process under `node:test` (`NODE_TEST_CONTEXT`) never reaches an OS store.
+  - **Creating the key** is first-writer-wins, since `secret-tool store` and DPAPI's file replace a
+    key that is there. A process that finds no key takes the key lock, looks the key up again, and
+    only then puts a new one; it then uses what the store reads back. The lock is not `withLock`
+    (which expires at 10 s and then goes ahead unlocked, while one store subprocess may take 15 s): its
+    file holds the holder's pid, it is taken over only when that process is gone or after 120 s (three
+    store calls of up to 15 s, plus margin), and a waiter that times out fails instead of going ahead.
+    The Keychain and the Secret Service are shared by every home of the user, so their lock is per
+    user (`$XDG_RUNTIME_DIR` or the per-user temporary directory, `api-anything-<uid>/data-key.lock`),
+    not per home; DPAPI's blob lives in the home, so its lock does too. This was chosen over naming the
+    stored item after a hash of the home: one key per user keeps a moved or copied home readable.
+- **Fail closed.** Plaintext is written in one case only: this home has never sealed a file, and
+  the key store is not here at all (`KeyUnavailable`: no `security`, `secret-tool` or PowerShell
+  binary, no session bus, no Secret Service on the bus, an unsupported OS). Every other key error is a
+  `SealError` with a `next`, and nothing is written: a store that exists and fails (a locked
+  keychain, a timeout), any error with `API_ANYTHING_KEY` set, and a missing store in a home that has
+  sealed. A home has sealed once `sealed.json` exists (written before the first sealed file) or any
+  session or capture file is sealed; there, not even `API_ANYTHING_PLAINTEXT=1` writes plaintext.
+  Failures are never cached, so the next operation asks the store again; a key, and a store found
+  missing, are cached for the process.
+- **No key** (a headless container, Linux with no session bus, never sealed): saving is not refused,
+  since that would break the container and CI use INTEGRATIONS.md supports. Files stay 0600 plaintext
+  and that is said once: the CLI prints one warning on stderr per process when it writes one, `status`
+  lists a `plaintext` problem for each unsealed session file, and `status` and `site_status` carry
   `storage: {sealed, key | why, chosen}`. `API_ANYTHING_PLAINTEXT=1` records the choice and silences
   both (it does not turn sealing off where a key exists).
 - **Migration**: a plaintext file still reads, and is written sealed the next time it is saved. The
-  first time a process has a key for a home without `sealed.json`, the existing session and capture
-  files are sealed in place (captures keep their modification time, which pruning reads), and
-  `sealed.json` records that it ran.
+  first time a process has a key for a home whose `sealed.json` does not say `migrated`, the existing
+  session and capture files are sealed in place (captures keep their modification time, which
+  pruning reads). Each session is re-read and sealed under the same lock its writers take
+  (`tryLock(sessionFile(site))`), so an update made meanwhile is not lost; `withLock` is re-entrant
+  within a process, so a caller already holding that lock (migration starts inside the first save)
+  seals it at once. A session whose lock stays busy for 1 s, or a corrupt or unwritable file, is left
+  for the next process or the next `status` (which retries even in a long-lived MCP server), and
+  `migrated: true` is recorded only when none is left. Until then `status`
+  lists each unsealed session, and the unsealed captures, as `plaintext` problems.
 - **Not covered**: api-anything's own Chrome profile (`profile/`). Playwright starts Chrome with
   `--use-mock-keychain` (macOS) and `--password-store=basic` (Linux), so the cookies `login` adds there
   are encrypted under a fixed key. Using the real Keychain there would show Chrome's own Keychain

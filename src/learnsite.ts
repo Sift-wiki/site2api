@@ -532,8 +532,10 @@ export async function learnSite(input: LearnSiteInput, o: LearnSiteOptions = {})
   let c2: CaptureFile;
   try {
     if (input.captures) {
-      c1 = loadCapture(input.captures[0]);
-      c2 = loadCapture(input.captures[1]);
+      // one instant for the pair: a pair valid when the learn began is not half-refused at the 24 h edge
+      const admitted = Date.now();
+      c1 = loadCapture(input.captures[0], admitted);
+      c2 = loadCapture(input.captures[1], admitted);
     } else {
       if (!browserAvailable())
         return fail(
@@ -557,7 +559,7 @@ export async function learnSite(input: LearnSiteInput, o: LearnSiteOptions = {})
   } catch (e) {
     if (e instanceof ProfileInUse) return fail(e.message, PROFILE_HINT, { nextCall: { action: "retry" } });
     if (e instanceof CaptureUnavailable)
-      return fail(e.message, "learn again without captures: the two runs are made afresh");
+      return fail(e.message, e.recapture ? "learn again without captures: the two runs are made afresh" : e.next);
     return fail((e as Error).message.split("\n")[0]!, "check the trigger URL, then learn again");
   }
   const captures = [c1.id, c2.id];
