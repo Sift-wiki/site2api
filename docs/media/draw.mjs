@@ -1,5 +1,5 @@
 // Draw the README's illustrations, each in a light and a dark variant.
-// Usage: node docs/media/draw.mjs   -> docs/media/{hero,how-it-works,benchmark,feature-*}-{light,dark}.svg, logo.svg
+// Usage: node docs/media/draw.mjs [name ...]  -> docs/media/{hero,flywheel,how-it-works,benchmark,surfaces,feature-*}-{light,dark}.svg, logo.svg
 // System fonts only: GitHub's image proxy blocks web fonts. Animation is CSS and SMIL, which GitHub
 // plays in an <img>.
 import { writeFileSync } from "node:fs";
@@ -743,6 +743,65 @@ function benchmark(t) {
   );
 }
 
+// Every way in reaches the same local operations, which reach the sites over plain HTTP.
+function surfaces(t) {
+  const W = 1280,
+    H = 600,
+    cy = 311;
+  const ways = [
+    ["MCP over stdio", "Claude Code, Codex, Cursor, VS Code, Gemini CLI", false],
+    ["HTTP server", "api-anything serve: REST, /openapi.json, /mcp", true],
+    ["Python", "pip install api-anything", true],
+    ["TypeScript", 'import { call } from "api-anything"', true],
+    ["CLI", "api-anything call <site> <op> key=value", true],
+  ];
+  const sites = ["news.ycombinator.com", "youtube.com", "github.com", "google.com/travel/flights", "goodreads.com"];
+  const row = (i) => 104 + i * 86;
+  let b = `<defs>${markers(t)}</defs>`;
+  b += text(40, 76, "where you call it", { size: 13, fill: t.muted, mono: true, ls: 0.3 });
+  b += text(870, 76, "websites, over plain HTTP", { size: 13, fill: t.muted, mono: true, ls: 0.3 });
+  for (const [i, [title, sub, mono]] of ways.entries()) {
+    const y = row(i);
+    b += `<rect x="40" y="${y}" width="400" height="70" rx="12" fill="${t.panel}" stroke="${t.border}"/>`;
+    b += text(60, y + 29, title, { size: 17, weight: 700, fill: t.text, ls: -0.2 });
+    b += text(60, y + 53, sub, { size: mono ? 13.5 : 14, fill: mono ? t.apiText : t.text2, mono });
+    b += arrow(`M440,${y + 35}C485,${y + 35} 480,${cy} 516,${cy}`, t.api, "arrowApi", 'class="march"');
+  }
+  for (const [i, s] of sites.entries()) {
+    const y = row(i) + 9;
+    b += chip(870, y, 370, 52, text(890, y + 32, s, { size: 15, fill: t.text, mono: true }), t);
+    b += arrow(`M764,${cy}C800,${cy} 820,${y + 26} 864,${y + 26}`, t.api, "arrowApi", 'class="march"');
+  }
+  b += text(870, row(4) + 92, "and more: 114 sites, 323 read operations bundled", { size: 14, fill: t.text2 });
+  // the machine in the middle, and the catalog it trades specs with
+  b += `<rect x="520" y="${cy - 120}" width="240" height="240" rx="18" fill="${t.apiSoft}" stroke="${t.api}" stroke-width="1.5"/>`;
+  b += text(640, cy - 62, "{ }", { size: 24, weight: 600, fill: t.api, mono: true, anchor: "middle" });
+  b += text(640, cy - 26, "api-anything", { size: 21, weight: 700, fill: t.text, anchor: "middle", ls: -0.3 });
+  b += text(640, cy + 2, "on your machine", { size: 14, fill: t.text2, anchor: "middle" });
+  const inside = ["learned or pulled once,", "called from everywhere", "sessions stay here,", "never in a spec"];
+  for (const [k, l] of inside.entries())
+    b += text(640, cy + 40 + k * 20 + (k > 1 ? 8 : 0), l, { size: 13, fill: t.text2, anchor: "middle" });
+  b += `<rect x="540" y="56" width="200" height="64" rx="12" fill="${t.panel}" stroke="${t.border}" stroke-dasharray="4 4"/>`;
+  b += text(640, 84, "shared catalog", { size: 15, weight: 700, fill: t.text, anchor: "middle" });
+  b += text(640, 104, "specs and reports, no calls", { size: 12.5, fill: t.muted, anchor: "middle" });
+  b += `<path d="M640,124V${cy - 126}" stroke="${t.muted}" stroke-width="1.5" stroke-dasharray="3 5" marker-start="url(#arrowMuted)" marker-end="url(#arrowMuted)"/>`;
+  b += text(
+    W / 2,
+    H - 24,
+    "Learn an operation once and every agent and program on the machine can call it. Calls run here, from your network, never through the catalog.",
+    { size: 13.5, fill: t.muted, anchor: "middle" },
+  );
+  const css = `.march{stroke-dasharray:2 7;animation:march 1.4s linear infinite}@keyframes march{to{stroke-dashoffset:-9}}`;
+  return doc(
+    W,
+    H,
+    "Use it anywhere. MCP over stdio for Claude Code, Codex, Cursor, Gemini CLI, VS Code and Hermes; an HTTP server with REST, an OpenAPI document and MCP; a Python package; the TypeScript library; the CLI. All of them call the same operations on your machine, learned once or pulled from the shared catalog, which reach websites such as Hacker News, YouTube, GitHub, Google Flights and Goodreads over plain HTTP. Calls never go through the catalog.",
+    t,
+    b,
+    css,
+  );
+}
+
 // Feature icons for a "what you get" grid: 96×96, meant to be shown at 48 px.
 const ICONS = {
   learn: (t) =>
@@ -801,6 +860,7 @@ const ASSETS = {
   flywheel,
   "how-it-works": howItWorks,
   benchmark,
+  surfaces,
   ...Object.fromEntries(Object.entries(ICONS).map(([k, d]) => [`feature-${k}`, icon(d)])),
 };
 const only = process.argv.slice(2);
