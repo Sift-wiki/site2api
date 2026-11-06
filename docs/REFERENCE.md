@@ -3,6 +3,8 @@
 Details behind the [README](../README.md). The design and its reasons are in
 [DESIGN.md](DESIGN.md); setup for agents is in [QUICKSTART.md](QUICKSTART.md).
 
+- [The CLI and the library at a glance](#the-cli-and-the-library-at-a-glance)
+- [Results you can act on](#results-you-can-act-on)
 - [Creating an operation from captured traffic](#creating-an-operation-from-captured-traffic)
 - [Replay, fallback and repair](#replay-fallback-and-repair)
 - [Read batches and stdin](#read-batches-and-stdin)
@@ -11,8 +13,56 @@ Details behind the [README](../README.md). The design and its reasons are in
 - [Result views and local continuation](#result-views-and-local-continuation)
 - [MCP server](#mcp-server)
 - [Safety and terms of service](#safety-and-terms-of-service)
+- [What leaves your machine](#what-leaves-your-machine)
 - [Status and known limits](#status-and-known-limits)
+- [Bundled sites](#bundled-sites)
 - [Prior art](#prior-art)
+
+## The CLI and the library at a glance
+
+```sh
+api-anything sites                                   # the sites you can call
+api-anything ops goodreads                           # params, returns and caveats
+api-anything call goodreads searchBooks q=piranesi   # JSON out; a failure exits nonzero
+api-anything call google-flights search origin=SFO destination=NYC date=2026-12-01 --max-tier 1
+api-anything call goodreads getBook bookId=50202953 --dry   # the request, credentials redacted
+```
+
+`api-anything <command> --help` explains each command.
+
+```ts
+import { call } from "api-anything";
+
+const r = await call("goodreads", "searchBooks", { q: "piranesi" });
+if (r.ok) console.log(r.tier, r.data);
+else console.log(r.class, r.reason, r.next, r.retry);
+
+// a write needs allowWrites at every entry point
+await call("my-site", "postComment", { text: "Ship it" }, { allowWrites: true });
+```
+
+`npm install api-anything`. [`examples/reading-list.mjs`](../examples/reading-list.mjs) builds a
+five-book table from Goodreads with no model and no browser, and
+[`examples/mentions.mjs`](../examples/mentions.mjs) searches five sites for a project's mentions at
+once. Agent hosts that only call installed operations can use [`api-anything/host`](HOST.md): local
+discovery, redacted approval plans and call-only execution without learning, cookie import or
+registry traffic. Bun can import its TypeScript source without a build step.
+
+## Results you can act on
+
+Every call answers in fields, so an agent or a script can act without parsing prose.
+
+| field | values | it tells you |
+|---|---|---|
+| `class` | `ok` `drift` `auth` `rate` `blocked` `input` `error` `refused` `duplicate` | what happened |
+| `write` | `not_sent` `not_applied` `accepted` `applied` `may_have_applied` | what a write did |
+| `retry` | `safe` `after_wait` `after_fix` `no` | whether to send it again; `retryAfterMs` says when |
+| `nextCall` | `login` `relearn` `fix_args` `check_site` `allow_writes` ... | the one step to take next; over MCP, with the tool and its args |
+| `nextPage`, `hasMore` | the site's own cursor | how to get the next page of a list |
+| `heal` | `{strategy, changes}` | how a call that repaired the op did it, and what changed in its request; `api-anything revert` undoes it |
+
+`tier` says how the call went: 1 is one plain HTTP request, with no browser. A failure also says
+why (`reason`) and what to do next (`next`).
 
 ## Finding operations and checking health
 
@@ -441,7 +491,22 @@ A trigger step never signs in: a `--steps` fill into a password or one-time-code
 and saves nothing, since a step's value is stored in the spec. A hand-written step like that is
 refused by `export`, `publish` and `pull`.
 
-Chrome, Arc, Brave, Edge, Chromium and Firefox are supported on macOS and Linux.
+Chrome, Arc, Brave, Edge, Chromium and Firefox are supported on macOS and Linux (on Linux, not
+cookies encrypted with the desktop keyring). On Windows, `login` opens a window.
+
+In short:
+
+- **Guest cookies don't count.** Many sites give every visitor a cookie named like a login
+  (`laravel_session`, `_app_session`). `login` notes which ones a signed-out visit gets, and those
+  never count as signed in.
+- **A window sign-in has to show a login.** It counts only if a login cookie appears or changes
+  while the window is open. Otherwise `login` says so and keeps the session you had.
+- **On an unauthorized call**, API Anything tries each of these at most once, retrying the call after
+  each one that changes something: re-import from the profile you chose; take cookies from its own
+  browser profile; for an op with session tokens, reload the page so the site issues fresh ones. A
+  write's own request is stopped during that reload, so only the retry sends it.
+- **A write learned while signed in** isn't sent while the session has no live login cookie.
+- Live cookie and session values are replaced by `[redacted]` in every `reason` and `next`.
 
 ## Read batches and stdin
 
@@ -680,10 +745,87 @@ omit them, because their targets are not part of that upload.
 - Many sites' terms restrict automated access. Read them. You are responsible for how you use
   this tool.
 
+### Write guards, in short
+
+- Nothing is sent without `--allow-writes` (MCP: `call_write_operation`, library: `allowWrites`).
+- Learning a write intercepts and aborts the request, so learning never performs it. Learning a read
+  stops any POST, PUT, PATCH or DELETE its clicks send, so a forgotten `--write` places no order.
+- When the browser sends a write, only the requests its learning saw go out: a redesigned button
+  that now deletes the account is stopped, and the result names it.
+- Card payment stays with you: api-anything doesn't learn card fields.
+- A write is sent once. It is retried only when the server certainly didn't run it (400, 401, 403, 404).
+- The same write within 10 minutes is refused as `duplicate`, unless you pass `--again`.
+  `--idempotency-key` on the first call makes a repeat return that call's record.
+- A key the page makes per request (`Idempotency-Key: crypto.randomUUID()`) is made fresh for each call, not replayed.
+- `accepted` is a 2xx. Only a `readback` that finds the new item makes it `applied`.
+
+[Recording: a write refused without `--allow-writes`, applied once, then refused as a duplicate](demos/README.md#5-a-write-refused-by-default-sent-once-never-twice),
+against the local test site the suite uses. No write operation is bundled.
+
+## What leaves your machine
+
+Calls run on your machine, your network and your sessions. The catalog stores specs and counts
+reports; it never proxies your calls. Its only request to a site is the "try it" endpoint for a few
+public operations ([REGISTRY.md](REGISTRY.md)), which a visitor runs from the catalog's page.
+
+Whether sharing is on or off, a search goes to the catalog: the words, domain or URL your agent passes
+to `find_sites`, and the name of a shared site it calls before this machine has it. The catalog keeps
+no search words. Local-only mode (`api-anything setup --local-only`, or `API_ANYTHING_LOCAL_ONLY=1`)
+stops every registry request, searches included; searches then cover this machine only and say so.
+With sharing on:
+
+- **Operations learned from public pages.** Shared automatically only when it is a read, it was
+  learned signed out, and the replay with no cookies answered (with the data, or with a bot wall
+  such as Anubis or Cloudflare, which each caller's browser passes on its own). Its stored example
+  is the agent's second value and its check is the third, never the value you asked for.
+- **An operation that needed your login**, or one that may hold something of yours (an email
+  address, an id, a value typed into the page), goes only after you say yes, or once 3 installs on
+  3 networks learned exactly the same thing.
+- **Reports.** After a call: which version ran, the outcome, the transport tier and the time. No
+  arguments and no data. Each is signed by your install's anonymous key.
+- **Background checks, only with verification on too.** Verification is a separate question, asked
+  after a yes to sharing and defaulting to no (`setup --verify` or `--no-verify`). With it on, an idle
+  MCP server calls a few new operations a day (at most 20) with their published examples, from your
+  network over plain HTTP with no cookies, only to https addresses on public hosts.
+- **Repairs.** When a call heals a public operation that drifted, the repaired version is shared.
+
+With sharing off (`api-anything setup --no-share --share-only`), or before you answered, nothing is
+shared or reported, and the catalog still works for reads. [How the catalog works](REGISTRY.md)
+
+### What the gate checks
+
+- Cookies and tokens are references in an operation (`cookie:name`), never their values, and a spec
+  holding a live credential is refused before it is saved.
+- `publish` previews exactly what each upload sends, every host the op sends to, and anything that
+  may be yours, such as an email or an account id. Nothing is sent until `--yes`.
+- It refuses a spec holding a live cookie or session value, a provider API key, an op whose recorded
+  checks fail, and an op marked `unproven`. The catalog runs the same rules again on every upload.
+- A param can declare an `enum`, a `min` or a `max`. A call outside them is `input`, and nothing is sent.
+- A pulled spec is someone else's. A session value goes only back to the host it came from, an
+  unconfirmed candidate runs with none of your cookies, and its writes still need `--allow-writes`.
+
+### Sharing by hand
+
+```sh
+api-anything search book ratings        # or goodreads.com, or a page's URL
+api-anything pull goodreads             # checked against the shared rules first
+api-anything check hn-demo links domain=arxiv.org --expect result  # confirmed on the site
+api-anything verify hn-demo                                         # pass, fail or inconclusive
+api-anything publish hn-demo                                        # preview only
+api-anything publish hn-demo --yes                                  # upload, signed by this install
+```
+
+Your agent does the first two on its own: `find_sites` searches the catalog, and calling a site this
+machine doesn't have fetches it, reads only. A new operation is a candidate until installs other than
+its uploader report it working from different networks; then it is served as live. A live one is
+replaced only when 3 or more networks see it fail. Operations that write, that needed a login, or
+that send to another site's host wait for a maintainer, and are never promoted by reports. A site's
+own MCP server or OpenAPI document shows up in search beside the operations agents learned for it.
+
 ## Status and known limits
 
-This is an early release for developers and agents. It ships 25 read operations across ten
-sites. Those operations cover selected features, not the entire sites. LinkedIn messaging and
+This is an early release for developers and agents. It ships 323 read operations across 114
+sites ([the list](#bundled-sites)). Those operations cover selected features, not the entire sites. LinkedIn messaging and
 posting are not bundled. The engine's write handling is tested against a local fixture, not
 against every site's real write endpoints. Treat `write: "accepted"` as taken, not done: give the
 op a `readback`, so a call can say `applied`, or check the site before treating delivery as confirmed.
@@ -692,9 +834,30 @@ Site specs are executable request/interaction instructions. Install specs from s
 and review their destinations and write declarations. A `readOnly` declaration is not a sandbox
 for a malicious spec, and website text is data, not instructions for the agent.
 
-This is version 0.1. The offline suite covers the learning, healing, tier and write paths
-against a local fixture site. Individual real sites vary and are not continuously verified.
-Known limits:
+The offline suite covers the learning, healing, tier and write paths against a local fixture site.
+Individual real sites vary and are not continuously verified.
+
+In short:
+
+- Calls run on your machine, your network and your sessions. The catalog is a directory of specs,
+  not a hosted API, and it's young.
+- It knows only the operations someone taught it, not every feature of every site.
+- `learn_site` learns from one page load per value, from a URL template. A site whose data appears
+  only after clicks or typing, or only on in-app navigation, needs the CLI's `capture` and `add`
+  with `--steps` or `--soft-from`. It learns reads only.
+- A shared operation is someone else's work. Candidates are served marked as such until other
+  installs confirm them, and an operation that worked for others can still fail for you (a
+  different region, a block on your network).
+- Repair can fail. There's no CAPTCHA solving: if a site challenges real Chrome, you clear it by hand,
+  and a challenge that doesn't clear is reported as `blocked`.
+- `verify` proves an op only as far as its examples and checks go: a few cases a human confirmed,
+  not a test suite.
+- No write operations are bundled, and writes are tested only against a local fixture. A 2xx doesn't
+  prove a message was delivered: only a write op with a `readback` that finds it says `applied`.
+- Paging hands back the site's own next cursor when the answer has one. Numbered pages get no hint.
+- Read each site's terms. You're responsible for how you use it.
+
+Known limits in detail:
 
 - An arg a site derives from another request is substituted only when an earlier GET of the same
   page load, on the same host and carrying the example values, answers it as JSON, and two examples
@@ -768,6 +931,138 @@ Known limits:
   answer it was recorded from, not that the site still answers that way. Ops that send a cookie or
   session value have none.
 
+
+## Bundled sites
+
+114 sites and 323 read operations ship with the package (`api-anything sites` from an empty home,
+2026-11-06), and the catalog serves the same ones. They cover selected features, not whole sites.
+On 2026-10-31, called from an empty home with their examples, 97 of the 99 operations that needed no
+account in the first 55 sites answered with data ([release notes](RELEASE-READINESS.md)).
+`api-anything ops <site>` lists each op's params and caveats, and the
+[catalog](https://api-anything-registry.forth-site.workers.dev) has everything agents shared since.
+
+Known gaps: `google-flights.priceCalendar` answers an internal error since Google changed it, and
+`aldi.applianceDetails`'s example product is gone. `linkedin` needs your account, and `dominos-au`
+ships no examples. Reddit challenges plain HTTP from many networks, so its calls often need the
+browser tier. `dominos-au` came in through `publish` from a contributor, `goodreads` was built by
+the [explorer](../bench/explore/README.md), and `reddit` was the site agents asked for most.
+
+| site | ops | what |
+|---|---|---|
+| `airbnb` | 2 | Search Airbnb stays by date and inspect public listings |
+| `aldi` | 1 | Retailer descriptions and advertised technical details for public ALDI UK appliance product pages. |
+| `aljazeera` | 1 | Read Al Jazeera English section fronts. |
+| `allrecipes` | 4 | Allrecipes recipes, logged out: keyword search, ingredients, steps, nutrition and embedded reviews. |
+| `amazon` | 1 | Amazon.com product search |
+| `apple` | 4 | Public US iPhone technical specifications from Apple model-family pages. Includes public iPhone, iPad and Mac model-family catalog links. Includes selected public US retail store business details and source-declared opening hours. |
+| `appstore` | 4 | Public App Store app listings, displayed reviews, developer shelves and US iPhone search results. |
+| `archive` | 2 | Search Internet Archive items and inspect Wayback Machine capture summaries without an account. |
+| `arxiv` | 4 | Public arXiv paper abstracts, search results and category submissions from arxiv.org HTML pages. |
+| `ashby` | 2 | Public Ashby-hosted company job boards and postings. |
+| `auchan` | 1 | Public French product identities and general characteristics, without purchase-mode prices or availability. |
+| `bbc` | 3 | Read BBC section fronts and public news articles. |
+| `bbcgoodfood` | 2 | Signed-out recipe search and recipe details from Good Food public pages. |
+| `bing` | 1 | Public organic web search results from the signed-out Bing results page. |
+| `bluesky` | 3 | Read public Bluesky profiles, author feeds and post threads without signing in. |
+| `booking` | 3 | Booking.com stays, logged out: search a destination for dates, a property's details, and its rooms and rates for dates. |
+| `chownow` | 1 | Public restaurant identity and nested published menu data from ChowNow source documents. |
+| `clinicaltrials` | 2 | Search public clinical studies and read their registry records. |
+| `cnn` | 2 | CNN's public lightweight headlines and articles. |
+| `commons` | 3 | Public Wikimedia Commons image search, file pages and category galleries. |
+| `costco` | 1 | Public US product identity and descriptive metadata, without membership prices or availability. |
+| `coursera` | 3 | Public course catalog search, course metadata and ordered specialization curricula from signed-out Coursera pages. |
+| `courtlistener` | 1 | Search public US court opinions on CourtListener, a Free Law Project service. |
+| `craigslist` | 3 | Search signed-out public for-sale listings in the San Francisco Bay Area. |
+| `crates` | 8 | Search public Rust crates and inspect their releases, dependencies, reverse dependencies and owners, logged out. |
+| `disneyplus` | 3 | Public signed-out title metadata from Disney+ entity documents in the observed US English context. |
+| `dockerhub` | 2 | Look up public container repositories and their first page of tags without an account. |
+| `docsrs` | 3 | Read public Rust crate documentation and release overviews on docs.rs. |
+| `dominos-au` | 3 |  |
+| `duckduckgo` | 2 | Signed-out web search results and search autocomplete suggestions. |
+| `ecb` | 2 | Get official euro foreign-exchange reference rates and recent currency history. |
+| `edx` | 3 | Public provider course cards, course details and professional-certificate course membership from signed-out edX documents. |
+| `espn` | 4 | ESPN scores, standings and NBA rosters, logged out. |
+| `eventbrite` | 2 | Discover featured events by city and read public event details. |
+| `fandango` | 2 | Public movie discovery and metadata from Fandango search and movie overview pages. |
+| `federalregister` | 3 | Search public US federal regulations, notices and presidential documents and read their publication details. |
+| `flashscore` | 2 | Public competition document pair navigation and identity/competition metadata for the fixture selected by a known football pair link. Pair links do not uniquely select a date or event. |
+| `flixbus` | 2 | Public city stop directories and published route guide FAQs. |
+| `github` | 12 | Public GitHub repository search, repository details, files, directories, releases, user profiles, issues and pull request lists, from github.com's own pages. |
+| `goodreads` | 6 | Goodreads books, logged out: search, book details, an author's books, and community reviews. Explored and built by an agent with the api-anything skill (bench/explore). |
+| `google-flights` | 3 | Logged-out one-way flight search and a cheapest-date price calendar on Google Flights. Prices in USD, en-US. |
+| `google-maps` | 1 | Public signed-out Google Maps place search with English/US result context. |
+| `google-play` | 5 | Public Android app listing identity and displayed metadata in the response locale. |
+| `greenhouse` | 2 | Public Greenhouse-hosted company job boards and job descriptions. |
+| `guardian` | 3 | Read Guardian news fronts, articles and topic pages. |
+| `gumtree` | 1 | Public UK listing product metadata from server-rendered detail documents. |
+| `habr` | 1 | Habr (habr.com), the Russian-language IT community, logged out: one article or news item by id. Results are in Russian. |
+| `hacker-news` | 7 | Hacker News front page (HTML) and story search via the Algolia index behind hn.algolia.com. Public, logged out. |
+| `hays` | 1 | Public structured job metadata from Hays UK posting pages. |
+| `healthline` | 1 | Public news article titles, source URLs, credits and publisher date labels. No article bodies or clinical guidance. |
+| `hh` | 2 | hh.ru (HeadHunter), the largest Russian job board, logged out: vacancy search by keywords and region, and one vacancy's details. Results are in Russian. |
+| `huggingface` | 7 | Hugging Face Hub: search public models, datasets and Spaces, and read their repository metadata while logged out. |
+| `ietf` | 3 | Public RFC and Internet-Draft search and metadata from the IETF Datatracker. |
+| `ikea` | 4 | Public signed-out IKEA US English category products, individual product metadata and selected-store visit details. |
+| `imdb` | 1 | Find movies, TV series and people on IMDb |
+| `instacart` | 3 | Public city retailer directories, pantry category product discovery and product-detail metadata from Instacart. |
+| `instagram` | 2 | Public Instagram profiles, logged out: profile details and the 12 most recent posts, read from the Relay data embedded in the server-rendered profile page. |
+| `jet2holidays` | 1 | Public destination descriptions, popular resort labels and editorial activity categories. |
+| `justwatch` | 1 | Regular public streaming, rental, purchase and other provider offers on US movie pages. |
+| `khan-academy` | 2 | Public course identity and ordered unit metadata from signed-out Khan Academy course pages. |
+| `lever` | 2 | Public job boards hosted on Lever (jobs.lever.co/<company>), read through Lever's public postings API: every open posting of a company, and one posting's full description. |
+| `linkedin` | 5 | LinkedIn read operations over the Voyager API: your own mini profile, a member profile, a company, people search, company search. Needs login: `api-anything login linkedin --profile <browser/profile>` imports your session. |
+| `mastodon` | 7 | Read public accounts and recent posts on mastodon.social without signing in. |
+| `mcdonalds` | 2 | Public national US menu category product links and product descriptions. No restaurant pricing, availability or customized nutrition. |
+| `mdn` | 3 | Search English web platform documentation, read article sections, and inspect browser compatibility data without an account. |
+| `meetup` | 2 | Public event discovery and advertised schedules from signed-out Meetup pages. |
+| `megabus` | 1 | Provider-advertised US route-guide identity, stop counts and travel summaries. |
+| `metacritic` | 6 | Public title search, scores, critic reviews and browse lists from Metacritic. |
+| `musicbrainz` | 7 | Search public artists, releases and recordings, and inspect artist and release pages. |
+| `nasa-images` | 2 | Search NASA's public image, video and audio library and find available media assets. |
+| `nasdaq` | 1 | Public stock listing identity from observed Nasdaq frontend requests. |
+| `netflix` | 3 | Public signed-out title metadata from Netflix title documents in the observed US English context. |
+| `nike` | 5 | Public US catalog categories, product details and initial free-text search shelves, signed out. |
+| `npr` | 3 | NPR's public text-only front page, sections and articles. |
+| `openfoodfacts` | 1 | Look up public food product information by barcode. |
+| `openlibrary` | 7 | Open Library (the Internet Archive's book catalog): book search from the site's search page, and a work's or an author's record from the site's own JSON. Public, logged out. |
+| `openstreetmap` | 4 | Reverse-geocode coordinates and get driving, walking, and cycling directions using OpenStreetMap's public map. |
+| `pinterest` | 1 | Public signed-out Pinterest search suggestions from the frontend typeahead. |
+| `pkggodev` | 3 | Search and inspect public Go packages and their documentation indexes. |
+| `pypi` | 3 | Public Python project metadata, release history and release files from PyPI project pages. |
+| `pythondocs` | 3 | Read Python 3 documentation pages and standard library API entries, and browse the module index without an account. |
+| `reddit` | 3 | Reddit, logged out: site-wide post search and sorted subreddit feeds, read from the pages reddit.com serves. Reddit challenges plain HTTP from many networks, so a first call can take the browser tier. |
+| `rfceditor` | 1 | Public RFC text from the RFC Editor. |
+| `rightmove` | 1 | Public UK property-search location lookup from the Rightmove frontend. |
+| `rottentomatoes` | 5 | Public movie search, scores, TV series profiles and movie lists from Rotten Tomatoes. |
+| `smartrecruiters` | 2 | Public company career pages and job postings hosted by SmartRecruiters. |
+| `spotify` | 5 | Public track, album, playlist, artist and podcast episode metadata from Spotify embed documents. |
+| `steam` | 5 | Public Steam storefront product search without an API key. |
+| `substack` | 1 | Find public Substack profiles and their primary publications. |
+| `ticketmaster` | 1 | Search public event metadata from the Ticketmaster US frontend. |
+| `tiktok` | 2 | Public TikTok profiles and videos, logged out: a profile's bio and counts, and one video's caption, stats, music and author, read from the data embedded in the server-rendered page. |
+| `timeanddate` | 2 | Local time, time zones and public holidays from timeanddate.com |
+| `tmdb` | 1 | Search public movie, television and person listings on The Movie Database. |
+| `toscrape` | 4 | The toscrape.com scraping sandbox, read from its server-rendered pages: books.toscrape.com (a fake bookstore: a category's books and a book's details) and quotes.toscrape.com (quotes by tag and an author's bio). |
+| `tradingview` | 2 | Public instrument metadata and U.S. sector stock discovery from TradingView documents. |
+| `trip` | 1 | Public destination hotel lists from Trip.com landing pages, without dates or live availability. |
+| `ulta` | 3 | Public US beauty product documents. |
+| `uniqlo` | 1 | Signed-out Denmark English product metadata; excludes prices, inventory and variant selection. |
+| `usgs-earthquakes` | 3 | Explore recent earthquakes and search the USGS earthquake catalog. |
+| `vinted` | 1 | Document metadata for known public US resale items. |
+| `waitrose` | 2 | Public UK product document metadata without a selected store. |
+| `weathergov` | 3 | Get public US National Weather Service point forecasts, hourly tables, and current weather observations. |
+| `wikidata` | 3 | Public Wikidata entity search, selected item claims, and English label resolution. |
+| `wikipedia` | 10 | English Wikipedia: search, article text, links, sections, categories, summaries, languages, Main Page highlights and public revision history. Public, logged out. |
+| `wikiquote` | 3 | Public English Wikiquote title suggestions, selected quotation list items and the current quote of the day. |
+| `wikivoyage` | 3 | English Wikivoyage destination search, summaries and travel-guide sections, available logged out. |
+| `wiktionary` | 3 | Public dictionary entry definitions, title suggestions, and English IPA pronunciations from English Wiktionary. |
+| `workable` | 1 | Public job postings on Workable-hosted company boards. |
+| `workday` | 1 | Public job metadata on Workday’s own employer careers tenant, not other employers using Workday. |
+| `x` | 3 | Public X (Twitter) profiles and individual posts, logged out: account details, profile cards, and visible post text and engagement. |
+| `yahoo-finance` | 2 | Public stock quotes from Yahoo Finance's summary documents. |
+| `yandex` | 2 | Yandex Weather (yandex.ru/pogoda), logged out: current weather and the hourly forecast for a city. Results are in Russian. Yandex web search and Yandex Market answer a SmartCaptcha to automated browsers, so they are not covered. |
+| `youtube` | 7 | Search YouTube videos and browse public video and channel details |
+| `zalando` | 1 | Public UK article identity and colour metadata; excludes size selection, offers and inventory. |
 
 ## Prior art
 

@@ -129,6 +129,17 @@ api-anything learn 'https://lobste.rs/domains/{domain}' \
   --args domain=github.com --args2 domain=arxiv.org --args3 domain=youtube.com
 ```
 
+For a site that needs more than one page load per value, tell an agent with a shell what you want
+from the site. The [skill](../skills/api-anything/references/authoring.md) has it:
+
+1. ask about whatever the request leaves unclear;
+2. propose operations as `name(inputs) -> fields`, and wait for your approval;
+3. scout each page with `capture --outline`, a summary of what each request returns;
+4. build each operation with `add`, and check it with an input that wasn't an example.
+
+One run on Goodreads took 6.3 minutes and $1.19 and produced search, book details, an author's
+books and reviews ([how it was explored, tested and compared](../bench/explore/README.md)).
+
 ## Other clients and flags
 
 `setup` covers Claude Code, Codex, Cursor, Claude Desktop, Hermes, Gemini CLI and VS Code. For any
@@ -139,7 +150,16 @@ paths:
 api-anything mcp --print-config
 ```
 
-It prints the add command for Claude Code, Codex, Gemini CLI and VS Code, the JSON entry for Cursor
+To install the command globally and connect a client by hand:
+
+```sh
+npm install -g api-anything
+claude mcp add --scope user api-anything -- api-anything mcp   # Claude Code
+codex mcp add api-anything -- api-anything mcp                 # Codex
+api-anything mcp --print-config                                # any other client
+```
+
+`--print-config` prints the add command for Claude Code, Codex, Gemini CLI and VS Code, the JSON entry for Cursor
 and Claude Desktop, and the mcp_servers entry for Hermes, all pointing at the absolute path of the
 `node` you ran it with and of the installed CLI. Pass the flags you want served (`--allow-writes`,
 `--sites goodreads`) and it adds them. A client started from the Dock or a menu may not get your
