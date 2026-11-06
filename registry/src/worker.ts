@@ -23,6 +23,7 @@ import { CSP, homePage, sitemap, sitePage } from "./pages.js";
 import { nextStatus, type Thresholds, thresholds, toArchive } from "./rules.js";
 import { community, countCalls, forgetCalls, publicStats } from "./stats.js";
 import {
+  activateKey,
   addSite,
   addVersion,
   archive,
@@ -381,6 +382,7 @@ async function upload(c: Ctx) {
     await db.batch([
       putReport(db, { hash: u.hash, key, network, outcome: "ok", at: now }),
       touchOk(db, u.hash, key, now),
+      activateKey(db, key, now),
     ]);
     const status = await recompute(c, held);
     const reasons = held.reasons ? (JSON.parse(held.reasons) as string[]) : undefined;
@@ -511,7 +513,14 @@ async function reports(c: Ctx) {
       ),
     ]);
   for (const v of versions.values()) await recompute(c, v);
-  await touchKey(db, key, now, 0, known.length);
+  await touchKey(
+    db,
+    key,
+    now,
+    0,
+    known.length,
+    known.some((r) => r.outcome === "ok"),
+  );
   return json({ accepted: known.length, ignored: list.data.length - known.length });
 }
 
@@ -619,7 +628,7 @@ async function landing(c: Ctx, name: string) {
         byInstall: by.sites.has(name),
         opsByInstalls: site.operations.filter((o) => by.hashes.has(o.hash)).length,
       },
-      tryable(c.env, site),
+      tryable(c.env, site.name),
     ),
   );
 }

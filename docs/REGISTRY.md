@@ -159,12 +159,17 @@ one install from another, no key and no network hash:
     with sharing off, or one that never called a registry op, is never seen: `seen` is a floor on working
     installs, not a count of downloads.
   - `activated`: keys with an accepted report of any outcome (`keys.reports`, which outlives the report
-    rows a purged version takes with it); `ok`, keys with an ok report, which is the number of installs
-    known to have made a call that worked. The 7- and 30-day windows read when the key's latest report on
-    each version arrived.
+    rows a purged version takes with it); `ok`, keys that ever had an ok report accepted, which is the
+    number of installs known to have made a call that worked. `ok.total` reads `keys.activated_at`, set
+    once at the first accepted ok (a report, or a re-upload's confirmation) and never cleared: a report row
+    keeps only the key's latest outcome on its version and goes with a purged version, so it cannot say
+    whether a key was ever ok. The 7- and 30-day windows read when the key's latest report on each version
+    arrived.
   - `sharing`: keys that uploaded a version or reported in the last 30 days.
-  - `countedAt`: counting reads every key, so the funnel is kept in `snapshots` and recounted at most once
-    an hour (the 60 s edge cache works only on a custom domain, below).
+  - `countedAt`: counting reads every key, and the stats are read far more often, so the funnel is kept in
+    `snapshots` and recounted at most once an hour. The read that finds it stale claims the recount with
+    one conditional write (a 5-minute lease); a read that loses serves the previous count meanwhile, or
+    zeros with no `countedAt` before the first count is stored.
 - `calls`: reports accepted in the last 7 UTC days, today included, from the `calls` table (a count per
   day and outcome; `reports` keeps only each install's latest outcome per version, so it cannot count
   calls). `okRate` is ok / (ok + fail + wrong), absent with none of those. The daily job deletes days
@@ -200,17 +205,27 @@ It runs only when all of these hold, checked on every request:
   `searchArticles` and `getSummary`, openlibrary `getWork` and `getAuthor`, usgs-earthquakes `recent` and
   `getEvent`, nasa-images `search`. Bundled public reads of harmless data, answered over plain HTTP by
   hosts that answer a datacenter's address. Anything else is a 404 with nothing read or sent;
-- the version the catalog serves for it is live, `readOnly`, a GET, `minTier` 1, not learned signed in,
-  with no slot holding a `cookie:` or `session:` ref or a lookup's answer, and no `public` names;
-- its request is https to a public host (`badAddress`) on the registrable domain of the site's
-  `baseUrl`, and so is the filled request; the site passes `vetShared`;
 - `TRY_ENABLED` is `true` (`registry/wrangler.jsonc` sets it; unset or any other value is off, a 503).
 
+What runs is the op as reviewed in the repo: the Worker build imports those sites' `sites/<name>.json`,
+and a try never reads the version the registry serves. Anyone can upload a version under an allowlisted
+name and, with reports from a few networks, get it promoted, so running the served version would let
+them point the catalog's request anywhere on the site's domain. The bundled op is checked once, when
+the Worker first needs it, and left out if it fails: `readOnly`, a GET, `minTier` 1, not learned signed
+in, no slot holding a `cookie:` or `session:` ref or a lookup's answer, no `public` names, its request
+https to a public host (`badAddress`) on port 443 on the registrable domain of the site's `baseUrl`,
+and the site passing `vetShared`.
+
+Each op is pinned to its origin: the scheme, host and port of its bundled request. `TRY_OPS` can list
+more origins for an op, each https on port 443 (none does today). The filled request and every redirect
+hop must go to exactly one of those, so another host on the same domain, another port or plain http is
+refused. Redirects are followed at most twice.
+
 What it sends: the filled template with an empty cookie jar, so only the op's own literal headers and
-its args. Nothing of the visitor's request (cookies, authorization, IP headers) goes on. Redirects are
-followed at most 3 times and only on the op's site. The answer is judged and extracted by the client's
-own `src/classify.ts` and `src/extract.ts`, HTML included (node-html-parser bundles for Workers), and
-capped as a call's output is.
+its args. Nothing of the visitor's request (cookies, authorization, IP headers) goes on. The answer is
+judged and extracted by the client's own `src/classify.ts` and `src/extract.ts`, HTML included
+(node-html-parser bundles for Workers), and capped as a call's output is. A change to an allowlisted
+op in `sites/` reaches tries with the next deploy.
 
 The limits, each a Worker var to tighten without a code change:
 
@@ -218,7 +233,7 @@ The limits, each a Worker var to tighten without a code change:
 |---|---|
 | tries per network (IPv4 /24, IPv6 /32, hashed) a minute, a cached one included | 10 (`TRY_PER_MINUTE`) |
 | tries per network a UTC day | 100 (`TRY_PER_DAY`) |
-| requests sent to sites a UTC day, all networks | 5000 (`TRY_PER_DAY_ALL`) |
+| requests sent to sites a UTC day, all networks, each redirect hop one | 5000 (`TRY_PER_DAY_ALL`) |
 | time for the whole exchange, redirects and body included | 8 s (`TRY_TIMEOUT_MS`) |
 | the site's answer, declared or streamed | 1 MB (`TRY_MAX_BYTES`) |
 | an ok answer cached by its version and filled URL | 600 s (`TRY_CACHE_SECONDS`) |
@@ -416,9 +431,9 @@ maintainer sets its status (`POST /v1/admin/versions/:hash`), when it:
   (`UPLOADS_PER_HOUR_ALL`). Every limit answers 429 with Retry-After.
 - Public reads (`/v1/search`, `/v1/sites/:name`, `/v1/index`, `/v1/demand`, `/v1/stats`, `/`,
   `/sites/:name`, `/wanted/:domain`, `/sitemap.xml`) are cached for 60 s at the edge, keyed by URL. A signed read skips the cache, since it may include the
-  signer's own `review` versions. The Workers Cache API has no effect on a `*.workers.dev` host, only
-  on a custom domain, so on workers.dev nothing is cached (this one and `/v1/try`'s): every read runs
-  its queries, which is why the stats' install funnel is kept in `snapshots`.
+  signer's own `review` versions. Cloudflare documents the Cache API as working for a Worker on a custom
+  domain; nothing here relies on it caching on the `*.workers.dev` host. The limits hold without it, and
+  the stats' install funnel is kept in `snapshots` anyway, since counting it reads every key.
 - A maintainer can block a version or a site.
 
 What these rules leave open:
@@ -442,7 +457,7 @@ What these rules leave open:
 D1 tables: `sites` (name, domain, display fields, notes, first uploader), `versions` (hash, site,
 op name, match signature, operation JSON, parent, status, uploader and its network hash, evidence,
 timestamps including when it first went live, its report counts), `reports`
-(hash, key, network hash, outcome, tier, at), `keys` (public key, first seen, counts), `rates` (hourly
+(hash, key, network hash, outcome, tier, at), `keys` (public key, first seen, counts, first accepted ok), `rates` (hourly
 counters, kept for a day), `claims` (fingerprint, site, key, network hash, name hash, at), `demand`
 (registrable domain, network hash, at; deleted after 90 days), `interfaces` and `interface_reports`
 (url, domain, kind; key, network hash, at), `calls` (UTC day, outcome, count; deleted after 90 days),

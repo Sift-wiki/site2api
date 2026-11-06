@@ -1164,10 +1164,13 @@ that block datacenters. The single exception is a visitor's try (`GET /v1/try/:s
 `registry/src/try.ts`; docs/REGISTRY.md "Trying an op from the catalog"), so that someone without Node 22
 can see what an op answers before installing. It is narrow on purpose, because each try is a request the
 catalog sends in its own name from Cloudflare's addresses: only ops in a list in the code (a few bundled
-public reads of harmless data), only the served live version, only a GET at `minTier` 1 with no
-`cookie:`/`session:` ref, no lookup and no `public` names, https to a public host on the site's own
-domain, passing `vetShared`; only the op's literal headers and an empty jar, never anything of the
-visitor's request; limits per network and per day, an 8 s timeout, a 1 MB cap, and a 10-minute cache.
+public reads of harmless data), and only as reviewed in the repo's `sites/`, built into the Worker, never
+the version the registry serves (anyone can upload a version under an allowlisted name and get it
+promoted); only a GET at `minTier` 1 with no `cookie:`/`session:` ref, no lookup and no `public` names,
+passing `vetShared`; every request, each redirect hop included, to the op's exact origin (https, port
+443) or an origin listed beside it, at most 2 redirects; only the op's literal headers and an empty jar,
+never anything of the visitor's request; limits per network and per day, a daily total that each hop
+takes from, an 8 s timeout, a 1 MB cap, and a 10-minute cache.
 It reuses `buildRequest`, `judge` and `capOutput`, so its answer is a `CallResult` (with `via:
 "catalog-try"`). The Worker var `TRY_ENABLED` turns it off without a code change. A try reports nothing:
 it says how the site answers Cloudflare, not an install, so it counts toward no promotion.

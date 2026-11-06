@@ -17,7 +17,11 @@ const SEED = "seed";
 export interface Funnel {
   /** distinct keys in `keys`; `perDay`: keys first seen each UTC day of the last 30, oldest first, today included */
   seen: { total: number; last30Days: number; perDay: { day: string; new: number }[] };
-  /** keys with an accepted report (any outcome); `ok`: with an ok one. Windows by the report's time */
+  /**
+   * keys with an accepted report (any outcome); `ok`: with an ok one. `ok.total` counts keys that ever had
+   * one accepted (`keys.activated_at`), whatever they reported since; the windows are by the time of the
+   * key's latest report on each version
+   */
   activated: {
     total: number;
     last7Days: number;
@@ -26,8 +30,8 @@ export interface Funnel {
   };
   /** keys that uploaded a version or reported in the last 30 days */
   sharing: { last30Days: number };
-  /** when these were counted: at most an hour before `generated` */
-  countedAt: string;
+  /** when these were counted, usually at most an hour before `generated`; absent (and every count 0) until the first count is stored */
+  countedAt?: string;
 }
 
 export interface PublicStats {
@@ -79,6 +83,8 @@ async function activeInstalls(db: D1Database, since: string): Promise<number> {
 }
 
 const FUNNEL_SECONDS = 3600;
+/** How long a claimed recount holds off other claims, should the request that claimed it die. */
+const LEASE_SECONDS = 300;
 
 async function n(db: D1Database, sql: string, ...values: unknown[]): Promise<number> {
   return (
@@ -91,6 +97,15 @@ async function n(db: D1Database, sql: string, ...values: unknown[]): Promise<num
   );
 }
 
+const days30 = (now: number) => Array.from({ length: 30 }, (_, i) => utcDay(now - (29 - i) * DAY));
+
+/** What the funnel says before it was ever counted. */
+const uncounted = (now: number): Funnel => ({
+  seen: { total: 0, last30Days: 0, perDay: days30(now).map((day) => ({ day, new: 0 })) },
+  activated: { total: 0, last7Days: 0, last30Days: 0, ok: { total: 0, last7Days: 0, last30Days: 0 } },
+  sharing: { last30Days: 0 },
+});
+
 async function countFunnel(db: D1Database, now: number): Promise<Funnel> {
   const ago = (days: number) => new Date(now - days * DAY).toISOString();
   const firstDay = utcDay(now - 29 * DAY);
@@ -99,10 +114,7 @@ async function countFunnel(db: D1Database, now: number): Promise<Funnel> {
     .bind(firstDay)
     .all<{ day: string; n: number }>();
   const byDay = new Map(days.results.map((r) => [r.day, r.n]));
-  const perDay = Array.from({ length: 30 }, (_, i) => {
-    const day = utcDay(now - (29 - i) * DAY);
-    return { day, new: byDay.get(day) ?? 0 };
-  });
+  const perDay = days30(now).map((day) => ({ day, new: byDay.get(day) ?? 0 }));
   const reported = (since: string, ok: boolean) =>
     n(db, `SELECT COUNT(DISTINCT key) AS n FROM reports WHERE at >= ?${ok ? " AND outcome = 'ok'" : ""}`, since);
   return {
@@ -112,15 +124,16 @@ async function countFunnel(db: D1Database, now: number): Promise<Funnel> {
       perDay,
     },
     activated: {
-      // keys.reports outlives the report rows a purged version takes with it
+      // keys.reports and keys.activated_at outlive the report rows a purged version takes with it
       total: await n(
         db,
-        "SELECT COUNT(*) AS n FROM (SELECT key FROM keys WHERE reports > 0 UNION SELECT key FROM reports)",
+        "SELECT COUNT(*) AS n FROM (SELECT key FROM keys WHERE reports > 0 OR activated_at IS NOT NULL UNION SELECT key FROM reports)",
       ),
       last7Days: await reported(ago(7), false),
       last30Days: await reported(ago(30), false),
       ok: {
-        total: await n(db, "SELECT COUNT(DISTINCT key) AS n FROM reports WHERE outcome = 'ok'"),
+        // a report row holds only the latest outcome, so an ok then a fail would read as never ok
+        total: await n(db, "SELECT COUNT(*) AS n FROM keys WHERE activated_at IS NOT NULL"),
         last7Days: await reported(ago(7), true),
         last30Days: await reported(ago(30), true),
       },
@@ -138,19 +151,45 @@ async function countFunnel(db: D1Database, now: number): Promise<Funnel> {
   };
 }
 
-/** The funnel as last counted, recounted when that was over an hour ago. */
+/**
+ * The funnel as last counted, recounted when that was over an hour ago. One request claims the recount
+ * with a lease; the others serve what is held meanwhile, or zeros before the first count is stored.
+ */
 export async function funnel(db: D1Database, now: number): Promise<Funnel> {
   const held = await db
     .prepare("SELECT body, at FROM snapshots WHERE name = 'funnel'")
-    .first<{ body: string; at: string }>();
-  if (held && now - Date.parse(held.at) < FUNNEL_SECONDS * 1000 && Date.parse(held.at) <= now)
-    return JSON.parse(held.body) as Funnel;
-  const counted = await countFunnel(db, now);
-  await db
+    .first<{ body: string | null; at: string | null }>();
+  const last = held?.body ? (JSON.parse(held.body) as Funnel) : undefined;
+  const at = held?.at ? Date.parse(held.at) : Number.NaN;
+  if (last && now - at < FUNNEL_SECONDS * 1000 && at <= now) return last;
+  const iso = new Date(now).toISOString();
+  // claims only while the snapshot is stale and no live lease holds it, so a request that read a stale
+  // snapshot just before another stored a fresh one does not recount again
+  const claimed = await db
     .prepare(
-      "INSERT INTO snapshots (name, body, at) VALUES ('funnel', ?, ?) ON CONFLICT (name) DO UPDATE SET body = excluded.body, at = excluded.at",
+      `INSERT INTO snapshots (name, lease) VALUES ('funnel', ?) ON CONFLICT (name) DO UPDATE SET lease = excluded.lease
+       WHERE (snapshots.lease IS NULL OR snapshots.lease <= ?)
+         AND (snapshots.at IS NULL OR snapshots.at <= ? OR snapshots.at > ?)
+       RETURNING name`,
     )
-    .bind(JSON.stringify(counted), counted.countedAt)
+    .bind(
+      new Date(now + LEASE_SECONDS * 1000).toISOString(),
+      iso,
+      new Date(now - FUNNEL_SECONDS * 1000).toISOString(),
+      iso,
+    )
+    .first();
+  if (!claimed) return last ?? uncounted(now);
+  let counted: Funnel;
+  try {
+    counted = await countFunnel(db, now);
+  } catch (e) {
+    await db.prepare("UPDATE snapshots SET lease = NULL WHERE name = 'funnel'").run();
+    throw e;
+  }
+  await db
+    .prepare("UPDATE snapshots SET body = ?, at = ?, lease = NULL WHERE name = 'funnel'")
+    .bind(JSON.stringify(counted), iso)
     .run();
   return counted;
 }

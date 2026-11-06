@@ -9,8 +9,8 @@ import type { AddressInfo } from "node:net";
 import { after, before, beforeEach, describe, test } from "node:test";
 import { parseSite } from "../../src/spec.js";
 import { CSP } from "../src/pages.js";
-import { TRY_OPS, tryRefusal } from "../src/try.js";
-import { op, registry, seed, send, site } from "./helpers.js";
+import { TRY_OPS, tryOps, tryRefusal } from "../src/try.js";
+import { install, op, registry, report, seed, send, site, upload } from "./helpers.js";
 
 const wikipedia = parseSite(JSON.parse(readFileSync(new URL("../../sites/wikipedia.json", import.meta.url), "utf8")));
 const WIKI = { name: "wikipedia", domain: "wikipedia.org", baseUrl: wikipedia.baseUrl };
@@ -21,6 +21,8 @@ interface Seen {
   headers: IncomingMessage["headers"];
 }
 let seen: Seen[] = [];
+/** every URL the Worker's fetch was called with, answered or not */
+let asked: string[] = [];
 let handle: (req: IncomingMessage, res: ServerResponse) => void;
 let origin = "";
 const server = createServer((req, res) => {
@@ -28,6 +30,7 @@ const server = createServer((req, res) => {
   handle(req, res);
 });
 const realFetch = globalThis.fetch;
+const WIKI_ORIGIN = "https://en.wikipedia.org";
 
 const summary = (title: string) =>
   JSON.stringify({
@@ -43,10 +46,11 @@ const summary = (title: string) =>
 before(async () => {
   await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
   origin = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
-  // the Worker's fetch, to the stand-in: only en.wikipedia.org is answered, anything else fails loudly
+  // the Worker's fetch, to the stand-in: only https://en.wikipedia.org is answered, anything else fails loudly
   globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
     const url = new URL(typeof input === "string" || input instanceof URL ? input : input.url);
-    if (url.hostname !== "en.wikipedia.org") throw new Error(`the test reached for ${url.hostname}`);
+    asked.push(url.href);
+    if (url.origin !== WIKI_ORIGIN) throw new Error(`the test reached for ${url.origin}`);
     return realFetch(`${origin}${url.pathname}${url.search}`, init);
   }) as typeof fetch;
 });
@@ -56,6 +60,7 @@ after(() => {
 });
 beforeEach(() => {
   seen = [];
+  asked = [];
   handle = (req, res) => {
     const title = decodeURIComponent((req.url ?? "").split("/").pop() ?? "");
     res.writeHead(200, { "content-type": "application/json" }).end(summary(title));
@@ -126,19 +131,26 @@ describe("try: the answer", () => {
 });
 
 describe("try: what may run", () => {
-  test("the allowlist names bundled public reads, each passing every rule", () => {
+  test("the allowlist names bundled public reads, each passing every rule, pinned to its own origin", () => {
     for (const [name, ops] of Object.entries(TRY_OPS)) {
       const spec = parseSite(JSON.parse(readFileSync(new URL(`../../sites/${name}.json`, import.meta.url), "utf8")));
-      for (const o of ops) {
+      for (const o of Object.keys(ops)) {
         const operation = spec.operations.find((x) => x.name === o);
         assert.ok(operation, `${name} ${o} is bundled`);
         assert.equal(
-          tryRefusal({ name, baseUrl: spec.baseUrl, operations: spec.operations }, { status: "live", operation }),
+          tryRefusal({ name, baseUrl: spec.baseUrl, operations: spec.operations }, operation),
           undefined,
           `${name} ${o}`,
         );
+        const bundled = tryOps().get(`${name}/${o}`);
+        assert.ok(bundled, `${name} ${o} runs`);
+        assert.deepEqual(bundled.op, operation, "the op runs as it is in sites/");
+        const own = new URL(operation.request.url).origin;
+        assert.deepEqual([...bundled.origins], [own, ...ops[o]!]);
+        for (const at of bundled.origins) assert.match(at, /^https:\/\/[a-z0-9.-]+$/, "https, no port");
       }
     }
+    assert.equal(tryOps().size, Object.values(TRY_OPS).flatMap(Object.keys).length);
   });
 
   test("an op not on the allowlist is refused before anything is read or sent", async () => {
@@ -153,12 +165,9 @@ describe("try: what may run", () => {
     assert.equal(seen.length, 0);
   });
 
-  test("an allowlisted name holding a cookie ref, a write, or a candidate is refused", () => {
-    const live = (over: Record<string, unknown>, status = "live") =>
-      tryRefusal(
-        { ...WIKI, operations: wikipedia.operations },
-        { status: status as "live", operation: { ...summaryOp, ...over } as typeof summaryOp },
-      );
+  test("an allowlisted name holding a cookie ref, a write, or another port is refused", () => {
+    const live = (over: Record<string, unknown>, allow = TRY_OPS) =>
+      tryRefusal({ ...WIKI, operations: wikipedia.operations }, { ...summaryOp, ...over } as typeof summaryOp, allow);
     const slot = summaryOp.slots[0]!;
     assert.match(live({ slots: [slot, { ref: "cookie:sid", at: ["header:x-sid"] }] })!, /cookie, a session value/);
     assert.match(
@@ -174,18 +183,46 @@ describe("try: what may run", () => {
       /off its own site/,
     );
     assert.match(live({ request: { ...summaryOp.request, url: "http://en.wikipedia.org/x/{title}" } })!, /not https/);
-    assert.match(live({}, "candidate")!, /only a live/);
+    assert.match(
+      live({
+        request: { ...summaryOp.request, url: "https://en.wikipedia.org:8443/api/rest_v1/page/summary/{title}" },
+      })!,
+      /not https on port 443/,
+    );
+    const odd = { ...TRY_OPS, wikipedia: { getSummary: ["https://upload.wikimedia.org:8443"] } };
+    assert.match(live({}, odd)!, /extra origin .* not an https origin on port 443/);
     assert.equal(live({}), undefined);
   });
 
-  test("a served op with a cookie ref under an allowlisted name is refused over HTTP too", async () => {
-    const { env } = registry({ TRY_ENABLED: "true" });
-    const withCookie = { ...summaryOp, slots: [...summaryOp.slots, { ref: "cookie:sid", at: ["header:x-sid"] }] };
-    assert.equal((await seed(env, { site: WIKI, operations: [withCookie] })).status, 200);
-    const r = await tryIt(env, "wikipedia/getSummary");
-    assert.equal(r.status, 403);
-    assert.match(r.body.reason, /cookie, a session value/);
-    assert.equal(seen.length, 0);
+  test("a replacement promoted live through uploads and reports is never run: the bundled op is", async () => {
+    const { env } = await open();
+    // the same op with only its request's address changed: the same match, so no review
+    const evil = {
+      ...summaryOp,
+      request: { ...summaryOp.request, url: "https://internal.wikipedia.org:8443/admin/metadata/x/%7Btitle%7D" },
+    };
+    const up = await send(env, "POST", "/v1/versions", {
+      as: install(),
+      body: upload({ site: WIKI, operation: evil }),
+    });
+    assert.equal(up.status, 201, up.text);
+    const getSummary = async () =>
+      (await send(env, "GET", "/v1/sites/wikipedia")).body.operations.find(
+        (o: { operation: { name: string } }) => o.operation.name === "getSummary",
+      );
+    const incumbent = (await getSummary()).hash;
+    for (const ip of ["198.51.100.7", "192.0.2.1", "203.0.113.5"]) {
+      await report(env, install(), up.body.hash, "ok", ip);
+      await report(env, install(), incumbent, "fail", ip);
+    }
+    const replaced = await getSummary();
+    assert.equal(replaced.status, "live", "the replacement is what the registry serves");
+    assert.match(replaced.operation.request.url, /internal\.wikipedia\.org:8443/);
+
+    const r = await tryIt(env, "wikipedia/getSummary?title=Octopus", "203.0.113.5");
+    assert.equal(r.status, 200, r.text);
+    assert.equal(r.body.data.title, "Octopus");
+    assert.deepEqual(asked, [`${WIKI_ORIGIN}/api/rest_v1/page/summary/Octopus`]);
   });
 
   test("TRY_ENABLED off, or unset, refuses every try and shows no form", async () => {
@@ -253,8 +290,29 @@ describe("try: limits", () => {
     const r = await tryIt(env, "wikipedia/getSummary?title=C", "203.0.113.5");
     assert.equal(r.status, 503);
     assert.equal(r.body.class, "rate");
-    assert.match(r.body.reason, /at most 2 tries a day/);
+    assert.match(r.body.reason, /at most 2 sends a day/);
     assert.equal(seen.length, 2);
+  });
+
+  test("each redirect hop takes a send from the global cap", async () => {
+    const { env } = await open({ TRY_PER_DAY_ALL: "3" });
+    // /summary/<t> redirects once to /summary/<t>_
+    handle = (req, res) => {
+      const title = decodeURIComponent((req.url ?? "").split("/").pop() ?? "");
+      if (title.endsWith("_")) res.writeHead(200, { "content-type": "application/json" }).end(summary(title));
+      else res.writeHead(302, { location: `/api/rest_v1/page/summary/${title}_` }).end();
+    };
+    const first = await tryIt(env, "wikipedia/getSummary?title=A", "198.51.100.7");
+    assert.equal(first.body.ok, true, first.text);
+    assert.equal(first.body.data.title, "A_");
+    assert.equal(seen.length, 2, "two sends for one try");
+    const second = await tryIt(env, "wikipedia/getSummary?title=B", "192.0.2.1");
+    assert.equal(second.status, 503, "the cap is reached at the redirect");
+    assert.match(second.body.reason, /at most 3 sends a day/);
+    assert.equal(seen.length, 3, "the hop over the cap is not sent");
+    const third = await tryIt(env, "wikipedia/getSummary?title=C", "203.0.113.5");
+    assert.equal(third.status, 503);
+    assert.equal(seen.length, 3);
   });
 
   test("an upstream that does not answer in time is an error, after the timeout", async () => {
@@ -285,13 +343,46 @@ describe("try: limits", () => {
     assert.match(streamed.body.reason, /over 1000 bytes/);
   });
 
-  test("a redirect off the op's site is not followed", async () => {
+  test("a redirect anywhere but the op's exact origin is not followed", async () => {
+    const { env } = await open({ TRY_PER_MINUTE: "100" });
+    for (const [location, shown] of [
+      ["https://evil.example/steal", "https://evil.example"],
+      ["https://internal.wikipedia.org/admin/metadata", "https://internal.wikipedia.org"],
+      ["https://en.wikipedia.org:8443/admin/metadata", "https://en.wikipedia.org:8443"],
+      ["http://en.wikipedia.org/api/rest_v1/page/summary/Octopus", "http://en.wikipedia.org"],
+    ] as const) {
+      seen = [];
+      asked = [];
+      handle = (_req, res) => res.writeHead(302, { location }).end();
+      const r = await tryIt(env, "wikipedia/getSummary");
+      assert.equal(r.status, 502, location);
+      assert.equal(r.body.ok, false);
+      assert.equal(r.body.reason, `the site redirected to ${shown}, which the catalog does not follow`);
+      assert.equal(seen.length, 1);
+      assert.deepEqual(asked, [`${WIKI_ORIGIN}/api/rest_v1/page/summary/Octopus`], "only the op's origin was asked");
+    }
+  });
+
+  test("at most 2 redirects, on the op's origin", async () => {
     const { env } = await open();
-    handle = (_req, res) => res.writeHead(302, { location: "https://evil.example/steal" }).end();
-    const r = await tryIt(env, "wikipedia/getSummary");
-    assert.equal(r.body.ok, false);
-    assert.match(r.body.reason, /redirected to https:\/\/evil\.example/);
-    assert.equal(seen.length, 1);
+    // /summary/<t> redirects to /summary/<t>_ until the title ends in `ends` underscores
+    let ends = 2;
+    handle = (req, res) => {
+      const title = decodeURIComponent((req.url ?? "").split("/").pop() ?? "");
+      if (title.endsWith("_".repeat(ends)))
+        res.writeHead(200, { "content-type": "application/json" }).end(summary(title));
+      else res.writeHead(301, { location: `${WIKI_ORIGIN}/api/rest_v1/page/summary/${title}_` }).end();
+    };
+    const two = await tryIt(env, "wikipedia/getSummary?title=A");
+    assert.equal(two.body.ok, true, two.text);
+    assert.equal(two.body.data.title, "A__");
+    assert.equal(seen.length, 3);
+    ends = 3;
+    seen = [];
+    const three = await tryIt(env, "wikipedia/getSummary?title=B");
+    assert.equal(three.body.ok, false);
+    assert.match(three.body.reason, /redirected more than 2 times/);
+    assert.equal(seen.length, 3);
   });
 
   test("an ok answer is cached for ten minutes by its filled URL; a failure is not", async () => {
