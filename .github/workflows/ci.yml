@@ -47,6 +47,38 @@ jobs:
       # install the packed tarball outside the checkout and run its CLI and library
       - run: npm run smoke:pack
 
+  python:
+    # The Python client in python/: build it, install the wheel in a fresh venv and run the unit tests
+    # against it (a fake server on localhost; no Node, no network). 3.9 is the oldest supported.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.9", "3.13"]
+    name: python (${{ matrix.python }})
+    defaults:
+      run:
+        working-directory: python
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: ${{ matrix.python }}
+      - run: python -m pip install build
+      - run: python -m build
+      - name: Test the built wheel
+        env:
+          PY: ${{ matrix.python }}
+        run: |
+          python -m venv "$RUNNER_TEMP/venv"
+          "$RUNNER_TEMP/venv/bin/pip" install dist/*.whl
+          # the framework adapters' tests skip where their framework is not installed
+          if [ "$PY" = "3.13" ]; then "$RUNNER_TEMP/venv/bin/pip" install langchain-core openai-agents; fi
+          "$RUNNER_TEMP/venv/bin/python" -m unittest discover -s tests -t . -v
+
   secrets:
     # Runs for every pull request, a fork's included, on GitHub's runner: it needs no browser, and
     # a fork's commits are the ones most worth scanning before review.
@@ -78,7 +110,7 @@ jobs:
   ci:
     name: CI
     if: always()
-    needs: [check, secrets]
+    needs: [check, python, secrets]
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:

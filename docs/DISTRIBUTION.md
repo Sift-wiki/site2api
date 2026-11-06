@@ -6,6 +6,7 @@ maintainer does by hand. Checked in October 2026.
 | channel | file | how it updates |
 |---|---|---|
 | npm | `package.json` | `release.yml` on a `v*` tag (trusted publishing) |
+| PyPI (`api-anything`, the Python client) | `python/pyproject.toml` | `release-python.yml` on a `py-v*` tag (trusted publishing); see [PyPI](#pypi) |
 | Official MCP Registry | `server.json`, `package.json` `mcpName` | `release.yml`, job `mcp-registry`, after npm |
 | Claude Code plugin marketplace | `.claude-plugin/marketplace.json`, `.claude-plugin/plugin.json`, `skills/api-anything/SKILL.md` | read from the default branch when a user adds or updates the marketplace |
 | Glama | `glama.json` | Glama crawls the repository |
@@ -14,6 +15,51 @@ maintainer does by hand. Checked in October 2026.
 Every release bumps the version in `package.json`, `server.json` (both `version` fields) and
 `.claude-plugin/plugin.json`. `test/distribution.test.ts` fails until they agree, and the release
 workflow refuses a tag whose version differs from `server.json`.
+
+## PyPI
+
+The Python client in `python/` ([PYTHON.md](PYTHON.md)) is the PyPI project `api-anything`. It has a
+version of its own, in `python/pyproject.toml` and `python/src/api_anything/_version.py` (a test holds
+them equal), and its own tags, `py-v<version>`, so it can be released without an npm release.
+`MIN_SERVER_VERSION` in `_version.py` is the oldest npm release the client starts; raise it when the
+client needs a newer route of `api-anything serve`.
+
+### Automatic, on a tag
+
+`.github/workflows/release-python.yml` runs on a `py-v*` tag. It refuses a tag that differs from
+`python/pyproject.toml`'s version, builds the sdist and wheel, runs the unit tests against the wheel,
+and uploads with PyPI trusted publishing (`pypa/gh-action-pypi-publish`, `id-token: write`,
+environment `pypi`). No token is stored. A manual run of the workflow builds and tests and publishes
+nothing.
+
+```sh
+# bump python/pyproject.toml and python/src/api_anything/_version.py, merge, then:
+git tag py-v0.4.0 && git push origin py-v0.4.0
+```
+
+Setup, once:
+
+1. On pypi.org, add a trusted publisher for `api-anything` (Account settings, Publishing; a "pending
+   publisher" before the first upload): owner `goodnight000`, repository `api-anything`, workflow
+   `release-python.yml`, environment `pypi`.
+2. On GitHub, create the environment `pypi` (Settings, Environments). Add required reviewers there if
+   a person should approve each upload.
+
+### From a local machine
+
+The fallback when the workflow cannot run. It needs a PyPI API token scoped to the project
+(pypi.org, Account settings, API tokens), passed through the environment, never written to a file in
+the repository:
+
+```sh
+cd python
+rm -rf dist && uv build
+PYTHONPATH=src python -m unittest discover -s tests -t .
+UV_PUBLISH_TOKEN=pypi-... uv publish        # or: uv publish --token "$PYPI_TOKEN"
+```
+
+`uv publish --publish-url https://test.pypi.org/legacy/` with a TestPyPI token tries it first. A
+version can be uploaded once; to fix a release, bump the version.
 
 ## Official MCP Registry
 

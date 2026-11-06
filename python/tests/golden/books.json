@@ -1,0 +1,78 @@
+{
+  "site": "books",
+  "notes": "Notes are site text and never reach the generated file: NOTE-SENTINEL",
+  "operations": [
+    {
+      "name": "searchBooks",
+      "description": "Search books by title or author.",
+      "returns": ["title", "author", "rating"],
+      "pages": "page",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "q": { "type": "string", "description": "Words to search", "examples": ["EXAMPLE-SENTINEL"] },
+          "sortBy": { "type": "string", "enum": ["relevance", "rating", "new"], "default": "relevance" },
+          "page": { "type": "number", "description": "One-based page", "minimum": 1, "maximum": 50, "default": 1 },
+          "from": { "type": "string", "description": "A start date", "pattern": "^(?:\\d{4}-\\d{2}-\\d{2})$" },
+          "client": { "type": "boolean", "description": "A param that shares a name with the client option" }
+        },
+        "required": ["q"],
+        "additionalProperties": false
+      },
+      "output": {
+        "cardinality": "list",
+        "fields": {
+          "title": { "type": "string", "source": "declared" },
+          "author": { "type": "string", "source": "observed" },
+          "rating": { "type": "number", "source": "observed" },
+          "tags": { "type": "array", "source": "observed" },
+          "shelf": { "source": "unknown" }
+        }
+      }
+    },
+    {
+      "name": "getBook",
+      "description": "One book's page \"\"\" with quotes, a backslash \\ and\na newline.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "string", "pattern": "^(?:[0-9]+)$", "examples": ["EXAMPLE-SENTINEL"] },
+          "scale": { "type": "number", "enum": [0.5, 1] }
+        },
+        "required": ["id"],
+        "additionalProperties": false
+      },
+      "output": {
+        "cardinality": "one",
+        "fields": {
+          "title": { "type": "string", "source": "observed" },
+          "page-count": { "type": "number", "source": "observed" },
+          "class": { "type": "object", "source": "observed" }
+        }
+      }
+    },
+    {
+      "name": "import",
+      "inputSchema": { "type": "object", "properties": {}, "additionalProperties": false },
+      "output": { "cardinality": "unknown", "fields": {} }
+    },
+    {
+      "name": "frontPage",
+      "description": "The books on the front page.",
+      "inputSchema": { "type": "object", "properties": {}, "additionalProperties": false },
+      "output": { "cardinality": "list", "fields": {} }
+    },
+    {
+      "name": "postReview",
+      "description": "Post a review.",
+      "write": true,
+      "inputSchema": {
+        "type": "object",
+        "properties": { "text": { "type": "string" } },
+        "required": ["text"],
+        "additionalProperties": false
+      },
+      "output": { "cardinality": "unknown", "fields": {} }
+    }
+  ]
+}
