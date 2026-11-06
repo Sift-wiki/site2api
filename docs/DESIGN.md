@@ -2113,17 +2113,38 @@ independent alternative.
   custom GPT's actions and plain HTTP clients cannot. One `node:http` port serves three surfaces:
   MCP over the SDK's Streamable HTTP transport at `/mcp`, JSON endpoints under `/v1`, and an
   OpenAPI 3.1 document at `/openapi.json`. It takes `mcp`'s flags (`--allow-writes`, `--sites`,
-  `--no-learn`) plus `--host`, `--port`, `--cors` and `--public-url`.
+  `--no-learn`) plus `--host`, `--port`, `--cors`, `--public-url` and `--max-concurrent`.
   - **Answers are the tools' answers by construction.** `createToolset` (mcp.ts) builds the
     server and keeps each registered tool's handler and its input schema. A REST endpoint checks
     its body with that schema (a refusal is HTTP 400) and runs the same handler, so `GET /v1/sites`
     is `list_sites` and `POST /v1/call/{site}/{op}` is `call_operation`, including the
-    `next`/`nextCall` rewrites into MCP terms, `asTable`, refusals and pulls. No tool definition is
-    duplicated. The one thing REST adds is `maxTier` on a call, passed through `callOperation`'s
-    and `callWrite`'s `extra`. An MCP call has no extra, so its job keys are as before. HTTP status
-    is 200 whenever the call ran, whatever its `class`. A status that changed with the outcome
-    would make every HTTP client treat an `auth` or `drift` answer as a transport error and drop
-    the `next` that says what to do.
+    `next`/`nextCall` rewrites into MCP terms, refusals and pulls. No tool definition is
+    duplicated. Two things differ. `data` is call()'s, as the library returns it: a list stays a
+    list of records. `asTable`'s `{columns, rows}` saves an agent tokens, but a program would have
+    to undo it, so the handler keeps the records beside each reply it tables (`recordsAnswer`, a
+    WeakMap: what MCP sends is unchanged, and a job either surface started answers both in their
+    own form). And each answer gets `nextRequest` `{method, path, body?}`, the REST request for
+    the step `nextCall`, a pending `job` or a cut answer's `more` names, when an endpoint takes
+    it. A read's `maxAgeMs`, `changes`, `changesOnly` and `watch` go to the tool as its own
+    arguments, checked by its schema. REST also takes `maxTier` on a call, passed through
+    `callOperation`'s and `callWrite`'s `extra`. An MCP call has no extra, so its job keys are as
+    before. HTTP status is 200 whenever
+    the call ran, whatever its `class`. A status that changed with the outcome would make every
+    HTTP client treat an `auth` or `drift` answer as a transport error and drop the `next` that
+    says what to do.
+  - **A bounded number of calls at once.** One `Permits` (jobs.ts) shared by REST and every MCP
+    session, 8 unless `--max-concurrent` says otherwise. A new job takes its permits before it
+    starts and holds them until its work settles, not until the HTTP answer says `pending`, since
+    the call is still running then. Joining a running job takes none. A batch takes one per call
+    it runs at once (its concurrency, at most the limit). With none free the call is refused at
+    once, before anything runs: REST answers HTTP 429 with a call result `{ok: false, class:
+    "rate", reason: "server busy", retryAfterMs}`, MCP the same as the tool's answer. A queue
+    instead would hold a request past its client's timeout, and the client would send it again.
+  - **No request ends the process.** Everything a request does, parsing its target included, runs
+    inside one boundary: a request it cannot read is a 400, a bug a 500. The CLI also logs an
+    unhandled rejection instead of exiting (`guardProcess`). A socket idle for 120 s is closed
+    (`server.timeout`), except an MCP `GET /mcp` event stream, which is quiet until the server has
+    something to say.
   - **One job table.** Each MCP session gets its own server (a server has one transport; the
     session is stateful, so `learn_site`'s elicitation can be answered). Every session and the REST
     surface share one `Jobs`, so `GET /v1/jobs/{id}` finds a job any of them started, and an
@@ -2137,14 +2158,21 @@ independent alternative.
     loopback, and a page has no business with this server. `*` is refused. Bound to loopback, any
     `Host` other than the loopback names with the port, or `--public-url`'s host, is refused,
     which blocks DNS rebinding (a page whose domain resolves to 127.0.0.1 still sends its domain
-    as Host). The token is never printed to stdout; stdout carries exactly one JSON line once the
-    server listens, and everything after goes to stderr. Bodies are capped at 1 MB (413).
+    as Host). A listed origin's CORS preflight (`OPTIONS`) is answered 204 without the token, as
+    browsers send preflights without credentials; it runs nothing, and the request it clears still
+    needs the token. The token file is written whole under a temporary name, mode 0600, then
+    linked into place (`linkSync` fails when the file exists, and the start that lost reads the
+    winner's), so two first starts keep one token and neither reads a half-written file. The token
+    is never printed to stdout; stdout carries exactly one JSON line once the server listens, and
+    everything after goes to stderr. Bodies are capped at 1 MB (413).
   - **The OpenAPI document** is generated per request, from the tools' own zod schemas
     (`z.toJSONSchema`; a tuple's `prefixItems` is flattened to `items`, the only form many loaders
     read) and the installed specs. It has one concrete `POST /v1/call/<site>/<op>` path per read,
     with `operationId` `<site>__<op>` (`[^A-Za-z0-9_]` as `_`, numbered on a collision), `args`
-    typed with `inputSchema(op)` and `data` typed from `describeOperation`'s output hints. Since
-    a list can come as `{columns, rows}`, `data` is an `anyOf` of the records and the table. Paths
+    typed with `inputSchema(op)` and the answers described by schema.ts, the MCP output schemas'
+    source: `data` is `opDataSchema(op)`, from the recipe alone, which leaves open what the recipe
+    does not fix (an item of any type unless an HTML recipe makes objects, a single result of any
+    shape), so a validating importer takes a list of strings such as `youtube.suggest`'s. Paths
     are capped at 300, and descriptions at 300 characters, a custom GPT's limit. A shared site's
     description starts with `SHARED_NOTE`, as a per-op tool's does. `--sites` narrows the paths
     and the per-op MCP tools, not what `/v1/call` reaches: the endpoints are the tools, and the

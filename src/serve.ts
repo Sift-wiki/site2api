@@ -2,14 +2,15 @@
  * `api-anything serve`: the MCP tools over HTTP, for whatever cannot start a local process. Three
  * surfaces on one port: MCP over Streamable HTTP at /mcp, plain JSON endpoints under /v1 and an
  * OpenAPI document. Every REST answer is a tool's answer, run through the very handler MCP runs
- * (mcp.ts `createToolset`), so the two cannot drift.
+ * (mcp.ts `createToolset`), so the two cannot drift; REST takes its `data` as call() returned it
+ * (records, not MCP's table) and adds `nextRequest`.
  *
  * It holds the user's sessions, so it is guarded like a key: a bearer token on every request but
  * the health check, no browser origin unless listed (a page the user visits cannot call it), and,
  * bound to loopback, no Host but the loopback names (DNS rebinding).
  */
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
-import { chmodSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, linkSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createServer as httpServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import { join } from "node:path";
@@ -17,8 +18,17 @@ import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/
 import { isInitializeRequest } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
 import { idleWork } from "./background.js";
-import { Jobs } from "./jobs.js";
-import { createServer, createToolset, type Reply, type ServerOptions, VERSION } from "./mcp.js";
+import { Jobs, Permits } from "./jobs.js";
+import {
+  BUSY_RETRY_MS,
+  createServer,
+  createToolset,
+  isBusy,
+  type Reply,
+  recordsAnswer,
+  type ServerOptions,
+  VERSION,
+} from "./mcp.js";
 import { openApiDocument } from "./openapi.js";
 import { ensureDir, home } from "./session.js";
 
@@ -29,8 +39,16 @@ const SESSIONS_MAX = 64;
 /** How long a shutdown waits for answers still being written. */
 const DRAIN_MS = 30_000;
 const WAIT_MS = 25_000;
+/** Calls running at once, across REST and every MCP session, unless --max-concurrent says otherwise. */
+export const MAX_CONCURRENT = 8;
+/** A socket that sends and receives nothing this long is closed (an MCP event stream excepted). */
+const IDLE_MS = 120_000;
 
 export interface ServeOptions extends Pick<ServerOptions, "allowWrites" | "sites" | "waitMs" | "run"> {
+  /** calls running at once; one more is answered 429 at once. Default MAX_CONCURRENT */
+  maxConcurrent?: number;
+  /** how long an idle socket stays open; default 120 s */
+  idleMs?: number;
   host?: string;
   /** 0 picks a free port */
   port?: number;
@@ -77,11 +95,17 @@ export function serveToken(): { token: string; file?: string } {
     if ((e as NodeJS.ErrnoException).code !== "ENOENT") throw e;
   }
   ensureDir(home());
+  // written whole under a name of its own, then linked into place: the link is atomic and fails
+  // when the file exists, so two servers starting at once keep one token, and neither ever reads
+  // the other's half-written file
+  const tmp = `${file}.${process.pid}.${randomBytes(6).toString("hex")}.tmp`;
   try {
-    // wx: two servers starting at once keep one token, never each other's
-    writeFileSync(file, `${randomBytes(32).toString("hex")}\n`, { mode: 0o600, flag: "wx" });
+    writeFileSync(tmp, `${randomBytes(32).toString("hex")}\n`, { mode: 0o600, flag: "wx" });
+    linkSync(tmp, file);
   } catch (e) {
     if ((e as NodeJS.ErrnoException).code !== "EEXIST") throw e;
+  } finally {
+    rmSync(tmp, { force: true });
   }
   return { token: read(), file };
 }
@@ -143,8 +167,86 @@ async function readBody(req: IncomingMessage): Promise<unknown> {
   }
 }
 
-/** A REST answer is the tool's answer: its JSON, whether it is an object or (list_sites) a list. */
-const answerOf = (r: Reply): unknown => r.structuredContent ?? JSON.parse(r.content[0]!.text);
+/** A REST endpoint's request: what `nextRequest` names. */
+export interface NextRequest {
+  method: "GET" | "POST";
+  path: string;
+  body?: Record<string, unknown>;
+}
+
+const seg = encodeURIComponent;
+const isObject = (v: unknown): v is Record<string, unknown> => !!v && typeof v === "object" && !Array.isArray(v);
+
+/** GET /v1/results for get_result's arguments (a cut answer's `more` as it is). */
+function resultsRequest(a: Record<string, unknown>): NextRequest | undefined {
+  if (typeof a.resultId !== "string") return undefined;
+  const q = new URLSearchParams();
+  if (typeof a.offset === "number") q.set("offset", String(a.offset));
+  if (Array.isArray(a.fields) && a.fields.length) q.set("fields", a.fields.join(","));
+  if (typeof a.maxChars === "number") q.set("maxChars", String(a.maxChars));
+  if (typeof a.format === "string") q.set("format", a.format);
+  const query = q.toString();
+  return { method: "GET", path: `/v1/results/${seg(a.resultId)}${query ? `?${query}` : ""}` };
+}
+
+/** The REST request taking the step a tool and its arguments name; undefined when no endpoint does. */
+function requestFor(tool: unknown, args: unknown, has: { writes: boolean; learn: boolean }): NextRequest | undefined {
+  const a = isObject(args) ? args : {};
+  const str = (k: string) => (typeof a[k] === "string" ? (a[k] as string) : undefined);
+  const site = str("site");
+  const op = str("op");
+  switch (tool) {
+    case "get_job":
+      return str("job") ? { method: "GET", path: `/v1/jobs/${seg(str("job")!)}` } : undefined;
+    case "call_operation":
+    case "call_write_operation": {
+      if (!site || !op || (tool === "call_write_operation" && !has.writes)) return undefined;
+      const kind = tool === "call_operation" ? "call" : "write";
+      const body = { args: isObject(a.args) ? a.args : {}, ...(a.view !== undefined ? { view: a.view } : {}) };
+      return { method: "POST", path: `/v1/${kind}/${seg(site)}/${seg(op)}`, body };
+    }
+    case "list_operations":
+      return site ? { method: "GET", path: `/v1/sites/${seg(site)}` } : undefined;
+    case "list_sites":
+      return { method: "GET", path: "/v1/sites" };
+    case "find_sites":
+      return str("query")
+        ? { method: "GET", path: `/v1/find?${new URLSearchParams({ q: str("query")! })}` }
+        : undefined;
+    case "get_result":
+      return resultsRequest(a);
+    case "learn_site":
+      return has.learn ? { method: "POST", path: "/v1/learn", body: a } : undefined;
+    default:
+      return undefined;
+  }
+}
+
+/**
+ * `answer` with `nextRequest`: the REST request that takes its next step (nextCall's, a pending
+ * job's, a cut answer's rest), when an endpoint does. `next` and `nextCall` stay as they are, in
+ * MCP's terms. A batch's results each get theirs.
+ */
+export function withNextRequest(answer: unknown, has: { writes: boolean; learn: boolean }): unknown {
+  if (!isObject(answer)) return answer;
+  const nc = isObject(answer.nextCall) ? answer.nextCall : undefined;
+  const nextRequest =
+    requestFor(nc?.tool, nc?.args, has) ??
+    (typeof answer.job === "string" ? requestFor("get_job", { job: answer.job }, has) : undefined) ??
+    (isObject(answer.more) ? resultsRequest(answer.more) : undefined);
+  return {
+    ...answer,
+    ...(Array.isArray(answer.results) ? { results: answer.results.map((r) => withNextRequest(r, has)) } : {}),
+    ...(nextRequest ? { nextRequest } : {}),
+  };
+}
+
+/** Logs an unhandled rejection instead of exiting: one request's bug must not end every other's. */
+export function guardProcess(log: (line: string) => void = (l) => process.stderr.write(`${l}\n`)): () => void {
+  const onRejection = (e: unknown) => log(`serve: unhandled rejection: ${(e as Error)?.stack ?? e}`);
+  process.on("unhandledRejection", onRejection);
+  return () => process.off("unhandledRejection", onRejection);
+}
 
 const objectBody = (v: unknown): Record<string, unknown> => {
   if (v === undefined) return {};
@@ -155,17 +257,24 @@ const objectBody = (v: unknown): Record<string, unknown> => {
 const issues = (e: z.ZodError) =>
   e.issues.map((i) => `${i.path.length ? `${i.path.join(".")}: ` : ""}${i.message}`).join("; ");
 
+/** A read's cache and comparison: call_operation's and call_batch's own schemas check them. */
+const WATCH = {
+  maxAgeMs: z.unknown().optional(),
+  changes: z.unknown().optional(),
+  changesOnly: z.unknown().optional(),
+  watch: z.unknown().optional(),
+};
+const watchIn = (b: Record<string, unknown>) =>
+  Object.fromEntries(Object.keys(WATCH).flatMap((k) => (b[k] === undefined ? [] : [[k, b[k]]])));
 const CallBody = z.strictObject({
   args: z.unknown().optional(),
   view: z.unknown().optional(),
   maxTier: z.union([z.literal(1), z.literal(2), z.literal(3)]).optional(),
-  // accepted so a client written for them works; this version has no response cache
-  maxAgeMs: z.number().int().min(0).optional(),
-  changes: z.boolean().optional(),
-  changesOnly: z.boolean().optional(),
+  ...WATCH,
 });
+// a write is never cached or compared: the watch fields are taken, as in a read's body, and ignored
 const WriteBody = CallBody.extend({ again: z.unknown().optional(), idempotencyKey: z.unknown().optional() });
-const BatchBody = z.strictObject({ calls: z.unknown(), concurrency: z.unknown().optional() });
+const BatchBody = z.strictObject({ calls: z.unknown(), concurrency: z.unknown().optional(), ...WATCH });
 
 function parse<T>(schema: z.ZodType<T>, v: unknown): T {
   const r = schema.safeParse(v);
@@ -181,13 +290,20 @@ export async function serve(o: ServeOptions = {}): Promise<Served> {
   const publicUrl = o.publicUrl ? new URL(o.publicUrl) : undefined;
   const log = o.log ?? ((line: string) => process.stderr.write(`${line}\n`));
   const waitMs = o.waitMs ?? WAIT_MS;
+  const idleMs = o.idleMs ?? IDLE_MS;
   // one job table: a job a REST call or any MCP session started is found and joined by every other
   const jobs = new Jobs<Reply>(waitMs);
+  const maxConcurrent = o.maxConcurrent ?? MAX_CONCURRENT;
+  if (!Number.isInteger(maxConcurrent) || maxConcurrent < 1)
+    throw new Error(`maxConcurrent ${maxConcurrent}: give a whole number, at least 1`);
+  // one limit for REST, every MCP session, batches and learns: a permit is held until its job settles
+  const permits = new Permits(maxConcurrent);
   const serverOptions: ServerOptions = {
     allowWrites,
     sites: o.sites ?? [],
     waitMs,
     jobs,
+    permits,
     ...(o.run ? { run: o.run } : {}),
   };
   const tools = createToolset(serverOptions);
@@ -221,8 +337,14 @@ export async function serve(o: ServeOptions = {}): Promise<Served> {
     if ("invalid" in r) throw new HttpError(400, r.invalid);
     return r.value;
   };
+  const has = { writes: allowWrites, learn };
+  /** A tool's answer over REST: data as call() returns it, a nextRequest, and 429 for a full server. */
+  const answer = (res: ServerResponse, r: Reply) =>
+    isBusy(r)
+      ? send(res, 429, recordsAnswer(r), { "retry-after": String(Math.ceil(BUSY_RETRY_MS / 1000)) })
+      : send(res, 200, withNextRequest(recordsAnswer(r), has));
   const runTool = async (res: ServerResponse, name: string, value: unknown) =>
-    send(res, 200, answerOf(await tools.run(name, input(name, value))));
+    answer(res, await tools.run(name, input(name, value)));
 
   async function mcp(req: IncomingMessage, res: ServerResponse): Promise<void> {
     const sid = req.headers["mcp-session-id"];
@@ -300,20 +422,20 @@ export async function serve(o: ServeOptions = {}): Promise<Served> {
       const { maxTier, args, view, again, idempotencyKey } = parsed;
       const extra = maxTier ? { maxTier } : {};
       if (what === "call") {
-        const value = input("call_operation", { site: a, op: b, args, view }) as Parameters<
+        const value = input("call_operation", { site: a, op: b, args, view, ...watchIn(parsed) }) as Parameters<
           typeof tools.callOperation
         >[0];
-        return send(res, 200, answerOf(await tools.callOperation(value, extra)));
+        return answer(res, await tools.callOperation(value, extra));
       }
       const value = input("call_write_operation", { site: a, op: b, args, view, again, idempotencyKey }) as Parameters<
         NonNullable<typeof tools.callWrite>
       >[0];
-      return send(res, 200, answerOf(await tools.callWrite!(value, extra)));
+      return answer(res, await tools.callWrite!(value, extra));
     }
     if (what === "batch" && !a) {
       only("POST");
-      const { calls, concurrency } = parse(BatchBody, objectBody(await readBody(req)));
-      return runTool(res, "call_batch", { items: calls, concurrency });
+      const body = parse(BatchBody, objectBody(await readBody(req)));
+      return runTool(res, "call_batch", { items: body.calls, concurrency: body.concurrency, ...watchIn(body) });
     }
     if (what === "jobs" && a && !b) {
       only("GET");
@@ -343,15 +465,27 @@ export async function serve(o: ServeOptions = {}): Promise<Served> {
     throw new HttpError(404, "not found");
   }
 
+  /** Everything a request does is inside one boundary: a bad request is a 400, a bug a 500, never an exit. */
   const handle = async (req: IncomingMessage, res: ServerResponse) => {
     const started = Date.now();
-    const url = new URL(req.url ?? "/", "http://localhost");
-    // a GET /mcp is the server's event stream, open as long as the client stays: not an answer to wait for
-    const stream = url.pathname === "/mcp" && req.method === "GET";
-    if (!stream) active++;
+    let path = (req.url ?? "/").split("?")[0]!;
+    let stream = false;
+    active++;
     idle.touch();
-    res.once("finish", () => log(`${req.method} ${url.pathname} ${res.statusCode} ${Date.now() - started}ms`));
+    res.once("finish", () => log(`${req.method} ${path} ${res.statusCode} ${Date.now() - started}ms`));
     try {
+      let url: URL;
+      try {
+        url = new URL(req.url ?? "/", "http://localhost");
+      } catch {
+        throw new HttpError(400, "the request target is not a valid path");
+      }
+      path = url.pathname;
+      // a GET /mcp is the server's event stream, open as long as the client stays: not an answer to
+      // wait for at shutdown, and quiet for as long as the server has nothing to say
+      stream = url.pathname === "/mcp" && req.method === "GET";
+      if (stream) active--;
+      req.socket.setTimeout(stream ? 0 : idleMs);
       const hostHeader = (req.headers.host ?? "").toLowerCase();
       if (allowedHosts.size && !allowedHosts.has(hostHeader))
         return fail(res, 403, `Host ${hostHeader || "(none)"} is not this server's`);
@@ -387,15 +521,25 @@ export async function serve(o: ServeOptions = {}): Promise<Served> {
         });
       await route(req, res, url);
     } catch (e) {
-      if (e instanceof HttpError) return fail(res, e.status, e.message);
-      log(`serve: ${req.method} ${url.pathname}: ${(e as Error).stack ?? e}`);
-      fail(res, 500, `internal error: ${(e as Error).message.split("\n")[0]}`);
+      try {
+        if (e instanceof HttpError) return fail(res, e.status, e.message);
+        log(`serve: ${req.method} ${path}: ${(e as Error)?.stack ?? e}`);
+        fail(res, 500, `internal error: ${String((e as Error)?.message ?? e).split("\n")[0]}`);
+      } catch {
+        res.destroy();
+      }
     } finally {
       if (!stream) active--;
     }
   };
 
-  const server = httpServer((req, res) => void handle(req, res));
+  const server = httpServer((req, res) => {
+    handle(req, res).catch((e) => {
+      log(`serve: ${req.method} ${req.url}: ${(e as Error)?.stack ?? e}`);
+      res.destroy();
+    });
+  });
+  server.timeout = idleMs;
   await new Promise<void>((resolve, reject) => {
     server.once("error", reject);
     server.listen(o.port ?? DEFAULT_PORT, host, () => {

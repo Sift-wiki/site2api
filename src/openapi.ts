@@ -4,14 +4,23 @@
  * args schema and whose answer's `data` is what the spec says the op returns. An OpenAPI tool loader
  * (a custom GPT's actions, n8n, Postman) then offers each op as a typed call without a list step.
  */
-import { describeOperation, inputSchema } from "./describe.js";
+import { inputSchema } from "./describe.js";
 import type { Toolset } from "./mcp.js";
 import { UNTRUSTED_NOTE } from "./mcp.js";
+import {
+  callBatchSchema,
+  callResultSchema,
+  findSitesSchema,
+  getResultSchema,
+  type JsonSchema,
+  jobResultSchema,
+  learnSiteSchema,
+  listOperationsSchema,
+  opDataSchema,
+} from "./schema.js";
 import type { Operation, Site } from "./spec.js";
 import { listSites, loadSite, siteNotes } from "./store.js";
 import { SHARED_NOTE } from "./vet.js";
-
-type JsonSchema = Record<string, unknown>;
 
 /** More concrete paths than this and the document is too big for a tool loader to read. */
 export const MAX_OP_PATHS = 300;
@@ -19,77 +28,35 @@ export const MAX_OP_PATHS = 300;
 const DESCRIPTION_MAX = 300;
 const SUMMARY_MAX = 80;
 
-const JSON_TYPES = new Set(["string", "number", "integer", "boolean", "array", "object", "null"]);
-
 const cut = (s: string, max: number) => (s.length <= max ? s : `${s.slice(0, max - 1).trimEnd()}…`);
 
-/**
- * The answer of a call as REST and MCP send it. Every field but `ok` is optional: a failure has no
- * data, a pending call has `job`, and a request the server could not run has `error` and `next`.
- */
-export function callResultSchema(data: JsonSchema = {}): JsonSchema {
-  const str = { type: "string" };
-  return {
-    type: "object",
-    required: ["ok"],
-    properties: {
-      ok: { type: "boolean", description: "true: data answers the call" },
-      class: {
-        type: "string",
-        description:
-          "ok, drift, auth, rate, blocked, input, error, refused, duplicate or pending (follow job with GET /v1/jobs/{job})",
-      },
-      data,
-      tier: { type: "integer", enum: [1, 2, 3], description: "1 plain HTTP, 2 and 3 the browser" },
-      ms: { type: "number" },
-      reason: str,
-      next: { type: "string", description: "what to do about a failure; follow it at most once" },
-      nextCall: { type: "object", description: "next as data" },
-      retry: { type: "string", enum: ["no", "safe", "after_wait", "after_fix"] },
-      retryAfterMs: { type: "number" },
-      write: { type: "string", enum: ["not_sent", "not_applied", "accepted", "applied", "may_have_applied"] },
-      nextPage: { type: ["string", "number"], description: "the paging param's value for the next page" },
-      hasMore: { type: "boolean" },
-      healed: { type: "boolean" },
-      heal: { type: "object" },
-      truncated: str,
-      resultId: { type: "string", description: "read the rest with GET /v1/results/{resultId}" },
-      more: { type: "object" },
-      job: { type: "string", description: "a pending call's job: GET /v1/jobs/{job}" },
-      error: str,
-    },
-  };
+/** A REST answer's `nextRequest` (serve.ts `withNextRequest`): the endpoint that takes the next step. */
+const NEXT_REQUEST: JsonSchema = {
+  type: "object",
+  required: ["method", "path"],
+  properties: {
+    method: { type: "string", enum: ["GET", "POST"] },
+    path: { type: "string", description: "this server's path, query included" },
+    body: { type: "object", description: "the JSON body to POST" },
+  },
+  description: "the REST request that takes the next step (nextCall's, a pending job's, a cut answer's rest)",
+};
+
+/** An answer schema of schema.ts, as REST sends it: with nextRequest, and each batch result's. */
+function rest(schema: JsonSchema): JsonSchema {
+  const properties = { ...(schema.properties as Record<string, JsonSchema>) };
+  const results = properties.results;
+  if (results?.items) properties.results = { ...results, items: rest(results.items as JsonSchema) };
+  return { ...schema, properties: { ...properties, nextRequest: NEXT_REQUEST } };
 }
 
 /**
- * What the spec says an op's `data` holds. A list of two or more records may come as
- * `{columns, rows}` (one row per item, null for a missing field) when that is shorter, as over MCP.
+ * A read's 200 answer over REST: the shared call result, with `data` as opDataSchema describes it.
+ * That schema is conservative (no field required, an item untyped unless the recipe makes it an
+ * object), and REST's data is call()'s records, never MCP's table, so a real answer fits it.
  */
-export function opDataSchema(site: Site, op: Operation): JsonSchema {
-  const { output } = describeOperation(site, op.name);
-  const properties = Object.fromEntries(
-    Object.entries(output.fields).map(([name, hint]) => [
-      name,
-      hint.type && JSON_TYPES.has(hint.type) ? { type: hint.type } : {},
-    ]),
-  );
-  const named = Object.keys(properties).length > 0;
-  const record = { type: "object", ...(named ? { properties } : {}) };
-  const list = [
-    { type: "array", items: record },
-    {
-      type: "object",
-      required: ["columns", "rows"],
-      properties: {
-        columns: { type: "array", items: { type: "string" } },
-        rows: { type: "array", items: { type: "array" } },
-      },
-    },
-  ];
-  if (output.cardinality === "one") return record;
-  if (output.cardinality === "list") return { anyOf: list };
-  // the fields are known, not whether one item or a list of them comes back
-  return named ? { anyOf: [record, ...list] } : {};
+export function opResponseSchema(op: Operation): JsonSchema {
+  return rest(callResultSchema(opDataSchema(op)));
 }
 
 /**
@@ -127,6 +94,14 @@ const errors = {
   "400": json({ $ref: "#/components/schemas/Error" }, "a malformed body or arguments its schema refuses"),
   "401": json({ $ref: "#/components/schemas/Error" }, "no token, or the wrong one"),
 };
+/** For an endpoint that starts a call: past the server's --max-concurrent it is refused, unsent. */
+const calling = {
+  ...errors,
+  "429": json(
+    { $ref: "#/components/schemas/CallResult" },
+    "the server is running as many calls as it allows: class rate, reason server busy; wait retryAfterMs and send it again",
+  ),
+};
 const pathParam = (name: string, description: string) => ({
   name,
   in: "path",
@@ -142,12 +117,13 @@ const queryParam = (name: string, schema: JsonSchema, description: string, requi
   description,
 });
 
-const CALL_EXTRA: JsonSchema = {
-  maxTier: { type: "integer", enum: [1, 2, 3], description: "highest tier to use; 1: plain HTTP, no browser" },
-  maxAgeMs: { type: "integer", minimum: 0, description: "accepted; not used by this version" },
-  changes: { type: "boolean", description: "accepted; not used by this version" },
-  changesOnly: { type: "boolean", description: "accepted; not used by this version" },
+const MAX_TIER: JsonSchema = {
+  type: "integer",
+  enum: [1, 2, 3],
+  description: "highest tier to use; 1: plain HTTP, no browser",
 };
+/** A read's cache and comparison options, which REST passes to call_operation and call_batch as they are. */
+const WATCH_KEYS = ["maxAgeMs", "changes", "changesOnly", "watch"];
 
 export interface OpenApiOptions {
   /** the server's base URL, as clients reach it */
@@ -161,17 +137,21 @@ export interface OpenApiOptions {
 
 /** The document: generic endpoints from the tools' own schemas, and the installed reads as paths. */
 export function openApiDocument(tools: Toolset, o: OpenApiOptions): JsonSchema {
-  const view = (tools.schema("call_operation")?.properties as Record<string, JsonSchema> | undefined)?.view ?? {
-    type: "object",
-  };
-  const callBody: JsonSchema = {
+  const callProps = (tools.schema("call_operation")?.properties ?? {}) as Record<string, JsonSchema>;
+  const view = callProps.view ?? { type: "object" };
+  const watch = Object.fromEntries(WATCH_KEYS.flatMap((k) => (callProps[k] ? [[k, callProps[k]]] : [])));
+  const writeBody: JsonSchema = {
     type: "object",
     properties: {
       args: { type: "object", additionalProperties: true, description: "param name -> value" },
       view,
-      ...CALL_EXTRA,
+      maxTier: MAX_TIER,
     },
     additionalProperties: false,
+  };
+  const callBody: JsonSchema = {
+    ...writeBody,
+    properties: { ...(writeBody.properties as JsonSchema), ...watch },
   };
   const result = { $ref: "#/components/schemas/CallResult" };
   const site = pathParam("site", "a site name from GET /v1/sites");
@@ -207,7 +187,7 @@ export function openApiDocument(tools: Toolset, o: OpenApiOptions): JsonSchema {
         description:
           "Each op with its inputSchema, output hints, links and the site's notes. A shared site not installed is pulled first, reads only.",
         parameters: [site],
-        responses: { "200": json({ type: "object" }), ...errors },
+        responses: { "200": json(rest(listOperationsSchema())), ...errors },
       },
     },
     "/v1/find": {
@@ -216,7 +196,7 @@ export function openApiDocument(tools: Toolset, o: OpenApiOptions): JsonSchema {
         summary: "Find sites someone already turned into operations",
         description: "Words, a domain or a URL; best match first. Check a match's domain is the site the user means.",
         parameters: [queryParam("q", { type: "string" }, "words, a domain or a URL", true)],
-        responses: { "200": json({ type: "object" }), ...errors },
+        responses: { "200": json(rest(findSitesSchema())), ...errors },
       },
     },
     "/v1/call/{site}/{op}": {
@@ -224,10 +204,10 @@ export function openApiDocument(tools: Toolset, o: OpenApiOptions): JsonSchema {
         operationId: id("callOperation"),
         summary: "Call a site's read operation",
         description:
-          "HTTP 200 whenever the call ran: ok and class carry the outcome. class pending: follow job with GET /v1/jobs/{job}.",
+          "HTTP 200 whenever the call ran: ok and class carry the outcome; data is a list of records. class pending: send nextRequest (GET /v1/jobs/{job}).",
         parameters: [site, op],
         requestBody: body(callBody),
-        responses: { "200": json(result), ...errors },
+        responses: { "200": json(result), ...calling },
       },
     },
     "/v1/batch": {
@@ -253,17 +233,11 @@ export function openApiDocument(tools: Toolset, o: OpenApiOptions): JsonSchema {
               },
             },
             concurrency: { type: "integer", minimum: 1, maximum: 4 },
+            ...watch,
           },
           additionalProperties: false,
         }),
-        responses: {
-          "200": json({
-            type: "object",
-            required: ["ok"],
-            properties: { ok: { type: "boolean" }, results: { type: "array", items: result } },
-          }),
-          ...errors,
-        },
+        responses: { "200": json(rest(callBatchSchema())), ...calling },
       },
     },
     "/v1/jobs/{jobId}": {
@@ -271,7 +245,7 @@ export function openApiDocument(tools: Toolset, o: OpenApiOptions): JsonSchema {
         operationId: id("getJob"),
         summary: "Wait up to about 25 s for a pending call's result",
         parameters: [pathParam("jobId", "the job from a pending answer")],
-        responses: { "200": json(result), ...errors },
+        responses: { "200": json(rest(jobResultSchema())), ...errors },
       },
     },
     "/v1/results/{resultId}": {
@@ -284,7 +258,7 @@ export function openApiDocument(tools: Toolset, o: OpenApiOptions): JsonSchema {
           queryParam("fields", { type: "string" }, "comma-separated paths to pick per item"),
           queryParam("maxChars", { type: "integer" }, "JSON data budget"),
         ],
-        responses: { "200": json({ type: "object" }), ...errors },
+        responses: { "200": json(rest(getResultSchema())), ...errors },
       },
     },
   };
@@ -297,14 +271,14 @@ export function openApiDocument(tools: Toolset, o: OpenApiOptions): JsonSchema {
           "Only when the user asked for that exact action. The same write within 10 minutes is refused as duplicate unless again is true.",
         parameters: [site, op],
         requestBody: body({
-          ...callBody,
+          ...writeBody,
           properties: {
-            ...(callBody.properties as JsonSchema),
+            ...(writeBody.properties as JsonSchema),
             again: { type: "boolean" },
             idempotencyKey: { type: "string" },
           },
         }),
-        responses: { "200": json(result), ...errors },
+        responses: { "200": json(result), ...calling },
       },
     };
   if (o.learn) {
@@ -317,7 +291,7 @@ export function openApiDocument(tools: Toolset, o: OpenApiOptions): JsonSchema {
           description:
             "The page URL with {param} placeholders, the user's values and two other real values. Loads the page in a browser; can take minutes.",
           requestBody: body(plainTuples(learn) as JsonSchema),
-          responses: { "200": json({ type: "object" }), ...errors },
+          responses: { "200": json(rest(learnSiteSchema())), ...calling },
         },
       };
   }
@@ -351,11 +325,11 @@ export function openApiDocument(tools: Toolset, o: OpenApiOptions): JsonSchema {
           description: cut(description, DESCRIPTION_MAX),
           requestBody: body({
             type: "object",
-            properties: { args: inputSchema(operation), view, maxTier: CALL_EXTRA.maxTier },
+            properties: { args: inputSchema(operation), view, maxTier: MAX_TIER, ...watch },
             ...(hasRequired ? { required: ["args"] } : {}),
             additionalProperties: false,
           }),
-          responses: { "200": json(callResultSchema(opDataSchema(s, operation))), ...errors },
+          responses: { "200": json(opResponseSchema(operation)), ...calling },
         },
       };
     }
@@ -374,7 +348,7 @@ export function openApiDocument(tools: Toolset, o: OpenApiOptions): JsonSchema {
     components: {
       securitySchemes: { bearer: { type: "http", scheme: "bearer" } },
       schemas: {
-        CallResult: callResultSchema(),
+        CallResult: rest(callResultSchema()),
         Error: {
           type: "object",
           required: ["ok", "error"],

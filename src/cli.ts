@@ -349,10 +349,11 @@ const HELP: Record<string, string> = {
                   Gemini CLI, VS Code, Cursor and Claude Desktop, with absolute paths and the other
                   flags given, instead of serving
   --no-learn      hide learn_site`,
-  serve: `api-anything serve [--host 127.0.0.1] [--port 8787] [--allow-writes] [--sites a,b] [--no-learn] [--cors <origin>]... [--public-url <url>] [--print-config]
+  serve: `api-anything serve [--host 127.0.0.1] [--port 8787] [--allow-writes] [--sites a,b] [--no-learn] [--cors <origin>]... [--public-url <url>] [--max-concurrent 8] [--print-config]
   Serves the MCP tools over HTTP, for clients that cannot start a process (n8n, Make, Zapier, Dify,
-  Postman, a custom GPT, any HTTP client): MCP over Streamable HTTP at /mcp, the same answers as JSON
-  endpoints under /v1, and an OpenAPI 3.1 document at /openapi.json with one path per installed read.
+  Postman, a custom GPT, any HTTP client): MCP over Streamable HTTP at /mcp, JSON endpoints under /v1
+  that answer as the library's call() does (data as records), and an OpenAPI 3.1 document at
+  /openapi.json with one path per installed read.
   Prints one JSON line once listening ({ok, version, url, mcp, openapi, tokenFile}), then logs to
   stderr. Every request but GET /v1/health needs Authorization: Bearer <token>: API_ANYTHING_TOKEN,
   else the token in ~/.api-anything/serve-token, made on first start. A request from a browser page
@@ -367,6 +368,8 @@ const HELP: Record<string, string> = {
   --cors        a browser origin allowed to call (https://app.example.com); repeat for more
   --public-url  the address a tunnel or proxy gives this server: its Host is accepted, and the
                 OpenAPI document names it as the server
+  --max-concurrent  calls running at once over REST and MCP together (default 8; a batch takes one
+                per call it runs at once); one more is answered at once with 429, class rate
   --print-config  print curl, MCP-over-HTTP and n8n examples instead of serving`,
   setup: `api-anything setup [--yes | --no-share] [--share-only] [--agents claude-code,codex,cursor,claude-desktop,hermes,gemini,vscode] [--dry-run]
   Connects the MCP server (npx -y api-anything mcp) to each agent found on this machine: Claude Code,
@@ -576,6 +579,7 @@ const OPTIONS = {
   port: { type: "string" },
   cors: { type: "string", multiple: true },
   "public-url": { type: "string" },
+  "max-concurrent": { type: "string" },
   days: { type: "string" },
   card: { type: "boolean" },
 } as const;
@@ -1733,7 +1737,9 @@ async function cmdMcp({ v }: Parsed): Promise<number> {
 }
 
 async function cmdServe({ v }: Parsed): Promise<number> {
-  const { DEFAULT_PORT, isLoopback, originOf, serve, serveToken } = await import("./serve.js");
+  const { DEFAULT_PORT, guardProcess, isLoopback, MAX_CONCURRENT, originOf, serve, serveToken } = await import(
+    "./serve.js"
+  );
   if (v["no-learn"]) (await import("./mcp-learn.js")).learnTool.enabled = false;
   const sites = (v.sites ?? "")
     .split(",")
@@ -1744,6 +1750,9 @@ async function cmdServe({ v }: Parsed): Promise<number> {
   const port = v.port === undefined ? DEFAULT_PORT : Number(v.port);
   if (!Number.isInteger(port) || port < 0 || port > 65535)
     throw new Fail(`--port ${v.port}: not a port`, "a number from 0 (any free port) to 65535");
+  const maxConcurrent = v["max-concurrent"] === undefined ? MAX_CONCURRENT : Number(v["max-concurrent"]);
+  if (!Number.isInteger(maxConcurrent) || maxConcurrent < 1)
+    throw new Fail(`--max-concurrent ${v["max-concurrent"]}: not a count`, "a whole number, at least 1");
   const cors = (v.cors ?? [])
     .flatMap((c) => c.split(","))
     .map((c) => c.trim())
@@ -1760,6 +1769,7 @@ async function cmdServe({ v }: Parsed): Promise<number> {
     return 0;
   }
   const { token, file } = serveToken();
+  guardProcess();
   const served = await serve({
     host,
     port,
@@ -1767,6 +1777,7 @@ async function cmdServe({ v }: Parsed): Promise<number> {
     sites,
     cors,
     token,
+    maxConcurrent,
     ...(v["public-url"] ? { publicUrl: v["public-url"] } : {}),
   });
   const url = v["public-url"] ? new URL(v["public-url"]).origin : served.url;
@@ -1901,7 +1912,17 @@ const COMMANDS: Record<string, { run: (p: Parsed) => number | Promise<number>; f
   mcp: { run: cmdMcp, flags: ["allow-writes", "sites", "print-config", "no-learn"] },
   serve: {
     run: cmdServe,
-    flags: ["host", "port", "allow-writes", "sites", "no-learn", "cors", "public-url", "print-config"],
+    flags: [
+      "host",
+      "port",
+      "allow-writes",
+      "sites",
+      "no-learn",
+      "cors",
+      "public-url",
+      "max-concurrent",
+      "print-config",
+    ],
   },
   setup: { run: cmdSetup, flags: ["yes", "no-share", "share-only", "agents", "dry-run"] },
   learn: {

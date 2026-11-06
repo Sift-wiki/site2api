@@ -1,18 +1,24 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { mkdtempSync, rmSync, statSync } from "node:fs";
+import { once } from "node:events";
+import { mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { request } from "node:http";
+import { connect } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createInterface } from "node:readline";
 import { after, before, test } from "node:test";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
-import type { CallResult } from "../src/execute.js";
-import { createServer, type ServerOptions } from "../src/mcp.js";
-import { MAX_OP_PATHS } from "../src/openapi.js";
+import { AjvJsonSchemaValidator } from "@modelcontextprotocol/sdk/validation/ajv";
+import { judge } from "../src/classify.js";
+import { type CallResult, call as libraryCall } from "../src/execute.js";
+import { buildRequest } from "../src/http.js";
+import { asTable, createServer, createToolset, type ServerOptions } from "../src/mcp.js";
+import { MAX_OP_PATHS, openApiDocument, opResponseSchema } from "../src/openapi.js";
+import { opDataSchema } from "../src/schema.js";
 import { BODY_MAX, type Served, type ServeOptions, sameToken, serve, serveToken, tokenFile } from "../src/serve.js";
 import { parseSite } from "../src/spec.js";
 import { saveSite } from "../src/store.js";
@@ -158,6 +164,20 @@ async function mcpClient(opts: ServerOptions = {}) {
   };
 }
 
+/**
+ * A REST answer as MCP sends the same one: REST's data is call()'s records, which MCP sends through
+ * asTable, and only REST adds nextRequest.
+ */
+const asMcp = (v: Doc): Doc => {
+  if (!v || typeof v !== "object" || Array.isArray(v)) return v;
+  const { nextRequest: _, ...rest } = v;
+  return {
+    ...rest,
+    ...("data" in rest ? { data: asTable(rest.data) } : {}),
+    ...(Array.isArray(rest.results) ? { results: rest.results.map(asMcp) } : {}),
+  };
+};
+
 /** Timings differ between two runs of one call: every `ms` goes. */
 const noMs = (v: unknown): unknown =>
   Array.isArray(v)
@@ -251,7 +271,7 @@ test("serve: refuses an Origin not listed and a Host that is not loopback; a lis
   }
 });
 
-test("serve: each endpoint answers what the MCP tool answers for the same input", async () => {
+test("serve: each endpoint answers what the MCP tool answers for the same input, with data as records", async () => {
   const s = await started();
   const m = await mcpClient();
   try {
@@ -261,7 +281,7 @@ test("serve: each endpoint answers what the MCP tool answers for the same input"
     assert.ok(sites.body.some((x: { name: string }) => x.name === SITE));
 
     const ops = await http(s, "GET", `/v1/sites/${SITE}`);
-    assert.deepEqual(ops.body, await m.tool("list_operations", { site: SITE }));
+    assert.deepEqual(asMcp(ops.body), await m.tool("list_operations", { site: SITE }));
     assert.deepEqual(
       ops.body.operations.map((o: { name: string }) => o.name),
       ["user", "items"],
@@ -271,7 +291,7 @@ test("serve: each endpoint answers what the MCP tool answers for the same input"
 
     const find = await http(s, "GET", "/v1/find?q=fixture");
     assert.equal(find.status, 200);
-    assert.deepEqual(find.body, await m.tool("find_sites", { query: "fixture" }));
+    assert.deepEqual(asMcp(find.body), await m.tool("find_sites", { query: "fixture" }));
     assert.equal((await http(s, "GET", "/v1/find")).status, 400, "q is required");
 
     const call = await http(s, "POST", `/v1/call/${SITE}/user`, { body: { args: { name: "bob" } } });
@@ -279,44 +299,80 @@ test("serve: each endpoint answers what the MCP tool answers for the same input"
     assert.equal(call.body.ok, true);
     assert.deepEqual(call.body.data, { name: "bob" });
     assert.deepEqual(
-      noMs(call.body),
+      noMs(asMcp(call.body)),
       noMs(await m.tool("call_operation", { site: SITE, op: "user", args: { name: "bob" } })),
     );
     const tier1 = await http(s, "POST", `/v1/call/${SITE}/user`, {
-      body: { args: { name: "carol" }, maxTier: 1, maxAgeMs: 1000, changes: true },
+      body: { args: { name: "carol" }, maxTier: 1, maxAgeMs: 1000, changes: true, changesOnly: false, watch: "w" },
     });
     assert.equal(tier1.body.tier, 1);
+
+    // the read cache and comparison reach call(): a first comparison, then a kept answer
+    const watched = await http(s, "POST", `/v1/call/${SITE}/user`, { body: { args: { name: "fern" }, changes: true } });
+    assert.deepEqual(watched.body.changes?.first, true, JSON.stringify(watched.body));
+    const kept = await http(s, "POST", `/v1/call/${SITE}/user`, { body: { args: { name: "fern" }, maxAgeMs: 60_000 } });
+    assert.equal(kept.body.cached, true, JSON.stringify(kept.body));
+    const batchWatched = await http(s, "POST", "/v1/batch", {
+      body: { calls: [{ site: SITE, op: "user", args: { name: "fern" } }], changesOnly: true },
+    });
+    assert.ok(batchWatched.body.results[0].changes, JSON.stringify(batchWatched.body));
+    assert.equal(batchWatched.body.results[0].data, undefined, "changesOnly leaves data out");
+    const tooOld = await http(s, "POST", `/v1/call/${SITE}/user`, { body: { args: { name: "x" }, maxAgeMs: -1 } });
+    assert.equal(tooOld.status, 400, "call_operation's own schema checks them");
+
+    // a list of records: the library's records over REST, where MCP sends {columns, rows}
+    const list = await http(s, "POST", `/v1/call/${SITE}/items`, { body: {} });
+    const library = await libraryCall(SITE, "items", {}, { maxTier: 1 });
+    assert.ok(Array.isArray(list.body.data) && list.body.data.length >= 2, JSON.stringify(list.body));
+    assert.equal(list.body.columns, undefined);
+    assert.deepEqual(list.body.data, library.data);
+    const listViaMcp = await m.tool("call_operation", { site: SITE, op: "items" });
+    assert.deepEqual(Object.keys(listViaMcp.data), ["columns", "rows"], "MCP keeps its table");
+    assert.deepEqual(noMs(asMcp(list.body)), noMs(listViaMcp));
 
     // a failed call ran: 200, with ok and class saying how
     const bad = await http(s, "POST", `/v1/call/${SITE}/user`, { body: { args: { nope: 1 } } });
     assert.equal(bad.status, 200);
     assert.equal(bad.body.class, "input");
     assert.deepEqual(
-      noMs(bad.body),
+      noMs(asMcp(bad.body)),
       noMs(await m.tool("call_operation", { site: SITE, op: "user", args: { nope: 1 } })),
     );
 
     const view = { maxChars: 256 };
     const cut = await http(s, "POST", `/v1/call/${SITE}/items`, { body: { view } });
     assert.ok(cut.body.resultId, "a capped answer is kept");
+    assert.ok(Array.isArray(cut.body.data), "a cut list is records too");
+    assert.equal(cut.body.nextRequest.method, "GET");
+    assert.equal(
+      cut.body.nextRequest.path,
+      `/v1/results/${cut.body.resultId}?offset=${cut.body.more.offset}&maxChars=${view.maxChars}`,
+      "the rest, as GET /v1/results with more's offset",
+    );
+    const rest = await http(s, "GET", cut.body.nextRequest.path);
+    assert.equal(rest.body.ok, true, JSON.stringify(rest.body));
+    assert.notDeepEqual(rest.body.data[0], cut.body.data[0], "it continues where the cut answer stopped");
     const viaMcp = await m.tool("get_result", { resultId: cut.body.resultId, offset: 2, fields: ["title"] });
     const viaRest = await http(s, "GET", `/v1/results/${cut.body.resultId}?offset=2&fields=title`);
     assert.equal(viaRest.status, 200);
-    assert.deepEqual(viaRest.body, viaMcp);
+    assert.ok(Array.isArray(viaRest.body.data), JSON.stringify(viaRest.body));
+    assert.deepEqual(asMcp(viaRest.body), viaMcp);
     assert.equal((await http(s, "GET", `/v1/results/${cut.body.resultId}?offset=-1`)).status, 400);
 
     const items = [
       { site: SITE, op: "user", args: { name: "dan" } },
       { id: "w", site: SITE, op: "order", args: { item: "y" } },
+      { site: SITE, op: "items" },
     ];
     const batch = await http(s, "POST", "/v1/batch", { body: { calls: items, concurrency: 1 } });
     assert.equal(batch.status, 200);
-    assert.deepEqual(noMs(batch.body), noMs(await m.tool("call_batch", { items, concurrency: 1 })));
+    assert.deepEqual(noMs(asMcp(batch.body)), noMs(await m.tool("call_batch", { items, concurrency: 1 })));
     assert.equal(batch.body.results[1].class, "input", "writes are not batched");
+    assert.deepEqual(batch.body.results[2].data, library.data, "a batch's list is records too");
 
     const job = await http(s, "GET", "/v1/jobs/deadbeef");
     assert.equal(job.status, 200);
-    assert.deepEqual(job.body, await m.tool("get_job", { job: "deadbeef" }));
+    assert.deepEqual(asMcp(job.body), await m.tool("get_job", { job: "deadbeef" }));
   } finally {
     await m.close();
     await s.close();
@@ -403,8 +459,13 @@ test("serve: /v1/write exists only with allowWrites, and a write through /v1/cal
     assert.equal(viaCall.body.nextCall.tool, "call_write_operation", "the read tool points at the write tool");
     const readThere = await http(on, "POST", `/v1/write/${SITE}/user`, { body: { args: { name: "x" } } });
     assert.deepEqual(
-      readThere.body,
+      asMcp(readThere.body),
       await m.tool("call_write_operation", { site: SITE, op: "user", args: { name: "x" } }),
+    );
+    assert.deepEqual(
+      readThere.body.nextRequest,
+      { method: "POST", path: `/v1/call/${SITE}/user`, body: { args: { name: "x" } } },
+      "the step as a REST request: the read endpoint",
     );
     const doc = (await http(on, "GET", "/openapi.json")).body;
     assert.ok(doc.paths["/v1/write/{site}/{op}"]);
@@ -432,13 +493,15 @@ test("serve: a call still running at the deadline answers pending, and /v1/jobs 
     assert.equal(first.body.ok, false);
     const id = first.body.job;
     assert.equal(typeof id, "string");
+    assert.deepEqual(first.body.nextRequest, { method: "GET", path: `/v1/jobs/${id}` });
+    assert.equal(first.body.nextCall.tool, "get_job", "nextCall stays MCP's");
     const again = await http(s, "POST", `/v1/call/${SITE}/user`, { body: { args: { name: "x" } } });
     assert.equal(again.body.job, id, "an identical call joins the job");
     assert.equal(runs, 1);
-    const still = await http(s, "GET", `/v1/jobs/${id}`);
+    const still = await http(s, "GET", first.body.nextRequest.path);
     assert.equal(still.body.class, "pending");
     release();
-    const done = await http(s, "GET", `/v1/jobs/${id}`);
+    const done = await http(s, "GET", still.body.nextRequest.path);
     assert.equal(done.body.ok, true);
     assert.deepEqual(done.body.data, { slow: true });
   } finally {
@@ -588,6 +651,7 @@ test("serve: /openapi.json is a well-formed OpenAPI 3.1 document, and its per-op
       const bodySchema = user.requestBody.content["application/json"].schema;
       assert.deepEqual(bodySchema.properties.args.required, ["name"]);
       // the round trip: a request built from the document, an answer that fits what it declares
+      const ajv = new AjvJsonSchemaValidator();
       for (const [path, item] of Object.entries<Doc>(mine.paths)) {
         if (!/^\/v1\/call\/[^{]/.test(path)) continue;
         const op = item.post;
@@ -601,7 +665,10 @@ test("serve: /openapi.json is a well-formed OpenAPI 3.1 document, and its per-op
         assert.equal(r.body.ok, true, `${path}: ${JSON.stringify(r.body)}`);
         const declared = op.responses["200"].content["application/json"].schema;
         assert.ok(fits(mine, declared, r.body), `${path}: the answer fits its schema: ${JSON.stringify(r.body)}`);
-        assert.ok(declared.properties.data.anyOf || declared.properties.data.type, `${path}: data is typed`);
+        const check = ajv.getValidator(declared)(r.body);
+        assert.ok(check.valid, `${path}: ${check.errorMessage}: ${JSON.stringify(r.body)}`);
+        assert.ok(declared.properties.data.properties || declared.properties.data.items, `${path}: data is described`);
+        assert.ok(declared.properties.nextRequest, `${path}: nextRequest is declared`);
       }
     } finally {
       await only.close();
@@ -631,7 +698,10 @@ test("serve: MCP over Streamable HTTP lists the tools and calls one, answering a
     });
     const viaMcp = JSON.parse((r.content as { text: string }[])[0]!.text);
     const viaRest = await http(s, "POST", `/v1/call/${SITE}/user`, { body: { args: { name: "zed" } } });
-    assert.deepEqual(noMs(viaMcp), noMs(viaRest.body));
+    assert.deepEqual(noMs(viaMcp), noMs(asMcp(viaRest.body)));
+    const list = await client.callTool({ name: "call_operation", arguments: { site: SITE, op: "items" } });
+    const listViaMcp = JSON.parse((list.content as { text: string }[])[0]!.text);
+    assert.deepEqual(Object.keys(listViaMcp.data), ["columns", "rows"], "MCP over HTTP keeps MCP's table");
     const unknown = await http(s, "POST", "/mcp", {
       headers: { "mcp-session-id": "nope", accept: "application/json, text/event-stream" },
       body: { jsonrpc: "2.0", id: 1, method: "tools/list" },
@@ -682,6 +752,10 @@ test("serve: the CLI prints one JSON line when listening, keeps the token off st
       body: "{}",
     });
     assert.equal(learn.status, 404, "--no-learn hides /v1/learn");
+    const port = Number(new URL(line.url).port);
+    assert.match(await rawRequest(port, `GET //[ HTTP/1.1\r\nHost: 127.0.0.1:${port}\r\n`), /^HTTP\/1\.1 400 /);
+    assert.equal((await fetch(`${line.url}/v1/health`)).status, 200, "the bad request did not end the process");
+    assert.equal(child.exitCode, null);
     const code = await new Promise<number | null>((resolve) => {
       child.once("exit", resolve);
       child.kill("SIGTERM");
@@ -693,6 +767,319 @@ test("serve: the CLI prints one JSON line when listening, keeps the token off st
     child.kill("SIGKILL");
     rmSync(cliHome, { recursive: true, force: true });
   }
+});
+
+/** `head` (a request line and headers, no blank line) sent on a raw socket, with Connection: close: the answer as text. */
+function rawRequest(port: number, head: string): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const sock = connect(port, "127.0.0.1", () => sock.write(`${head}Connection: close\r\n\r\n`));
+    let text = "";
+    sock.on("data", (d) => (text += d));
+    sock.on("close", () => resolve(text));
+    sock.on("error", reject);
+  });
+}
+
+test("serve: a request target URL() cannot parse is a 400, with or without a token, and the server keeps serving", async () => {
+  const s = await started();
+  try {
+    const host = `Host: 127.0.0.1:${s.port}\r\n`;
+    for (const target of ["//[", "//[::1", "http://[x/v1/sites"]) {
+      const anon = await rawRequest(s.port, `GET ${target} HTTP/1.1\r\n${host}`);
+      assert.match(anon, /^HTTP\/1\.1 400 /, `${target}: ${anon}`);
+      assert.match(anon, /"ok":false/);
+      const signed = await rawRequest(s.port, `GET ${target} HTTP/1.1\r\n${host}Authorization: Bearer ${TOKEN}\r\n`);
+      assert.match(signed, /^HTTP\/1\.1 400 /, target);
+    }
+    assert.equal((await http(s, "GET", "/v1/health")).status, 200);
+    assert.equal((await http(s, "GET", "/v1/sites")).status, 200);
+  } finally {
+    await s.close();
+  }
+});
+
+test("serve: guardProcess logs an unhandled rejection instead of letting it end the process", async () => {
+  // in a process of its own: node:test fails any test whose process sees an unhandled rejection
+  const dir = mkdtempSync(join(tmpdir(), "aa-serve-guard-"));
+  try {
+    const script = join(dir, "guard.mts");
+    writeFileSync(
+      script,
+      [
+        `import { guardProcess } from ${JSON.stringify(pathToFileURL(join(ROOT, "src/serve.ts")).href)};`,
+        `guardProcess();`,
+        `void Promise.reject(new Error("a handler's bug"));`,
+        `setTimeout(() => process.stdout.write("alive\\n"), 100);`,
+      ].join("\n"),
+    );
+    const child = spawn(process.execPath, ["--import", "tsx", script], {
+      cwd: ROOT,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    let out = "";
+    let err = "";
+    child.stdout!.on("data", (d) => (out += d));
+    child.stderr!.on("data", (d) => (err += d));
+    const [code] = await once(child, "exit");
+    assert.equal(code, 0, err);
+    assert.equal(out, "alive\n");
+    assert.match(err, /unhandled rejection: Error: a handler's bug/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("serve: an idle socket is closed after idleMs; the default is 120 s", async () => {
+  const s = await started({ idleMs: 200 });
+  try {
+    assert.equal(s.server.timeout, 200);
+    const sock = connect(s.port, "127.0.0.1");
+    await once(sock, "connect");
+    const t = Date.now();
+    sock.write("GET /v1/health HTTP/1.1\r\n"); // and then nothing more
+    sock.resume();
+    await once(sock, "close");
+    assert.ok(Date.now() - t < 5000, `closed after ${Date.now() - t} ms`);
+  } finally {
+    await s.close();
+  }
+  const d = await started();
+  try {
+    assert.equal(d.server.timeout, 120_000);
+  } finally {
+    await d.close();
+  }
+});
+
+test("serve: past maxConcurrent a new call is a 429 at once and runs nothing; a permit is held until its job settles", async () => {
+  const gates = new Map<string, () => void>();
+  let open = false;
+  let runs = 0;
+  const slow = async (_site: string, _op: string, args: Record<string, unknown>): Promise<CallResult> => {
+    runs++;
+    if (!open) await new Promise<void>((r) => gates.set(String(args.name), r));
+    return { ok: true, class: "ok", data: { name: args.name }, tier: 1, ms: 1 };
+  };
+  const s = await started({ waitMs: 50, maxConcurrent: 2, run: { call: slow as never } });
+  const client = new Client({ name: "probe", version: "0" });
+  const callOf = (name: string) => http(s, "POST", `/v1/call/${SITE}/user`, { body: { args: { name } } });
+  try {
+    const a = await callOf("a");
+    const b = await callOf("b");
+    assert.equal(a.body.class, "pending");
+    assert.equal(b.body.class, "pending", "both answered: their permits stay held while they run");
+    assert.equal(runs, 2);
+
+    const c = await callOf("c");
+    assert.equal(c.status, 429);
+    assert.equal(c.headers["retry-after"], "2");
+    assert.equal(c.body.ok, false);
+    assert.equal(c.body.class, "rate");
+    assert.equal(c.body.reason, "server busy");
+    assert.equal(typeof c.body.retryAfterMs, "number");
+    assert.equal(runs, 2, "refused before it ran");
+
+    const joined = await callOf("a");
+    assert.equal(joined.status, 200, "joining a running job takes no permit");
+    assert.equal(joined.body.job, a.body.job);
+
+    const batch = await http(s, "POST", "/v1/batch", { body: { calls: [{ site: SITE, op: "user" }] } });
+    assert.equal(batch.status, 429);
+    assert.equal(batch.body.class, "rate");
+
+    await client.connect(
+      new StreamableHTTPClientTransport(new URL(`${s.url}/mcp`), {
+        requestInit: { headers: { authorization: `Bearer ${TOKEN}` } },
+      }),
+    );
+    const viaMcp = await client.callTool({
+      name: "call_operation",
+      arguments: { site: SITE, op: "user", args: { name: "m" } },
+    });
+    const busy = JSON.parse((viaMcp.content as { text: string }[])[0]!.text);
+    assert.equal(viaMcp.isError, true);
+    assert.equal(busy.class, "rate");
+    assert.equal(busy.reason, "server busy");
+    assert.equal(runs, 2, "MCP over HTTP shares the limit");
+
+    gates.get("a")!();
+    assert.equal((await http(s, "GET", `/v1/jobs/${a.body.job}`)).body.ok, true);
+    // one permit free: a batch running two calls at once needs two
+    const wide = await http(s, "POST", "/v1/batch", {
+      body: {
+        calls: [
+          { site: SITE, op: "user", args: { name: "d1" } },
+          { site: "other", op: "user", args: { name: "d2" } },
+        ],
+        concurrency: 2,
+      },
+    });
+    assert.equal(wide.status, 429, "a batch takes one permit per call it runs at once");
+    const c2 = await callOf("c");
+    assert.equal(c2.status, 200);
+    assert.equal(c2.body.class, "pending");
+    assert.equal(runs, 3);
+    assert.equal((await callOf("e")).status, 429);
+    gates.get("b")!();
+    gates.get("c")!();
+    await http(s, "GET", `/v1/jobs/${b.body.job}`);
+    await http(s, "GET", `/v1/jobs/${c2.body.job}`);
+    open = true;
+    const after = await callOf("e");
+    assert.equal(after.status, 200);
+    assert.equal(after.body.ok, true, JSON.stringify(after.body));
+  } finally {
+    open = true;
+    for (const release of gates.values()) release();
+    await client.close();
+    await s.close();
+  }
+});
+
+test("serve: the token file is never seen half-written: 16 servers starting at once keep one token", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "aa-serve-race-"));
+  try {
+    const go = join(dir, "go");
+    const script = join(dir, "start.mts");
+    writeFileSync(
+      script,
+      [
+        `import fs, { existsSync } from "node:fs";`,
+        `import { syncBuiltinESMExports } from "node:module";`,
+        // each write of a token is slow, so any start reading a file another is still writing sees it
+        `const write = fs.writeFileSync;`,
+        `fs.writeFileSync = (path, data, o) => {`,
+        `  if (!String(path).includes("serve-token")) return write(path, data, o);`,
+        `  const fd = fs.openSync(path, o?.flag ?? "w", o?.mode);`,
+        `  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 50);`,
+        `  fs.writeSync(fd, data);`,
+        `  fs.closeSync(fd);`,
+        `};`,
+        `syncBuiltinESMExports();`,
+        `const { serveToken } = await import(${JSON.stringify(pathToFileURL(join(ROOT, "src/serve.ts")).href)});`,
+        `process.stdout.write("ready\\n");`,
+        `const wait = new Int32Array(new SharedArrayBuffer(4));`,
+        `while (!existsSync(${JSON.stringify(go)})) Atomics.wait(wait, 0, 0, 1);`,
+        `try { process.stdout.write(JSON.stringify(serveToken()) + "\\n"); } catch (e) { process.stdout.write(JSON.stringify({ error: String(e) }) + "\\n"); }`,
+      ].join("\n"),
+    );
+    const env: NodeJS.ProcessEnv = { ...process.env, API_ANYTHING_HOME: join(dir, "home") };
+    delete env.API_ANYTHING_TOKEN;
+    const children = Array.from({ length: 16 }, () =>
+      spawn(process.execPath, ["--import", "tsx", script], { cwd: ROOT, env, stdio: ["ignore", "pipe", "inherit"] }),
+    );
+    const outputs = children.map((child) => {
+      const lines: string[] = [];
+      const rl = createInterface({ input: child.stdout! });
+      const ready = new Promise<void>((resolve) => {
+        rl.on("line", (l) => {
+          lines.push(l);
+          if (l === "ready") resolve();
+        });
+        child.once("close", () => resolve());
+      });
+      return { ready, done: once(child, "close").then(() => lines) };
+    });
+    await Promise.all(outputs.map((o) => o.ready));
+    writeFileSync(go, "");
+    const answers = (await Promise.all(outputs.map((o) => o.done))).map((lines) => JSON.parse(lines.at(-1)!));
+    const file = join(dir, "home", "serve-token");
+    const token = readFileSync(file, "utf8").trim();
+    assert.match(token, /^[0-9a-f]{64}$/);
+    assert.deepEqual(
+      answers,
+      answers.map(() => ({ token, file })),
+      "every start read the one token that won",
+    );
+    assert.equal(statSync(file).mode & 0o777, 0o600);
+    assert.deepEqual(
+      readdirSync(join(dir, "home")).filter((f) => f.startsWith("serve-token")),
+      ["serve-token"],
+      "no temp file is left behind",
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("serve: every bundled read's OpenAPI answer schema takes its recorded answers, youtube.suggest's strings and shapes it cannot know", () => {
+  const ajv = new AjvJsonSchemaValidator();
+  const noSession = { cookies: [], values: {} };
+  const bundled = readdirSync(join(ROOT, "sites")).filter((f) => f.endsWith(".json"));
+  const siteOf = (name: string) => parseSite(JSON.parse(readFileSync(join(ROOT, "sites", `${name}.json`), "utf8")));
+  let reads = 0;
+  for (const file of bundled) {
+    const site = siteOf(file.slice(0, -5));
+    for (const op of site.operations) {
+      if (!op.readOnly) continue;
+      const at = `${site.name}.${op.name}`;
+      const valid = ajv.getValidator(opResponseSchema(op));
+      const fits = (data: unknown) => valid({ ok: true, class: "ok", tier: 1, ms: 1, data }).valid;
+      assert.ok(valid({ ok: false, class: "rate", reason: "server busy", retryAfterMs: 2000 }).valid, at);
+      const data = opDataSchema(op);
+      // what the recipe does not fix is open: a single result of any shape, items of any shape
+      if (data.type !== "array")
+        for (const one of [{}, "text", 1]) assert.ok(fits(one), `${at}: ${JSON.stringify(one)}`);
+      if ((data.items as Doc)?.type !== "object")
+        for (const list of [["text"], [1, 2], [{}]]) assert.ok(fits(list), `${at}: ${JSON.stringify(list)}`);
+      reads++;
+    }
+  }
+  assert.ok(reads > 300, String(reads));
+
+  // the recorded answers, against the document's own per-op paths
+  const fixtureDir = join(ROOT, "test", "fixture", "sites");
+  const names = readdirSync(fixtureDir)
+    .filter((f) => f.endsWith(".json"))
+    .map((f) => f.slice(0, -5));
+  const tools = createToolset({});
+  const doc: Doc = openApiDocument(tools, {
+    url: "http://127.0.0.1:1",
+    version: "0",
+    allowWrites: false,
+    learn: false,
+    sites: names,
+  });
+  const declared = (site: string, op: string) =>
+    doc.paths[`/v1/call/${site}/${op}`].post.responses["200"].content["application/json"].schema;
+  let recorded = 0;
+  for (const name of names) {
+    const site = siteOf(name);
+    const fixtures = JSON.parse(readFileSync(join(fixtureDir, `${name}.json`), "utf8")) as Doc[];
+    for (const f of fixtures) {
+      const op = site.operations.find((o) => o.name === f.op)!;
+      const j = judge(op, {
+        status: f.status,
+        headers: { "content-type": f.contentType },
+        body: typeof f.body === "string" ? f.body : JSON.stringify(f.body),
+        url: buildRequest(op, f.args, noSession).url,
+      });
+      assert.equal(j.class, "ok", `${name}.${f.op}: ${j.reason}`);
+      const answer = { ok: true, class: "ok", tier: 1, ms: 1, data: j.data };
+      const check = ajv.getValidator(declared(name, f.op))(answer);
+      assert.ok(check.valid, `${name}.${f.op}: ${check.errorMessage}`);
+      recorded++;
+    }
+  }
+  assert.ok(recorded >= 8, String(recorded));
+
+  // youtube.suggest answers a list of strings
+  const suggest = siteOf("youtube").operations.find((o) => o.name === "suggest")!;
+  const j = judge(suggest, {
+    status: 200,
+    headers: { "content-type": "text/javascript; charset=UTF-8" },
+    body: 'window.google.ac.h(["kit",[["kittens",0,[512]],["kitten videos",0,[512,433]]],{"k":1,"q":"x"}])',
+  });
+  assert.equal(j.class, "ok", j.reason);
+  assert.deepEqual(j.data, ["kittens", "kitten videos"]);
+  const check = ajv.getValidator(declared("youtube", "suggest"))({
+    ok: true,
+    class: "ok",
+    tier: 1,
+    ms: 1,
+    data: j.data,
+  });
+  assert.ok(check.valid, String(check.errorMessage));
 });
 
 function serveTokenAt(dir: string): string {

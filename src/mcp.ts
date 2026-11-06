@@ -18,7 +18,7 @@ import { closeBrowser } from "./browser.js";
 import { describeOperation, inputSchema } from "./describe.js";
 import { type CallOptions, call, type NextCall } from "./execute.js";
 import { returnedFields } from "./extract.js";
-import { type Job, Jobs } from "./jobs.js";
+import { type Job, Jobs, type Permits } from "./jobs.js";
 import { prepareLink } from "./links.js";
 import {
   browserSource,
@@ -334,6 +334,46 @@ export const reply = (v: unknown, isError = false): Reply => ({
   isError,
 });
 
+/**
+ * Each answer's form with `data` as call() returns it, for an answer MCP sends with asTable's
+ * `{columns, rows}`: REST answers with this one (`recordsAnswer`). Kept beside the reply, not in
+ * it, so MCP sends what it always did, and a job either surface started answers both.
+ */
+const records = new WeakMap<Reply, unknown>();
+
+/** `tabled` over MCP; `asRecords` for recordsAnswer. */
+const replyBoth = (asRecords: unknown, tabled: unknown, isError: boolean): Reply => {
+  const r = reply(tabled, isError);
+  records.set(r, asRecords);
+  return r;
+};
+
+/** The answer with `data` as call() returns it (records, never asTable's table), as JSON. */
+export const recordsAnswer = (r: Reply): unknown =>
+  records.has(r) ? records.get(r) : (r.structuredContent ?? JSON.parse(r.content[0]!.text));
+
+/** How long a call refused for a full server is told to wait. */
+export const BUSY_RETRY_MS = 2000;
+const busyReplies = new WeakSet<Reply>();
+/** A call refused before it ran: every permit of the server's `permits` is held by a running call. */
+const busy = () => {
+  const r = reply(
+    {
+      ok: false,
+      class: "rate",
+      reason: "server busy",
+      retry: "after_wait",
+      retryAfterMs: BUSY_RETRY_MS,
+      next: "wait retryAfterMs, then send the same call again; it was not sent to the site",
+    },
+    true,
+  );
+  busyReplies.add(r);
+  return r;
+};
+/** Whether `r` is the refusal of a call the server had no permit for (REST answers it with 429). */
+export const isBusy = (r: Reply) => busyReplies.has(r);
+
 /** Every failure comes back as {error, next} JSON, like call_operation's, never as a bare exception text. */
 async function guard(fn: () => Promise<Reply>): Promise<Reply> {
   try {
@@ -387,6 +427,11 @@ export interface ServerOptions {
    * and its REST surface the same one, so a job one started is found, and joined, by any other
    */
   jobs?: Jobs<Reply>;
+  /**
+   * the calls allowed to run at once: a tool that would start one more answers `busy` instead;
+   * default no limit. `serve` gives every MCP session and its REST surface the same one
+   */
+  permits?: Permits;
 }
 
 /** Call options a REST call takes that the MCP tools do not. */
@@ -427,12 +472,17 @@ export function createToolset({
   waitMs = WAIT_MS,
   run = {},
   jobs = new Jobs<Reply>(waitMs),
+  permits,
 }: ServerOptions = {}): Toolset {
   const callOp = run.call ?? call;
   const signInWindow = run.window ?? windowLogin;
-  /** `work` as a job: identical calls share one, and one running past the deadline answers pending */
-  const asJob = async (key: string, note: string, work: () => Promise<Reply>): Promise<Reply> => {
-    const r = await jobs.start(key, note, () => guard(work));
+  /**
+   * `work` as a job: identical calls share one, and one running past the deadline answers pending.
+   * A new job holds `width` permits until its work settles, whatever was answered meanwhile.
+   */
+  const asJob = async (key: string, note: string, work: () => Promise<Reply>, width = 1): Promise<Reply> => {
+    const r = await jobs.start(key, note, () => guard(work), permits && (() => permits.take(width)));
+    if ("busy" in r) return busy();
     return "result" in r ? r.result : pending(r.job);
   };
 
@@ -497,15 +547,8 @@ export function createToolset({
     const nextCall = toWriteTool
       ? { action: "allow_writes", site, op, tool: "call_write_operation", args: { site, op, args } }
       : r.nextCall && mcpNextCall(r.nextCall, as);
-    return reply(
-      {
-        ...r,
-        ...(r.data !== undefined ? { data: asTable(r.data) } : {}),
-        ...(next ? { next } : {}),
-        ...(nextCall ? { nextCall } : {}),
-      },
-      !r.ok,
-    );
+    const answer = { ...r, ...(next ? { next } : {}), ...(nextCall ? { nextCall } : {}) };
+    return replyBoth(answer, r.data !== undefined ? { ...answer, data: asTable(r.data) } : answer, !r.ok);
   };
 
   /** call_write_operation sends only writes: a read there would make a client ask before it. */
@@ -755,28 +798,37 @@ export function createToolset({
     },
     ({ items, concurrency = 1, ...rest }) => {
       const watch = watchOf(rest);
-      return asJob(`batch ${JSON.stringify([items, concurrency, watch])}`, READ_NOTE, async () => {
-        const results = [];
-        let index = 0;
-        for await (const r of callReads(items, { concurrency, maxItems: 20, ...watch })) {
-          const item = items[index++]!;
-          results.push({
-            ...r,
-            ...(r.data !== undefined ? { data: asTable(r.data) } : {}),
-            ...(r.next ? { next: mcpNext(r.next) } : {}),
-            ...(r.nextCall
-              ? {
-                  nextCall: mcpNextCall(r.nextCall, {
-                    tool: "call_operation",
-                    args: { site: item.site, op: item.op, args: item.args ?? {} },
-                  }),
-                }
-              : {}),
-          });
-        }
-        const ok = results.every((r) => r.ok);
-        return reply({ ok, results }, !ok);
-      });
+      // one permit per call running at once; a server allowing fewer runs fewer at once
+      const width = Math.max(1, Math.min(concurrency, items.length, permits?.max ?? concurrency));
+      return asJob(
+        `batch ${JSON.stringify([items, concurrency, watch])}`,
+        READ_NOTE,
+        async () => {
+          const results = [];
+          const tabled = [];
+          let index = 0;
+          for await (const r of callReads(items, { concurrency: width, maxItems: 20, ...watch })) {
+            const item = items[index++]!;
+            const result = {
+              ...r,
+              ...(r.next ? { next: mcpNext(r.next) } : {}),
+              ...(r.nextCall
+                ? {
+                    nextCall: mcpNextCall(r.nextCall, {
+                      tool: "call_operation",
+                      args: { site: item.site, op: item.op, args: item.args ?? {} },
+                    }),
+                  }
+                : {}),
+            };
+            results.push(result);
+            tabled.push(r.data !== undefined ? { ...result, data: asTable(r.data) } : result);
+          }
+          const ok = results.every((r) => r.ok);
+          return replyBoth({ ok, results }, { ok, results: tabled }, !ok);
+        },
+        width,
+      );
     },
   );
 
@@ -796,7 +848,7 @@ export function createToolset({
     },
     ({ resultId, ...opts }) => {
       const r = getResult(resultId, opts);
-      return reply({ ...r, ...(r.ok && r.encoding !== "json" ? { data: asTable(r.data) } : {}) }, !r.ok);
+      return replyBoth(r, { ...r, ...(r.ok && r.encoding !== "json" ? { data: asTable(r.data) } : {}) }, !r.ok);
     },
   );
 
