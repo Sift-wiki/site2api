@@ -542,6 +542,10 @@ answer says it is unavailable instead of returning a continuation.
 - `--print-config` prints how to add the server to Claude Code, Codex, Gemini CLI, VS Code, Cursor,
   Claude Desktop and Hermes, with absolute paths. Client timeouts and fixes for common problems are in
   [QUICKSTART.md](QUICKSTART.md#client-timeouts).
+- `api-anything serve` serves the same tools over HTTP: MCP over Streamable HTTP at `/mcp`, JSON
+  endpoints under `/v1` that answer as the library's `call()` does (data as records, plus a
+  `nextRequest`), and an OpenAPI 3.1 document at `/openapi.json`. See
+  [SERVE.md](SERVE.md).
 
 ### Portable operation descriptions and links
 

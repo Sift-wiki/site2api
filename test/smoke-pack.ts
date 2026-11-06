@@ -6,10 +6,12 @@
  * test/pack.test.ts checks the packed file list offline.
  */
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { execFileSync, spawn } from "node:child_process";
+import { once } from "node:events";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { createInterface } from "node:readline";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
@@ -52,7 +54,35 @@ export function packProblems(files: string[]): string[] {
 const run = (cmd: string, args: string[], cwd: string, env: NodeJS.ProcessEnv = process.env) =>
   execFileSync(cmd, args, { cwd, env, encoding: "utf8", stdio: ["ignore", "pipe", "inherit"] });
 
-function smoke(): void {
+/** The installed `serve` starts, answers its health check and its OpenAPI document, and stops on SIGTERM. */
+async function smokeServe(cli: string, cwd: string, env: NodeJS.ProcessEnv): Promise<void> {
+  const own = { ...env };
+  delete own.API_ANYTHING_TOKEN; // the token file is what this checks
+  const child = spawn(cli, ["serve", "--port", "0", "--no-learn"], {
+    cwd,
+    env: own,
+    stdio: ["ignore", "pipe", "inherit"],
+  });
+  try {
+    const [line] = (await once(createInterface({ input: child.stdout! }), "line")) as [string];
+    const { url, tokenFile } = JSON.parse(line) as { url: string; tokenFile: string };
+    assert.equal(((await (await fetch(`${url}/v1/health`)).json()) as { ok: boolean }).ok, true, "serve's health");
+    const token = readFileSync(tokenFile, "utf8").trim();
+    const doc = (await (
+      await fetch(`${url}/openapi.json`, { headers: { authorization: `Bearer ${token}` } })
+    ).json()) as {
+      openapi: string;
+    };
+    assert.equal(doc.openapi, "3.1.0", "serve's OpenAPI document");
+    const exited = once(child, "exit");
+    child.kill("SIGTERM");
+    assert.equal((await exited)[0], 0, "serve stops on SIGTERM");
+  } finally {
+    child.kill("SIGKILL");
+  }
+}
+
+async function smoke(): Promise<void> {
   const tmp = mkdtempSync(join(tmpdir(), "aa-pack-"));
   try {
     // built first: a lifecycle script's output would land in the JSON pack prints
@@ -92,10 +122,13 @@ function smoke(): void {
     );
     assert.equal(lib.trim(), "function", "the library entry loads");
     assert.ok(existsSync(join(app, "node_modules", "api-anything", SKILL)), `${SKILL} is installed`);
-    console.log(`${packed!.filename}: ${packed!.files.length} files, ${sites.length} sites, CLI and library run`);
+    await smokeServe(cli, app, env);
+    console.log(
+      `${packed!.filename}: ${packed!.files.length} files, ${sites.length} sites, CLI, library and serve run`,
+    );
   } finally {
     rmSync(tmp, { recursive: true, force: true });
   }
 }
 
-if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) smoke();
+if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) await smoke();

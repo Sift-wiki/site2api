@@ -17,6 +17,27 @@ export interface Job<T> {
   settled: Promise<T>;
 }
 
+/**
+ * How many calls may run at once across every surface of one server (`serve`'s REST and MCP
+ * sessions). Past `max` a new call is refused at once, never queued: a queue would hold a client's
+ * request past its own timeout, and it would send the call again.
+ */
+export class Permits {
+  private used = 0;
+  constructor(readonly max: number) {}
+
+  /** `n` permits, or undefined when fewer are free; the release returned is safe to call twice. */
+  take(n = 1): (() => void) | undefined {
+    if (this.used + n > this.max) return undefined;
+    this.used += n;
+    let held = true;
+    return () => {
+      if (held) this.used -= n;
+      held = false;
+    };
+  }
+}
+
 /** A finished job's result stays readable this long. */
 const KEEP_MS = 15 * 60_000;
 
@@ -26,10 +47,21 @@ export class Jobs<T> {
 
   constructor(readonly waitMs: number) {}
 
-  /** Runs `work` under `key`, or joins the job running under it; the result, or the job once `waitMs` passes. */
-  start(key: string, note: string, work: () => Promise<T>): Promise<{ result: T } | { job: Job<T> }> {
+  /**
+   * Runs `work` under `key`, or joins the job running under it; the result, or the job once `waitMs`
+   * passes. A new job first asks `admit` for its permits, held until the work settles: none free is
+   * `busy`, and nothing ran. Joining a running job needs none.
+   */
+  start(
+    key: string,
+    note: string,
+    work: () => Promise<T>,
+    admit?: () => (() => void) | undefined,
+  ): Promise<{ result: T } | { job: Job<T> } | { busy: true }> {
     let job = this.running.get(key);
     if (!job) {
+      const release = admit?.();
+      if (admit && !release) return Promise.resolve({ busy: true });
       let id = randomBytes(4).toString("hex");
       while (this.byId.has(id)) id = randomBytes(4).toString("hex");
       const settled = work();
@@ -39,6 +71,7 @@ export class Jobs<T> {
       settled
         .catch(() => {})
         .finally(() => {
+          release?.();
           started.finished = Date.now();
           this.running.delete(key);
         });
