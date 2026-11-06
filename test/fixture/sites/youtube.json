@@ -8,5 +8,18 @@
     "contentType": "text/html; charset=utf-8",
     "note": "the layout a visitor with VISITOR_INFO1_LIVE gets: an ad, shelves and a continuation among the videos; ids and titles stand-ins",
     "body": "<script>var ytInitialData = {\"contents\":{\"twoColumnSearchResultsRenderer\":{\"primaryContents\":{\"sectionListRenderer\":{\"contents\":[{\"itemSectionRenderer\":{\"contents\":[{\"searchPyvRenderer\":{\"ads\":[]}},{\"shelfRenderer\":{}},{\"videoRenderer\":{\"videoId\":\"a\",\"title\":{\"runs\":[{\"text\":\"ta\"}]},\"ownerText\":{\"runs\":[{\"text\":\"c\"}]},\"viewCountText\":{\"simpleText\":\"1 view\"}}},{\"videoRenderer\":{\"videoId\":\"b\",\"title\":{\"runs\":[{\"text\":\"tb\"}]},\"ownerText\":{\"runs\":[{\"text\":\"c\"}]},\"viewCountText\":{\"simpleText\":\"1 view\"}}}]}},{\"adSlotRenderer\":{\"slotId\":\"1\"}},{\"itemSectionRenderer\":{\"contents\":[{\"videoRenderer\":{\"videoId\":\"c\",\"title\":{\"runs\":[{\"text\":\"tc\"}]},\"ownerText\":{\"runs\":[{\"text\":\"c\"}]},\"viewCountText\":{\"simpleText\":\"1 view\"}}},{\"reelShelfRenderer\":{}},{\"videoRenderer\":{\"videoId\":\"d\",\"title\":{\"runs\":[{\"text\":\"td\"}]},\"ownerText\":{\"runs\":[{\"text\":\"c\"}]},\"viewCountText\":{\"simpleText\":\"1 view\"}}}]}},{\"continuationItemRenderer\":{}}]}}}}};</script>"
+  },
+  {
+    "op": "captions",
+    "args": {
+      "videoId": "jNQXAC9IVRw"
+    },
+    "status": 200,
+    "contentType": "application/json; charset=UTF-8",
+    "note": "built from a real answer: the video's caption cues in the player's cue form (start seconds, text), trimmed to two",
+    "body": [
+      [1.2, "All right, so here we are, in front of the elephants"],
+      [5.318, "the cool thing about these guys is that they have really..."]
+    ]
   }
 ]

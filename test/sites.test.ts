@@ -354,6 +354,29 @@ test("youtube search with the ad layout (VISITOR_INFO1_LIVE set) still returns e
   assert.deepEqual(got[0], { id: "a", title: "ta", channel: "c", views: "1 view" });
 });
 
+test("youtube captions: the player's json3 cues come back whole, and a network that gates the web player answers missing, not a silent empty", () => {
+  const o = op("youtube", "captions");
+  assert.equal(o.minTier, 3, "the page's own player is the only request that answers");
+  assert.deepEqual(
+    (o.trigger.steps ?? []).map((s) => [s.action, s.selector ?? s.ms]),
+    [
+      ["wait", 5000],
+      ["click", "#movie_player"],
+      ["wait", 1500],
+      ["click", ".ytp-subtitles-button"],
+      ["wait", 4000],
+    ],
+  );
+  const cues = ok(o, fixture("youtube", "captions"), "application/json; charset=UTF-8");
+  assert.equal(cues.length, 2);
+  assert.deepEqual(cues[0], [1.2, "All right, so here we are, in front of the elephants"]);
+  assert.equal(cues[1][1], "the cool thing about these guys is that they have really...");
+  // this network's answer to the player's caption fetch: 200, empty body, content-type html
+  const quiet = judge(o, { status: 200, headers: { "content-type": "text/html; charset=UTF-8" }, body: "" });
+  assert.equal(quiet.class, "drift", quiet.reason);
+  assert.equal(quiet.missing, true, quiet.reason);
+});
+
 // ---------------------------------------------------------------- linkedin
 
 const entity = (title: string, url: string) => ({
