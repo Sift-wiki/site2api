@@ -1,0 +1,11 @@
+# Check every text file out with LF, whatever a machine's `core.autocrlf` is set to. A Windows clone
+# that gets CRLF rewrites the exact bytes some checks compare: Biome reports the whole file as
+# reformatted, the skill's stamp stops matching, and a spec's byte limit counts the extra CRs, so
+# `npm run lint` and part of `npm test` fail on the checkout rather than on the change.
+* text=auto eol=lf
+
+# Media is never line-ending-normalized (`text=auto` detects these anyway; naming them keeps a
+# future reader from having to trust the heuristic).
+*.gif binary
+*.png binary
+*.mp4 binary
