@@ -44,7 +44,7 @@ Its output lists the other agents it found (`notConnected`). Ask the user before
 them, and connect each one they want with its own `--agents` (for example `--agents codex,cursor`).
 Hermes is an always-on gateway: connect it only if the user asks for it by name.
 
-`--pin` writes this exact version into each config instead of the newest release; `setup --pin` again moves it.
+`--pin` writes this exact version into each config instead of the newest release; `setup --pin` again moves it, changing only the version.
 
 If the output has `"ok":false`, show the user the agent whose `mcp` is `failed` and its `error`.
 

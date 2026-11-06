@@ -1637,17 +1637,26 @@ and no 2FA/captcha to redo — the human solved those in their own browser alrea
 
 **A person approves the first import.** An agent with a shell can run `api-anything login <any site>`
 itself, and on macOS the Keychain hands over the Safe Storage key without a dialog once the user has
-clicked "Always Allow", so an import nobody watched would be silent. So a browser import of a site
-whose session has no browser-profile source yet (none, `window` or `file`) needs a person
-(`importSession`'s `confirm`): the profile is chosen from plaintext cookie names (`chooseProfile`),
-then the terminal asks `Import <host> cookies from <Browser profile label>? [y/N]` before any value is
-read or decrypted, and a no keeps nothing (`ImportRefused`, `declined`). With no terminal, `login`
-refuses before it opens any cookie database, with a `next` to run `api-anything login <site>` in a
-terminal or use `--window`. `--profile` does not bypass it, since an agent can pass it. Importing
-again from the profile already recorded for the site (`login` again, `reimportIfBrowser` on `auth`,
-MCP `login` mode import) asks nothing; another profile is a new choice and asks. `--window` and
-`--cookies` need no terminal. `API_ANYTHING_ALLOW_IMPORT=github.com,linkedin.com` pre-approves those
-hosts (each counts for its registrable domain) for headless automation the user set up.
+clicked "Always Allow", so an import nobody watched would be silent. So a browser import needs a
+person's approval of the pair it reads: the registrable domain of the URL and the browser profile.
+`importSession` enforces it, so every path does: the CLI, MCP `login`, `reimportIfBrowser` on an
+`auth` (a call's, or `learn_site`'s holdout's). The profile is chosen from plaintext cookie names
+(`chooseProfile`); for a pair with no approval, the terminal asks `Import <domain> cookies from
+<Browser profile label>? [y/N]` (`confirm`) before any value is read or decrypted, and a no keeps
+nothing (`ImportRefused`, `declined`). With no `confirm` (no terminal) and no approval for the domain
+at all, it refuses before it opens any cookie database; with one for the domain but another profile,
+before it reads a value. `--profile` does not bypass it, since an agent can pass it. Each approval is
+saved with the import, in the session's `imports` (sealed like the rest of the session), so it is
+bound to the domain, not the site key: an op of the site on another domain, or a URL passed with the
+site's name, is a new choice. A session from before `imports` whose `source` is a browser profile
+counts as approved for that profile and the registrable domain of the site's `baseUrl` (or of the
+site's name, for a site named after its host) only (`importApprovals`). `--window` and `--cookies`
+need no terminal. `API_ANYTHING_ALLOW_IMPORT=github.com,linkedin.com` pre-approves those domains
+(each host counts for its registrable domain) for headless automation the user set up.
+
+This guards against an agent importing by accident or on a page's instruction. It is not a boundary
+against an agent with unrestricted shell access, which can answer the prompt in a PTY of its own or
+set `API_ANYTHING_ALLOW_IMPORT`; the boundary there is not giving an untrusted agent a shell.
 
 A password is never a trigger step's. A `fill` step's value is saved in the spec (and its examples),
 so before it types, the run asks the page what the field is: a `type=password` input, or one whose
@@ -1948,7 +1957,10 @@ independent alternative.
     from trusted publishing. `--pin` writes `api-anything@<this version>` into every entry it writes
     (the shell entry, the GUI-app entry, Hermes's, Codex's TOML, and the agents' own `mcp add`), and
     moves the pin of an entry that is setup's own npx form (`npxEntry`: npx, then `-y`,
-    `api-anything[@version]`, `mcp`, nothing else); any other entry stays the user's. Without `--pin`
+    `api-anything[@version]`, `mcp`, nothing else); any other entry stays the user's. A move changes
+    only the package argument (`repin`): the command, `env` (a user's `API_ANYTHING_HOME` or
+    `API_ANYTHING_LOCAL_ONLY`), `cwd` and every other field stay, and the GUI entry's `PATH` is added
+    only to an entry with none. Without `--pin`
     a pinned entry is kept as it is. `mcp --print-config --pin` prints the pinned form, and `status`
     (no site) adds `configs`: each agent config with an api-anything entry and its pin (`false` for
     unpinned, `custom` for an entry setup did not write).

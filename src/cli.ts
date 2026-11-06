@@ -114,11 +114,12 @@ const HELP: Record<string, string> = {
   By default imports the site's cookies from your everyday browser (you are almost always already
   signed in there, so no password and no re-doing 2FA). Prints which profile was used and the cookie
   NAMES only (plus the profile's display name and Google account). The imported session is the SAME
-  one as your browser: if the site logs it out, both go. The first import of a site from a browser
-  profile asks first, on the terminal: Import <host> cookies from <profile>? [y/N]. Without a terminal
-  it reads nothing and refuses; --window and --cookies need no terminal, and a later import from the
-  same profile asks nothing. API_ANYTHING_ALLOW_IMPORT=github.com,linkedin.com pre-approves those hosts
-  for automation you set up. On macOS, choose Allow on the Keychain dialog, not Always Allow.
+  one as your browser: if the site logs it out, both go. The first import of a domain from a browser
+  profile asks first, on the terminal: Import <domain> cookies from <profile>? [y/N]. Without a
+  terminal it reads nothing and refuses; --window and --cookies need no terminal, and a later import
+  of that domain from that profile asks nothing. API_ANYTHING_ALLOW_IMPORT=github.com,linkedin.com
+  pre-approves those domains for automation you set up. On macOS, choose Allow on the Keychain
+  dialog, not Always Allow.
   <site|url>  a site name (linkedin), a domain (linkedin.com, www.linkedin.com) or a URL
   --profile   the browser profile to import from, e.g. "Chrome/Profile 1". Needed when several
               profiles are signed in to the site (possibly different people's accounts): login
@@ -679,7 +680,7 @@ async function cmdLogin({ v, pos }: Parsed): Promise<number> {
         e.message,
         e.declined
           ? `nothing was read. To sign in without your browser's cookies: api-anything login ${site} --window`
-          : `ask the user to run in a terminal: api-anything login ${site} (it asks before reading their browser's cookies), or to sign in in a window of its own: api-anything login ${site} --window. Automation the user set up can pre-approve the host: API_ANYTHING_ALLOW_IMPORT=${site}`,
+          : `ask the user to run in a terminal: api-anything login ${site} (it asks before reading their browser's cookies), or to sign in in a window of its own: api-anything login ${site} --window. Automation the user set up can pre-approve the domain: API_ANYTHING_ALLOW_IMPORT=${e.domain}`,
         { site },
       );
     if (!(e instanceof AmbiguousProfile)) throw e;

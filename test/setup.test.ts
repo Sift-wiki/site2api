@@ -795,6 +795,94 @@ test("--pin writes this version into every config it writes, and moves an older 
   assert.equal(configPins().find((p) => p.agent === "cursor")?.pinned, "custom");
 });
 
+test("moving a pin changes only the package argument: env, command, cwd and other fields stay", async () => {
+  fakeExe("npx");
+  fakeExe("node");
+  const old = ["-y", "api-anything@0.0.1", "mcp"];
+  const pinned = ["-y", `api-anything@${VERSION}`, "mcp"];
+  const custom = { API_ANYTHING_LOCAL_ONLY: "1", API_ANYTHING_HOME: "/data/aa" };
+  write(
+    paths.cursorJson(),
+    JSON.stringify({
+      mcpServers: {
+        "api-anything": { command: "/custom/npx", args: old, env: { PATH: "/my/bin", ...custom }, cwd: "/work" },
+      },
+    }),
+  );
+  // no PATH: the GUI entry's is merged in, beside the user's own variables
+  write(
+    paths.desktopJson(),
+    JSON.stringify({ mcpServers: { "api-anything": { command: "npx", args: old, env: { ...custom } } } }),
+  );
+  write(
+    paths.vscodeJson(),
+    JSON.stringify({
+      servers: {
+        "api-anything": {
+          type: "stdio",
+          command: "/opt/npx",
+          args: ["-y", "api-anything", "mcp"],
+          env: { PATH: "/x", ...custom },
+          envFile: "/e",
+        },
+      },
+    }),
+  );
+  write(
+    paths.codexToml(),
+    `[mcp_servers.api-anything]\ncommand = "/opt/bin/npx"\nargs = ["-y", "api-anything@0.0.1", "mcp"]\nenv = { API_ANYTHING_LOCAL_ONLY = "1" }\n`,
+  );
+  write(
+    paths.hermesYaml(),
+    `mcp_servers:\n  api-anything:\n    command: "/opt/bin/npx"\n    args: ${JSON.stringify(old)}\n    env:\n      API_ANYTHING_HOME: "/data/aa"\n  other:\n    command: x\n`,
+  );
+  const agents = ["cursor", "claude-desktop", "vscode", "codex", "hermes"] as const;
+  const r = await setup({ agents: [...agents], pin: true, share: false });
+  assert.deepEqual(
+    r.agents.map((a) => [a.agent, a.mcp, a.pinned]),
+    agents.map((a) => [a, "updated", VERSION]),
+  );
+  assert.deepEqual(json(paths.cursorJson()).mcpServers["api-anything"], {
+    command: "/custom/npx",
+    args: pinned,
+    env: { PATH: "/my/bin", ...custom },
+    cwd: "/work",
+  });
+  assert.deepEqual(json(paths.desktopJson()).mcpServers["api-anything"], {
+    command: "npx",
+    args: pinned,
+    env: { ...custom, PATH: guiServer().env!.PATH },
+  });
+  assert.deepEqual(json(paths.vscodeJson()).servers["api-anything"], {
+    type: "stdio",
+    command: "/opt/npx",
+    args: pinned,
+    env: { PATH: "/x", ...custom },
+    envFile: "/e",
+  });
+  assert.equal(
+    read(paths.codexToml()),
+    `[mcp_servers.api-anything]\ncommand = "/opt/bin/npx"\nargs = ${JSON.stringify(pinned).replaceAll(",", ", ")}\nenv = { API_ANYTHING_LOCAL_ONLY = "1" }\n`,
+  );
+  assert.equal(
+    read(paths.hermesYaml()),
+    `mcp_servers:\n  api-anything:\n    command: "/opt/bin/npx"\n    args: ${JSON.stringify(pinned)}\n    env:\n      PATH: ${JSON.stringify(guiServer().env!.PATH)}\n      API_ANYTHING_HOME: "/data/aa"\n  other:\n    command: x\n`,
+  );
+  // moved: a second run has nothing to change
+  const again = await setup({ agents: [...agents], pin: true, share: false });
+  assert.deepEqual(
+    again.agents.map((a) => a.mcp),
+    agents.map(() => "unchanged"),
+  );
+  // a Hermes entry with no env gets one holding PATH, after its other keys
+  write(paths.hermesYaml(), `mcp_servers:\n  api-anything:\n    command: npx\n    args: ${JSON.stringify(old)}\n`);
+  await setup({ agents: ["hermes"], pin: true, share: false });
+  assert.equal(
+    read(paths.hermesYaml()),
+    `mcp_servers:\n  api-anything:\n    command: npx\n    args: ${JSON.stringify(pinned)}\n    env:\n      PATH: ${JSON.stringify(guiServer().env!.PATH)}\n`,
+  );
+});
+
 test("CLI: mcp --print-config --pin prints the pinned npx form; status shows each config's pin", async () => {
   fakeExe("npx");
   const printed = await new Promise<string>((resolve) =>

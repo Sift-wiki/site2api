@@ -197,18 +197,33 @@ const pinnedOf = (e: { command?: unknown; args?: unknown } | undefined) => {
   return pin ? { pinned: pin } : {};
 };
 
+type Current = { command?: unknown; args?: unknown; env?: unknown };
+
+/**
+ * What moving the pin of setup's own npx entry changes: the package argument, and PATH (the GUI entry's)
+ * only when the entry has none. The command, the rest of env (API_ANYTHING_HOME, API_ANYTHING_LOCAL_ONLY)
+ * and every other field are the user's: an agent's CLI, or the user, may have put them there.
+ */
+function repin(cur: Current, want: Entry): { args?: string[]; path?: string } {
+  const args = cur.args as string[];
+  const env = cur.env as Record<string, unknown> | undefined;
+  return {
+    ...(args[1] !== want.args[1] ? { args: args.map((a, i) => (i === 1 ? want.args[1]! : a)) } : {}),
+    ...(want.env?.PATH !== undefined && (!env || typeof env !== "object" || env.PATH === undefined)
+      ? { path: want.env.PATH }
+      : {}),
+  };
+}
+
 /**
  * What to do with the entry already in a config: leave it (`unchanged`, `kept`), or, under `--pin`, move
  * the pin of setup's own npx entry to this version (`update`). Undefined: there is none, add one.
  */
-function existing(
-  cur: { command?: unknown; args?: unknown } | undefined,
-  want: Entry,
-  w: Write,
-): "unchanged" | "kept" | "update" | undefined {
+function existing(cur: Current | undefined, want: Entry, w: Write): "unchanged" | "kept" | "update" | undefined {
   if (!cur) return undefined;
   if (same(cur, want)) return "unchanged";
-  return w.pin && npxEntry(cur) ? "update" : "kept";
+  if (!w.pin || !npxEntry(cur)) return "kept";
+  return Object.keys(repin(cur, want)).length ? "update" : "unchanged";
 }
 
 /** The result for an entry left as it is. */
@@ -239,7 +254,7 @@ function readJsonFile(file: string): Record<string, unknown> {
 
 /** VS Code keeps its servers under `servers`; the others under `mcpServers`. */
 const entryIn = (cfg: Record<string, unknown>, key = "mcpServers") =>
-  (cfg[key] as Record<string, { command?: unknown; args?: unknown }> | undefined)?.[NAME];
+  (cfg[key] as Record<string, Current> | undefined)?.[NAME];
 
 /** A server entry in a JSON config (Claude Code's ~/.claude.json, Cursor, Claude Desktop, Gemini CLI, VS Code). */
 function jsonServer(
@@ -257,15 +272,19 @@ function jsonServer(
   const saved = backup(file);
   const servers = (cfg[key] as Record<string, unknown> | undefined) ?? {};
   mkdirSync(dirname(file), { recursive: true });
-  // a pin moved keeps what else the entry holds (the type and env an agent's own CLI wrote)
-  const next = cur ? { ...(cur as Record<string, unknown>), ...entry } : entry;
+  let next: Current = entry;
+  if (cur) {
+    const r = repin(cur, entry);
+    const env = cur.env && typeof cur.env === "object" ? (cur.env as Record<string, unknown>) : {};
+    next = { ...cur, ...(r.args ? { args: r.args } : {}), ...(r.path ? { env: { ...env, PATH: r.path } } : {}) };
+  }
   writeFileSync(file, `${JSON.stringify({ ...cfg, [key]: { ...servers, [NAME]: next } }, null, 2)}\n`);
   return {
     agent,
     mcp: cur ? "updated" : "added",
     via: "file",
     file,
-    ...pinnedOf(entry),
+    ...pinnedOf(next),
     ...(saved ? { backup: saved } : {}),
   };
 }
@@ -366,10 +385,8 @@ function codexServer(w: Write): AgentResult {
     if (w.dryRun) return { agent: "codex", mcp: "would update", via: "file", file };
     const saved = backup(file);
     const t = codexTable(text)!;
-    const body = setLines(text.slice(t.start, t.end), "=", {
-      command: JSON.stringify(want.command),
-      args: tomlArgs(want.args),
-    });
+    // the args line only: the command, env and every other key of the table stay
+    const body = setLines(text.slice(t.start, t.end), "=", { args: tomlArgs(repin(cur, want).args!) });
     writeFileSync(file, text.slice(0, t.start) + body + text.slice(t.end));
     return {
       agent: "codex",
@@ -433,7 +450,23 @@ function hermesEntry(text: string): { command?: string; args?: unknown } | undef
       return un;
     }
   };
-  return { command: parse(value("command")), args: parse(value("args")) };
+  // only whether env holds a PATH matters (`repin`); an inline map is not looked into, nor touched
+  const env = /^ {4}env:[ \t]*(.*?)\s*$/m.exec(entryBody);
+  const inline = !!env?.[1] && !env[1].startsWith("#");
+  return {
+    command: parse(value("command")),
+    args: parse(value("args")),
+    ...(env ? { env: inline || /^ {6}PATH:/m.test(entryBody) ? { PATH: "" } : {} } : {}),
+  };
+}
+
+/** The entry's body with `PATH` in its env block, the block added when it has none. */
+function withYamlPath(body: string, path: string): string {
+  const line = `      PATH: ${JSON.stringify(path)}`;
+  const env = /^ {4}env:[ \t]*(?:#.*)?$/m.exec(body);
+  if (env) return `${body.slice(0, env.index + env[0].length)}\n${line}${body.slice(env.index + env[0].length)}`;
+  const end = body.length - (/\s*$/.exec(body)?.[0].length ?? 0);
+  return `${body.slice(0, end)}\n    env:\n${line}${body.slice(end)}`;
 }
 
 /**
@@ -484,17 +517,17 @@ function hermesServer(w: Write): AgentResult {
     if (w.dryRun) return { agent: "hermes", mcp: "would update", via: "file", file };
     const saved = backup(file);
     const span = hermesSpan(text)!;
-    const body = setLines(text.slice(span.start, span.end), ":", {
-      command: JSON.stringify(entry.command),
-      args: JSON.stringify(entry.args),
-    });
+    const r = repin(cur, entry);
+    let body = text.slice(span.start, span.end);
+    if (r.args) body = setLines(body, ":", { args: JSON.stringify(r.args) });
+    if (r.path) body = withYamlPath(body, r.path);
     writeFileSync(file, text.slice(0, span.start) + body + text.slice(span.end));
     return {
       agent: "hermes",
       mcp: "updated",
       via: "file",
       file,
-      ...pinnedOf(entry),
+      ...pinnedOf(r.args ? { ...cur, args: r.args } : cur),
       ...(saved ? { backup: saved } : {}),
     };
   }

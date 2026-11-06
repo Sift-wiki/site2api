@@ -1119,6 +1119,38 @@ describe("browser tiers", { skip: !browserAvailable() && "no Chromium browser in
     }
   });
 
+  test("auth on an op whose domain no person approved importing re-imports nothing from the browser", async () => {
+    site("crossauth", rd("me", "/api/me"));
+    const root = mkdtempSync(join(HOME, "everyday-browser-"));
+    const port = new URL(fx.base).port;
+    // approved: localhost's cookies, under this site key; the op is on 127.0.0.1, whose sid the server takes
+    makeChromiumDb(
+      join(root, "Default"),
+      [
+        { host_key: "localhost", name: "sid", value: "approved" },
+        { host_key: "127.0.0.1", name: "sid", value: "unapproved" },
+      ],
+      { password: "pw" },
+    );
+    fx.state.sid = "unapproved";
+    process.env.API_ANYTHING_BROWSER_ROOTS = JSON.stringify([
+      { name: "Chrome", family: "chromium", root, password: "pw" },
+    ]);
+    try {
+      await importSession("crossauth", `http://localhost:${port}/`, { confirm: async () => true, pushProfile: false });
+      const r = await call("crossauth", "me", {}, t1);
+      assert.equal(r.class, "auth", JSON.stringify(r));
+      const s = loadSession("crossauth");
+      assert.deepEqual(
+        s.cookies.map((c) => `${c.domain}=${c.value}`),
+        ["localhost=approved"],
+      );
+      assert.deepEqual(s.imports, [{ domain: "localhost", source: "chrome:Default" }]);
+    } finally {
+      delete process.env.API_ANYTHING_BROWSER_ROOTS;
+    }
+  });
+
   test("a tier-3 read's own request may be sent on by a 307, to its own origin or another", async () => {
     for (const far of [false, true]) {
       const q = far ? "?far=1" : "";
