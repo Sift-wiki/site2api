@@ -247,11 +247,13 @@ class Client:
         max_age: Optional[Seconds] = None,
         changes: bool = False,
         changes_only: bool = False,
+        watch: Optional[str] = None,
         wait: bool = True,
     ) -> Result[Any]:
         """Call a read operation. Every class comes back as a Result; `raise_for_status()` turns a failure
         into its exception. With `wait`, a `pending` answer is followed through `job()` until it finishes
-        or the client's timeout passes (then the pending Result is returned, with its `job`)."""
+        or the client's timeout passes (then the pending Result is returned, with its `job`). `watch` names
+        the watcher whose baseline `changes` compares with, so two watchers of one query don't share one."""
         deadline = time.monotonic() + self.timeout
         body: Dict[str, Any] = {}
         if args:
@@ -271,6 +273,8 @@ class Client:
             body["changes"] = True
         if changes_only:
             body["changesOnly"] = True
+        if watch is not None:
+            body["watch"] = watch
         result = self._result("POST", f"/v1/call/{_segment(site)}/{_segment(op)}", body)
         return self._follow(result, deadline) if wait else result
 

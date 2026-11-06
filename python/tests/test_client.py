@@ -105,6 +105,7 @@ class Transport(WithFake):
             max_age=timedelta(minutes=2),
             changes=True,
             changes_only=True,
+            watch="nightly",
         )
         self.assertEqual(self.fake.last["path"], "/v1/call/hacker-news/search")
         self.assertEqual(
@@ -116,6 +117,7 @@ class Transport(WithFake):
                 "maxAgeMs": 120000,
                 "changes": True,
                 "changesOnly": True,
+                "watch": "nightly",
             },
         )
         self.assertIsInstance(r, Result)
