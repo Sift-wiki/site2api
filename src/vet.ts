@@ -108,6 +108,8 @@ const DOT: CharSet = {
   ],
   negated: true,
 };
+/** A class the reader does not model: it may accept any unit, which is the complement of nothing. */
+const ANY: CharSet = { ranges: [], negated: true };
 // a control escape is one code unit, not its letter: \n is a newline, which \s accepts
 const CONTROL: Record<string, number> = { n: 10, r: 13, t: 9, v: 11, f: 12, "0": 0 };
 const complement = (set: CharSet): CharSet => ({ ranges: set.ranges, negated: true });
@@ -220,6 +222,23 @@ function overlaps(a: string, b: string): boolean {
   return i >= a.length || j >= b.length;
 }
 
+/**
+ * The quantifier at the start of `after`: how far past it an atom's repeat runs, whether it repeats
+ * the atom at all (two or more, or no upper bound), and whether it has no upper bound. `?` and
+ * `{0,1}` are not a repeat; a lazy form (`*?`, `{n,}?`) repeats exactly as its greedy form does.
+ */
+function quantifier(after: string): { next: number; repeats: boolean; unbounded: boolean } | undefined {
+  const c = after[0];
+  if (c === "*" || c === "+" || c === "?") {
+    const lazy = after[1] === "?" ? 1 : 0;
+    return { next: 1 + lazy, repeats: c !== "?", unbounded: c !== "?" };
+  }
+  const b = /^\{(\d+)(,(\d*))?\}\??/.exec(after);
+  if (!b) return undefined;
+  const most = b[2] === undefined ? Number(b[1]) : b[3] ? Number(b[3]) : Number.POSITIVE_INFINITY;
+  return { next: b[0].length, repeats: most >= 2, unbounded: b[2] !== undefined && b[3] === "" };
+}
+
 // A group whose top-level alternatives overlap (one a prefix of another; equal counts; or an
 // alternative its sibling's class already accepts), repeated by its own quantifier or an enclosing
 // group's, backtracks exponentially on a non-matching tail with no nested quantifier to catch:
@@ -241,14 +260,7 @@ function overlappingAlternation(re: string): boolean {
     }
     return [...alts, body.slice(start)];
   };
-  // a repeat of two or more: *, +, {n} or {n,m} with n or m at least 2, {n,}; ? and {0,1} are not
-  const repeats = (after: string): boolean => {
-    if (after[0] === "*" || after[0] === "+") return true;
-    const b = /^\{(\d+)(,(\d*))?\}/.exec(after);
-    if (!b) return false;
-    const most = b[2] === undefined ? Number(b[1]) : b[3] ? Number(b[3]) : Number.POSITIVE_INFINITY;
-    return most >= 2;
-  };
+  const repeats = (after: string): boolean => quantifier(after)?.repeats === true;
   const open: number[] = [];
   const groups: { start: number; end: number; repeated: boolean }[] = [];
   for (let i = 0; i < re.length; i++) {
@@ -274,6 +286,34 @@ function overlappingAlternation(re: string): boolean {
     const alts = alternatives(re.slice(g.start, g.end));
     for (let a = 0; a < alts.length; a++)
       for (let b = 0; b < alts.length; b++) if (a !== b && overlaps(alts[a]!, alts[b]!)) return true;
+  }
+  return false;
+}
+
+// The same exponential shape as overlappingAlternation, written with no group to catch: two repeats
+// in a row whose atoms accept the same unit, at least one of them without an upper bound. a*a*b,
+// [0-9]*[0-9]*Z, .*.*Z and .*\s*Z all backtrack exponentially on a non-matching tail, and a dozen
+// overlapping repeats fit in the 200 characters a param pattern or a pick leaves room for.
+function adjacentRepeats(re: string): boolean {
+  let prev: CharSet | undefined;
+  let prevUnbounded = false;
+  for (let i = 0; i < re.length; ) {
+    // A class this reader does not model ([.], [\s\S], [\p{L}], [\S\W]) may accept any unit, so its
+    // repeat beside another repeat is the same ambiguity: read it as one, rather than as no atom.
+    const end = re[i] === "[" ? classEnd(re, i) : -1;
+    const u = end >= 0 ? { set: bracket(re, i, end) ?? ANY, next: end + 1 } : unit(re, i);
+    if (!u) {
+      prev = undefined; // a group, an alternation, an anchor or a bare quantifier ends the run
+      i++;
+      continue;
+    }
+    const q = quantifier(re.slice(u.next));
+    const repeated = q?.repeats === true;
+    const set = u.set ?? (u.code === undefined ? undefined : literal(u.code));
+    if (repeated && prev && set && intersects(prev, set) && (q?.unbounded === true || prevUnbounded)) return true;
+    prev = repeated ? set : undefined;
+    prevUnbounded = repeated && q?.unbounded === true;
+    i = q ? u.next + q.next : u.next;
   }
   return false;
 }
@@ -757,6 +797,7 @@ export function vetShared(site: Site, notes?: string): Vetted {
         errors.push(at(`${where} regex /${re}/ nests a quantifier in a quantified group`));
       else if (overlappingAlternation(re))
         errors.push(at(`${where} regex /${re}/ quantifies a group with overlapping alternatives`));
+      else if (adjacentRepeats(re)) errors.push(at(`${where} regex /${re}/ repeats atoms that overlap`));
     }
   };
   for (const [i, op] of site.operations.entries()) vetOp(op, (what) => `${op.name}: ${what}`, `$.operations[${i}]`);

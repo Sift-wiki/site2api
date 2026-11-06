@@ -303,6 +303,36 @@ test("the shared rules refuse what a hostile or careless spec could do with some
       spec({}, { params: [{ name: "q", pattern: "^([\\t ]|\\t)*$" }] }),
       /quantifies a group with overlapping alternatives/,
     ],
+    [
+      "the same atom repeated with no group to catch it",
+      spec({}, { params: [{ name: "q", pattern: "^.*.*.*.*.*.*.*.*.*.*.*.*Z$" }] }),
+      /repeats atoms that overlap/,
+    ],
+    [
+      "a class repeated, with one that accepts it, and no group",
+      spec({}, { params: [{ name: "q", pattern: "^[0-9]*[0-9]*Z$" }] }),
+      /repeats atoms that overlap/,
+    ],
+    [
+      "a lazily repeated atom, twice, with no group",
+      spec({}, { params: [{ name: "q", pattern: "^.*?.*?Z$" }] }),
+      /repeats atoms that overlap/,
+    ],
+    [
+      "an unbounded counted repeat of an escape that overlaps it",
+      spec({}, { params: [{ name: "q", pattern: "^\\s{2,}\\s{2,}Z$" }] }),
+      /repeats atoms that overlap/,
+    ],
+    [
+      "a class that matches anything but whitespace, repeated twice",
+      spec({}, { params: [{ name: "q", pattern: "^[\\s\\S]*[\\s\\S]*Z$" }] }),
+      /repeats atoms that overlap/,
+    ],
+    [
+      "the dot written as a class, repeated twice",
+      spec({}, { params: [{ name: "q", pattern: "^[.]*[.]*Z$" }] }),
+      /repeats atoms that overlap/,
+    ],
     ["a long description", spec({}, { description: "x".repeat(501) }), /description is 501 characters/],
   ];
   for (const [what, s, re] of refused) assert.match(errors(s).join("\n"), re, what);
@@ -316,6 +346,12 @@ test("the shared rules refuse what a hostile or careless spec could do with some
     "^(ab|ac)*$",
     // \n is a newline, not the letter n
     "^(\\n|n)*$",
+    // repeats that follow each other without accepting the same unit, or that a literal separates
+    "^[0-9]+\\s*(.+)$",
+    "^\\s*\\S+\\s*$",
+    "^(\\d{4})-(\\d{2})-(\\d{2})$",
+    "^.*?[?&]page=([^&]*)$",
+    "^[0-9]{4}[a-z]{2}$",
   ])
     assert.deepEqual(errors(spec({}, { params: [{ name: "q", pattern }] })), [], pattern);
   assert.match(errors(spec(), "n".repeat(9000)).join(), /notes are 9000 bytes/);
