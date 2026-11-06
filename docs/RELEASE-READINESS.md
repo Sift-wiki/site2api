@@ -1,3 +1,60 @@
+# Release readiness — 0.4.0, 2026-11-06
+
+Ready to publish. Agents and tools beyond MCP can use it now (an HTTP server with REST, OpenAPI and
+MCP over HTTP; a Python client), and five security issues (#108 to #112) are fixed.
+
+## New
+
+- `api-anything serve` (#120): REST, `/openapi.json` (OpenAPI 3.1, one typed path per read) and MCP
+  over HTTP at `/mcp`, on loopback with a bearer token, a shared limit on running calls, and Host and
+  Origin checks. docs/SERVE.md.
+- A Python client in `python/` (#114), installed from this repository (not on PyPI yet): `Client`,
+  tools for agent frameworks, typed code generation. docs/PYTHON.md.
+- Output schemas on the MCP tools (#115); `data` is left open so a repaired operation never fails a
+  strict client.
+- `--changes` / `--changes-only` with `--watch <name>`, `--max-age`, a per-site request budget, and
+  `shutdown()` for scripts (#117).
+- Sessions, captures and snapshots encrypted at rest with a key in the OS keychain (#108, #118).
+- Setup asks which agents to connect (#112); background verification is its own opt-in, default no,
+  and local-only mode stops all registry traffic (#110); `setup --pin` (#109); a site's first browser
+  cookie import needs a person, approved per domain and profile (#111) (#121).
+- The catalog: an install funnel in `/v1/stats`, and `/v1/try` for a few public reads with no
+  install (#116, #122). Deployed 2026-11-06 with migrations 0008 to 0010; all 114 bundled sites seeded.
+
+## Breaking
+
+- `setup` with no terminal and no `--agents` connects no agent; it prints the command for each.
+  Scripts pass `--agents <name>` or `--agents all`.
+- A first `login` from a browser profile with no terminal is refused. Use `--window`, `--cookies`,
+  or `API_ANYTHING_ALLOW_IMPORT=<domain>`.
+- Sealed files start with a non-JSON line, so 0.3.2 refuses them. Don't delete them to downgrade;
+  `logout <site>` and log in again instead.
+
+## Verified
+
+- `REQUIRE_BROWSER=1 npm test`: 1304 tests, 1303 passed. The one failure, `test/browser.test.ts`
+  (a navigation timeout under load), passed 10 of 10 on three reruns. `npm run check` and
+  `npm run lint` are clean; CI is green on Node 22 and 24 and on Python 3.9 and 3.13.
+- Live, logged out, `api-anything verify` on every bundled site from one empty home: 716 cases
+  passed, 6 failed, 19 inconclusive, 8 skipped. All six failures are example items that no longer
+  exist (HTTP 404 or 410, answered as `input`).
+- The Python client run against a real `serve`: records data, changes with a watcher, the cache,
+  input errors, a batch across two sites, tools and `run_tool`. The `git+https` install works on
+  Python 3.9.
+- `serve` by hand: OpenAPI 3.1 with 309 paths and unique operation ids; 401 without the token;
+  403 for a foreign Origin; a malformed request target answers 400 and the server keeps serving.
+- `examples/mentions.mjs duckdb` from an empty home: 66 mentions from 5 of 6 sources in 1.9 s,
+  process exit in 2.1 s (Reddit challenged plain HTTP and answered `blocked`).
+
+## Known issues
+
+- Stale examples: `aldi.applianceDetails`, `gumtree.getListingMetadata`, `workable.getJob` and
+  `workday.getJob` (removed listings and postings).
+- `google-flights.priceCalendar` answers batchexecute error 13.
+- Reddit challenges plain HTTP from many networks.
+- Linux and Windows key stores are written to their documented interfaces but untested on those
+  systems. api-anything's own Chrome profile is not sealed.
+
 # Release readiness — 0.3.2, 2026-10-31
 
 Ready to publish. The limits of 0.3.0 still apply.

@@ -70,8 +70,8 @@ users browse servers.
 - `server.json` names the server `io.github.goodnight000/api-anything`, the npm package
   `api-anything`, and the arguments the client passes (`npx -y api-anything mcp`, over stdio).
 - `package.json` `mcpName` holds the same name. The registry fetches the npm version that
-  `server.json` names and refuses it unless its `mcpName` matches. **0.3.2, the version on npm
-  today, has no `mcpName`, so the first listing is possible only from the next npm release.**
+  `server.json` names and refuses it unless its `mcpName` matches. 0.3.2 and earlier have no
+  `mcpName`; 0.4.0 is the first release the registry can list.
 - GitHub sign-in grants the `io.github.goodnight000/` namespace. No DNS record or secret is needed.
 
 ### Automatic, on each release
