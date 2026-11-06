@@ -16,6 +16,7 @@ import { capOutput, extract, getPath, innerJson, pick, returnedFields, splitPick
 import {
   addOperation,
   type CaptureFile,
+  CaptureUnavailable,
   capturePage,
   captureTrigger,
   fillTrigger,
@@ -47,6 +48,7 @@ import { plan, uploadName } from "./publish.js";
 import { pull, RegistryError, reportInterface, search } from "./registry.js";
 import { settle } from "./report.js";
 import { getResult, type ResultView, viewProblem } from "./results.js";
+import { onPlaintext, plaintextWarning, SealError } from "./seal.js";
 import { captureLive, redact } from "./secrets.js";
 import { loadSession, placeholders } from "./session.js";
 import { AGENTS, type Agent, askYesNo, setup, summary } from "./setup.js";
@@ -1833,6 +1835,7 @@ async function run(argv: string[]): Promise<number> {
   return c.run({ v, pos, steps: stepsOf(v.steps) });
 }
 
+onPlaintext((why) => process.stderr.write(`${plaintextWarning(why)}\n`));
 try {
   const code = await run(process.argv.slice(2));
   if (code >= 0) {
@@ -1848,6 +1851,7 @@ try {
   out({ ok: false, error: oneLine((e as Error).message), ...(f?.extra ?? {}) });
   const next =
     f?.next ??
+    (e instanceof CaptureUnavailable || e instanceof SealError ? e.next : undefined) ??
     (e instanceof ProfileInUse ? PROFILE_HINT : `api-anything ${process.argv[2] ?? ""} --help`.replace(/\s+/g, " "));
   process.stderr.write(`next: ${next}\n`);
   process.exitCode = 1;

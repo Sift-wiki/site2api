@@ -57,7 +57,10 @@ shared site first, call it, learn it only when nothing is shared, and answer a `
   plain HTTP; start the server with `mcp --no-learn` to hide `learn_site`.
 - **Where things are kept.** Learned sites, sessions and settings live in `~/.api-anything`. Set
   `API_ANYTHING_HOME` in the server's environment to keep them somewhere else, for example a volume
-  that outlives the container.
+  that outlives the container. Sessions and captures are sealed under a key from the OS store, which
+  a container usually lacks: set `API_ANYTHING_KEY` to a passphrase from the platform's secret store
+  to seal them there, or `API_ANYTHING_PLAINTEXT=1` to keep them as 0600 plaintext without a warning.
+  The passphrase must stay the same for as long as the home does.
 - **Sharing.** Until someone answers the sharing question (`npx -y api-anything setup`, or the
   question `learn_site` asks once), nothing is shared or reported. For a non-interactive install,
   record the answer first: `npx -y api-anything setup --share-only --no-share` (or `--yes`).

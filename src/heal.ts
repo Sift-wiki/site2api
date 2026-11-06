@@ -2,6 +2,7 @@
  * Learning against the live site. One routine, run trigger -> match -> learn, serves three jobs:
  * add (create), recapture (heal), and the tier-3 read. Rescan is the browserless heal.
  */
+import { rmSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { atStep, browserAvailable, PageUnreachable, ProfileInUse, runTrigger, waitReport } from "./browser.js";
 import { botWall, type Class, judge, type Observed, pickedShape } from "./classify.js";
@@ -29,20 +30,20 @@ export { unplaced };
 
 import type { NextAction } from "./execute.js";
 import { standIn } from "./paging.js";
+import { readSealed, SealError, writeSealed } from "./seal.js";
 import { besideOrigins, credentialsOf, opUrls, scanSecrets, signInFills } from "./secrets.js";
 import {
+  CAPTURE_TTL_MS,
   cookieHeaderFor,
   home,
   loadSession,
   mergeCapture,
   parseCookieHeader,
   pruneCaptures,
-  readJson,
   recordOrigins,
   type Session,
   safeName,
   siteOf,
-  writePrivate,
 } from "./session.js";
 import {
   type Match,
@@ -523,6 +524,7 @@ export interface CaptureFile extends CaptureResult {
 }
 
 const captureFile = (id: string) => join(home(), "captures", `${safeName(id)}.json`);
+const captureLabel = (id: string) => `capture:${safeName(id)}`;
 let lastId = "";
 
 function saveCapture(
@@ -541,12 +543,12 @@ function saveCapture(
     ...(o.write ? { write: true } : {}),
     ...r,
   };
-  writePrivate(captureFile(id), JSON.stringify(file));
+  writeSealed(captureFile(id), JSON.stringify(file), captureLabel(id));
   pruneCaptures();
   return file;
 }
 
-/** Run a page, keep everything it sent under ~/.api-anything/captures/<id>.json (0600: it holds cookies). */
+/** Run a page, keep everything it sent under ~/.api-anything/captures/<id>.json (sealed, 0600: it holds cookies). */
 export async function capturePage(o: {
   url: string;
   steps?: TriggerStep[];
@@ -604,9 +606,41 @@ export function stoppedHint(labels: string[], again: string): string {
   );
 }
 
-export function loadCapture(id: string): CaptureFile {
-  const c = readJson<CaptureFile | undefined>(captureFile(id), undefined);
-  if (!c) throw new Error(`no capture "${id}"`);
+/** A capture that is missing, past its lifetime, or unreadable; `next` says how to get a fresh one. */
+export class CaptureUnavailable extends Error {
+  constructor(
+    message: string,
+    readonly next: string,
+  ) {
+    super(message);
+  }
+}
+
+const RECAPTURE =
+  "capture the page again (api-anything capture <url>, or learn_site without captures), then use the new id";
+
+/**
+ * A saved capture. It holds the run's cookies and authenticated headers, so one past its 24 h is
+ * refused here, not only pruned when the next capture is saved.
+ */
+export function loadCapture(id: string, now = Date.now()): CaptureFile {
+  const file = captureFile(id);
+  let c: CaptureFile | undefined;
+  try {
+    c = readSealed<CaptureFile | undefined>(file, undefined, captureLabel(id), `delete ${file}, then ${RECAPTURE}`);
+  } catch (e) {
+    if (e instanceof SealError) throw new CaptureUnavailable(e.message, e.next);
+    throw e;
+  }
+  if (!c) throw new CaptureUnavailable(`no capture "${id}"`, RECAPTURE);
+  const at = Date.parse(c.at) || statSync(file).mtimeMs;
+  if (now - at > CAPTURE_TTL_MS) {
+    rmSync(file, { force: true });
+    throw new CaptureUnavailable(
+      `capture "${id}" is from ${new Date(at).toISOString()}, past its 24 h lifetime (it holds the run's cookies), and was deleted`,
+      RECAPTURE,
+    );
+  }
   return c;
 }
 

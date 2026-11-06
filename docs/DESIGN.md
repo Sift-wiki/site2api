@@ -956,7 +956,8 @@ An op is `degraded` when its last 24 h ran mostly at a higher tier than the 6 da
 an ok rate 20 points lower (3 calls in each window at least: fewer say nothing). Each problem
 carries `next`, phrased as a call's is. A read remembered above its own `minTier` is called once
 with `--max-tier` at that tier. That needs no new mechanism: an answer at the op's own tier already
-forgets the escalation.
+forgets the escalation. It also carries `storage`, whether credential files are sealed here, and a
+`plaintext` problem for each session file left unsealed with no key ("Sealed files").
 At tier 2 `timeoutMs` is one deadline for the whole call, counted from the moment Chrome is up
 (starting it, seconds on a busy machine, is not counted): the first load of the origin page, every
 hop of the fetch, and the wait and second fetch after the page navigated all draw on it. When the
@@ -1047,7 +1048,7 @@ send a request again (its own scripts, a retry after a navigation or a connectio
 - A browser locks a profile to one process. The browser is released after 3 s idle, and a second
   process waits up to 15 s for the profile before it fails with a short hint. SIGTERM exits.
 - After every browser run, cookies are exported (full Playwright cookie objects) to
-  `~/.api-anything/sessions/<site>.json`, together with session values seen in captured headers and what a learn
+  `~/.api-anything/sessions/<site>.json` (sealed: see "Sealed files"), together with session values seen in captured headers and what a learn
   classified each of them as, a setting or a credential. A later run that only refreshes the values classifies
   nothing: a setting whose value changed is unclassified again, and a credential stays one. Every write of the file
   goes through one place, which records there what the save-time scan keeps and returns that, so no write undoes
@@ -1713,6 +1714,58 @@ or whose literal (outside `{param}`s) is random-looking; add's save and `export`
   reaches the server, whose 401 or 403 is retried as any write's is.
 - **`logout <site>`** clears the jar and that site's cookies in the profile.
 
+### Sealed files (`seal.ts`)
+
+Session files and captures hold live credentials, and 0600 only keeps other users out: a backup, a
+synced home folder, a stray `git add` or a lost disk carries them. So both are sealed with
+AES-256-GCM (node:crypto) under one 32-byte data key. On macOS, `login` decrypts cookies Chrome keeps
+behind the Keychain; storing them less protected than the browser did would undo that.
+
+- **What is sealed**: `sessions/<site>.json` and `captures/<id>.json`, through `readSealed` and
+  `writeSealed`, not through `writePrivate`, so no other file changes. Captures keep their values,
+  because learning reads them: `learnOrExplain` takes the capture's `cookies` and `storage` as the
+  live values (`ownSession`, `known`), `sentCookies` reads each request's `cookie` header, and add and
+  learn_site merge the run's cookies and the session values found in its headers into the jar
+  (`mergeCapture`). Nothing else under the home holds a cookie or token value: specs, the heal log,
+  `state.json`, `calls.jsonl`, `checks/`, the write ledger (digests under `write.key`) and settings
+  stay plaintext. `key.json` (the install's registry signing key) and `write.key` are secrets but not
+  logins, and sealing them would tie the install's identity to the key store; they stay 0600.
+- **Format**: `{"sealed":"api-anything/1","alg":"A256GCM","key":<source>,"kid":<16 hex>,"iv","tag","data"}`.
+  The version marker lets a later format be told apart; one this version does not know is refused
+  with "upgrade". The AAD is the file's role and name (`session:<site>`, `capture:<id>`), so a sealed
+  file renamed to another site's is refused. `kid` is an HMAC of the key, so a file sealed under
+  another key says which one (`key`) instead of failing as tampered. A failed tag is "failed its
+  integrity check", never an empty session.
+- **The key**, looked up once per process and cached:
+  - `API_ANYTHING_KEY`, when set, overrides the OS store: scrypt (N=2^15, r=8, p=1) of the passphrase
+    under a random salt kept in `key-salt.json` with the key's `kid`, so a wrong passphrase is a
+    clear error before anything is read or written. Containers and CI use this.
+  - macOS: the login Keychain through `/usr/bin/security`, service `api-anything`, account
+    `data-key`, created on first need. The secret goes in on stdin (`security -i`), never on the
+    command line, and without `-U`, so a key another process added first is kept and read back. An
+    item `security` creates lists `security` as a trusted application in its access control, so the
+    later `find-generic-password -w` by the same binary reads it with no dialog. One lookup costs one
+    subprocess, about 20 ms in a fresh process; the passphrase's scrypt costs about 60 ms.
+  - Linux: `secret-tool` (libsecret), when it is on PATH and a session bus answers.
+  - Windows: DPAPI (CurrentUser) through PowerShell's `ProtectedData`; the protected blob is
+    `data-key.dpapi` in the home, readable only by the same Windows account.
+  - The key store is one small interface (`KeyStore`: `get`, `put`); tests inject an in-memory one,
+    and a process under `node:test` (`NODE_TEST_CONTEXT`) never reaches an OS store.
+- **No key** (a headless container, Linux with no session bus): saving is not refused, since that
+  would break the container and CI use INTEGRATIONS.md supports. Files stay 0600 plaintext and that is
+  said once: the CLI prints one warning on stderr per process when it writes one, `status` lists a
+  `plaintext` problem for each unsealed session file, and `status` and `site_status` carry
+  `storage: {sealed, key | why, chosen}`. `API_ANYTHING_PLAINTEXT=1` records the choice and silences
+  both (it does not turn sealing off where a key exists).
+- **Migration**: a plaintext file still reads, and is written sealed the next time it is saved. The
+  first time a process has a key for a home without `sealed.json`, the existing session and capture
+  files are sealed in place (captures keep their modification time, which pruning reads), and
+  `sealed.json` records that it ran.
+- **Not covered**: api-anything's own Chrome profile (`profile/`). Playwright starts Chrome with
+  `--use-mock-keychain` (macOS) and `--password-store=basic` (Linux), so the cookies `login` adds there
+  are encrypted under a fixed key. Using the real Keychain there would show Chrome's own Keychain
+  dialog on every launch; `logout` clears a site from it.
+
 `node:sqlite` is chosen over the `sqlite3` CLI: it is built in (no dependency, present on every
 Node ≥ 22.13, which the `engines` floor now requires; its one ExperimentalWarning is silenced) and
 returns the encrypted BLOB as bytes directly, where the CLI would need `hex()` plus escaping of
@@ -1775,7 +1828,9 @@ independent alternative.
     learning a request that a `--write` capture aborted, under any op name: the guard stopped it as a
     write, and that verdict counts, not the method (a POST the capture let through is a read). Captures hold
     full responses and the run's cookie values (one page can be tens of MB), so each new one prunes
-    the directory to the newest 20, none older than 24 h.
+    the directory to the newest 20, none older than 24 h, and `loadCapture` refuses (and deletes) one
+    whose `at` is past 24 h, with a `next` to capture again. They are sealed like session files (see
+    "Sealed files" under Logging in).
   - `capture --outline` / `inspect --outline` (the explorer's scout, `outline.ts`): for the top
     candidates, a compact summary instead of the body — where the example values sit, a suggested
     extract and pick fields with samples, JSON the page embeds (JSON-LD, `__NEXT_DATA__`,

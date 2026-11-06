@@ -1,4 +1,4 @@
-/** Per-site cookie jar and session values under ~/.api-anything (0700 dirs, 0600 files). */
+/** Per-site cookie jar and session values under ~/.api-anything (0700 dirs, 0600 files, sealed by seal.ts). */
 import {
   chmodSync,
   closeSync,
@@ -15,6 +15,7 @@ import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { getDomain } from "tldts";
 import { siteOf } from "./domain.js";
+import { readSealed, writeSealed } from "./seal.js";
 import { besideOrigins, credentialsOf, originsOf } from "./secrets.js";
 import type { StoredCookie } from "./types.js";
 
@@ -127,7 +128,7 @@ export function withLock<T>(file: string, fn: () => T): T {
   }
 }
 
-const CAPTURE_TTL_MS = 24 * 60 * 60_000;
+export const CAPTURE_TTL_MS = 24 * 60 * 60_000;
 const CAPTURES_KEPT = 20;
 
 /**
@@ -151,10 +152,17 @@ export function pruneCaptures(now = Date.now()): void {
 }
 
 export const sessionFile = (site: string) => join(home(), "sessions", `${safeName(site)}.json`);
+/** What a sealed session file is bound to: one site's file cannot be read as another's. */
+const sessionLabel = (site: string) => `session:${safeName(site)}`;
 
 export function loadSession(site: string): Session {
   const file = sessionFile(site);
-  const s = readJson<Partial<Session>>(file, {});
+  const s = readSealed<Partial<Session>>(
+    file,
+    {},
+    sessionLabel(site),
+    `delete ${file} and sign in again: api-anything login ${safeName(site)}`,
+  );
   if (!s || typeof s !== "object" || (s.cookies !== undefined && !Array.isArray(s.cookies)))
     throw new Error(`${file} is not a session file; delete it and log in again`);
   return {
@@ -212,9 +220,13 @@ function recordProtection(site: string, s: Session, urls: (string | undefined)[]
  * an operation being learned, whose origins count as the site's own for this write only.
  */
 export function saveSession(site: string, s: Session, urls: (string | undefined)[] = []): Session {
-  const sealed = recordProtection(site, s, urls);
-  writePrivate(sessionFile(site), JSON.stringify({ ...sealed, updatedAt: new Date().toISOString() }, null, 1));
-  return sealed;
+  const recorded = recordProtection(site, s, urls);
+  writeSealed(
+    sessionFile(site),
+    JSON.stringify({ ...recorded, updatedAt: new Date().toISOString() }, null, 1),
+    sessionLabel(site),
+  );
+  return recorded;
 }
 
 const expired = (c: StoredCookie, now: number) => c.expires > 0 && c.expires * 1000 <= now;

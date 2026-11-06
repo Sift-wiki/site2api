@@ -281,7 +281,11 @@ nothing and needs no browser. Output is one line of JSON:
   remembered above its own tier; `next` calls it once with `--max-tier` at that tier, and an
   answer there forgets the escalation), `degraded`, `failing` (the last call failed for a reason
   other than its args), `verify` (the last verify on this version failed), `write` (a write may
-  have gone through). `next` is phrased as a call's `next`.
+  have gone through), `plaintext` (a session file is stored unsealed because no key is available,
+  or `API_ANYTHING_KEY` is wrong). `next` is phrased as a call's `next`;
+- `storage`: whether session and capture files are sealed here, `{sealed: true, key}` with the key's
+  source, or `{sealed: false, why, chosen}`. Finding out may create the key in the OS store, as the
+  first save would.
 
 With a site, every op is listed. Without one, only the sites with something on record here, and
 only the ops with something to say: a passing verify alone is not listed. The call history comes
@@ -379,6 +383,20 @@ go — avoid heavy automated traffic on it. Other ways in:
   otherwise `login` answers `ok: false`, says why, and keeps the session you had.
 - `--cookies <file>` imports a `cookies.txt` (Netscape) or JSON export, for servers/CI with no browser.
 - `api-anything logout <site>` clears the stored session.
+
+**How the session is stored.** The session file (`~/.api-anything/sessions/<site>.json`) and
+captures are sealed with AES-256-GCM, so a backup, a synced folder or a copied home does not carry
+your logins. The key is made on first use and kept in the macOS Keychain (item `api-anything`,
+created by `security`, so reading it shows no dialog), the Secret Service on Linux (`secret-tool`),
+or DPAPI on Windows. On a machine with none of those, such as a container or CI, set
+`API_ANYTHING_KEY` to a passphrase; it overrides the OS store. Keep the passphrase: without it the
+sealed files cannot be read, and a wrong one is an error, not an empty session. To start over, delete
+`key-salt.json`, `sessions/` and `captures/` in the home and log in again.
+
+With no key at all, files stay 0600 plaintext JSON as before: the CLI says so once on stderr, and
+`status` lists a `plaintext` problem for each such session. Set `API_ANYTHING_PLAINTEXT=1` if that is
+your choice, to silence both. Files written before sealing still read, and are sealed in place the
+first time a key is available.
 
 A trigger step never signs in: a `--steps` fill into a password or one-time-code field (the page's
 `type=password`, or `autocomplete` `current-password`, `new-password`, `one-time-code`) fails the run
@@ -607,10 +625,11 @@ omit them, because their targets are not part of that upload.
   other is dismissed, and the call's reason says so. A call whose trigger fired no matching request
   says why the browser stopped waiting: whether the page went quiet or the time ran out, the page's
   address without its query, its HTTP status, the requests still open and the dialogs it showed.
-- Credentials stay in `~/.api-anything` (directories 0700, files 0600). Specs hold references
+- Credentials stay in `~/.api-anything` (directories 0700, files 0600), and session files and
+  captures are sealed (see "How the session is stored" under Logging in). Specs hold references
   such as `cookie:ct0`, never values. Captures (`~/.api-anything/captures`, kept for `inspect` and
   `add --from`) hold full responses and the run's cookie values, so only the newest 20 are kept and
-  none past 24 hours. `api-anything export` strips your example values, and it
+  none past 24 hours; an older one is refused with a `next` to capture again. `api-anything export` strips your example values, and it
   refuses to write a spec that contains any live cookie or session value from your machine.
 - api-anything does not solve CAPTCHAs or impersonate TLS fingerprints. It runs its own Chrome
   profile; `api-anything login <site>` copies only that site's cookies from your everyday browser

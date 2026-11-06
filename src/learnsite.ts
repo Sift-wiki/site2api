@@ -17,6 +17,7 @@ import {
   type AddInput,
   addOperation,
   type CaptureFile,
+  CaptureUnavailable,
   capturePage,
   fillTrigger,
   loadCapture,
@@ -555,6 +556,8 @@ export async function learnSite(input: LearnSiteInput, o: LearnSiteOptions = {})
     }
   } catch (e) {
     if (e instanceof ProfileInUse) return fail(e.message, PROFILE_HINT, { nextCall: { action: "retry" } });
+    if (e instanceof CaptureUnavailable)
+      return fail(e.message, "learn again without captures: the two runs are made afresh");
     return fail((e as Error).message.split("\n")[0]!, "check the trigger URL, then learn again");
   }
   const captures = [c1.id, c2.id];

@@ -21,6 +21,7 @@ holds the evidence behind it, including the api-anything bugs that must not come
 | `src/browser.ts` | Chrome via playwright-core: trigger capture, tier 2 page fetch, login |
 | `src/heal.ts` | add, rescan, recapture, tier-3 trigger runs, captures |
 | `src/execute.ts` | `call()`: the tier ladder, classifier actions, heal guards, write rules |
+| `src/seal.ts` | AES-256-GCM sealing of session and capture files; the data key from the OS store or `API_ANYTHING_KEY`; the no-key fallback |
 | `src/session.ts`, `src/store.ts` | `~/.api-anything`: cookie jar, specs, heal log, state, write ledger, call log, export |
 | `src/status.ts` | `status`: each op's health from the local files only, each problem with its `next` |
 | `src/checks.ts` | `verify`: run each read's example and checks, judge pass/fail/inconclusive, keep the record `publish` gates on |
