@@ -264,6 +264,24 @@ describe("public stats", () => {
       assert.ok(!text.includes(`"${k}"`), "no key is served");
   });
 
+  test("a key with reports or uploads but no keys row is still seen, so no count exceeds installs seen", async () => {
+    const { env, raw } = registry();
+    const now = new Date().toISOString();
+    raw.prepare("INSERT INTO keys (key, first_seen, uploads, reports) VALUES ('rowed', ?, 0, 1)").run(now);
+    const rep = raw.prepare(
+      "INSERT INTO reports (hash, key, network, outcome, tier, ms, at) VALUES (?, ?, 'n', ?, 1, 10, ?)",
+    );
+    rep.run("h1", "rowed", "ok", now);
+    rep.run("h1", "rowless", "ok", now);
+    await seed(env, { site, operations: [op()] });
+    raw.prepare("UPDATE versions SET uploader = 'uploadonly', created_at = ?").run(now);
+    const s = (await send(env, "GET", "/v1/stats")).body.installs;
+    assert.equal(s.seen.total, 3);
+    assert.equal(s.activated.ok.total, 2);
+    assert.ok(s.sharing.last30Days <= s.seen.total);
+    assert.ok(s.activated.ok.last30Days <= s.activated.ok.total);
+  });
+
   test("an install that reported ok stays activated: after a fail, and after its version is purged", async () => {
     const { env, raw } = registry();
     await seed(env, { site, operations: [op()] });

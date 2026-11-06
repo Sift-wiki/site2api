@@ -119,7 +119,12 @@ async function countFunnel(db: D1Database, now: number): Promise<Funnel> {
     n(db, `SELECT COUNT(DISTINCT key) AS n FROM reports WHERE at >= ?${ok ? " AND outcome = 'ok'" : ""}`, since);
   return {
     seen: {
-      total: await n(db, "SELECT COUNT(*) AS n FROM keys"),
+      // some report and upload keys have no `keys` row, so count every key the registry holds
+      total: await n(
+        db,
+        "SELECT COUNT(*) AS n FROM (SELECT key FROM keys UNION SELECT key FROM reports UNION SELECT uploader FROM versions WHERE uploader <> ?)",
+        SEED,
+      ),
       last30Days: perDay.reduce((s, d) => s + d.new, 0),
       perDay,
     },
@@ -133,7 +138,10 @@ async function countFunnel(db: D1Database, now: number): Promise<Funnel> {
       last30Days: await reported(ago(30), false),
       ok: {
         // a report row holds only the latest outcome, so an ok then a fail would read as never ok
-        total: await n(db, "SELECT COUNT(*) AS n FROM keys WHERE activated_at IS NOT NULL"),
+        total: await n(
+          db,
+          "SELECT COUNT(*) AS n FROM (SELECT key FROM keys WHERE activated_at IS NOT NULL UNION SELECT key FROM reports WHERE outcome = 'ok')",
+        ),
         last7Days: await reported(ago(7), true),
         last30Days: await reported(ago(30), true),
       },
