@@ -16,6 +16,10 @@
   ],
   // daily: archive what nobody called successfully in 30 days, delete what was archived 30 days ago, recount;
   // every minute: recount the versions a report found held back (worker.ts EVERY_MINUTE)
-  "triggers": { "crons": ["17 3 * * *", "* * * * *"] }
+  "triggers": { "crons": ["17 3 * * *", "* * * * *"] },
+  // GET /v1/try (registry/src/try.ts), the one route that sends a request to a site: any value but
+  // "true" switches it off. Its limits are vars too: TRY_PER_MINUTE, TRY_PER_DAY, TRY_PER_DAY_ALL,
+  // TRY_TIMEOUT_MS, TRY_MAX_BYTES, TRY_CACHE_SECONDS.
+  "vars": { "TRY_ENABLED": "true" }
   // secrets: ADMIN_TOKEN, SALT (wrangler secret put). Thresholds (rules.ts) can be set as vars.
 }

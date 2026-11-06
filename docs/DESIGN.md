@@ -1158,6 +1158,20 @@ verify jobs are signed with the install's Ed25519 key (`identity.ts`). Nothing i
 or verified unless setup's question (`QUESTION`) was answered yes (`settings.json` `share`, with
 `askedAt`), except an upload the user consents to.
 
+**The catalog's one request to a site.** The service never calls a site for an install: every call runs
+on the user's machine, from its address and with its sessions, which is what lets the ladder reach sites
+that block datacenters. The single exception is a visitor's try (`GET /v1/try/:site/:op`,
+`registry/src/try.ts`; docs/REGISTRY.md "Trying an op from the catalog"), so that someone without Node 22
+can see what an op answers before installing. It is narrow on purpose, because each try is a request the
+catalog sends in its own name from Cloudflare's addresses: only ops in a list in the code (a few bundled
+public reads of harmless data), only the served live version, only a GET at `minTier` 1 with no
+`cookie:`/`session:` ref, no lookup and no `public` names, https to a public host on the site's own
+domain, passing `vetShared`; only the op's literal headers and an empty jar, never anything of the
+visitor's request; limits per network and per day, an 8 s timeout, a 1 MB cap, and a 10-minute cache.
+It reuses `buildRequest`, `judge` and `capOutput`, so its answer is a `CallResult` (with `via:
+"catalog-try"`). The Worker var `TRY_ENABLED` turns it off without a code change. A try reports nothing:
+it says how the site answers Cloudflare, not an install, so it counts toward no promotion.
+
 **The one question, asked once.** A plugin install, `claude mcp add` or `npm -g` never runs setup, so
 `learn_site` asks the same question the first time it reaches the share step (the holdout answered and
 the op holds none of the user's values) with no answer recorded: through MCP elicitation, or the CLI's

@@ -190,6 +190,12 @@ table.ops{width:100%;border-collapse:collapse;font-size:15px}
 .ops small{display:block;margin-top:4px;min-width:9em}
 .notes{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:4px 22px}
 .notes ul{padding-left:20px}.notes li{margin:6px 0}
+.try{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:14px 18px;margin:12px 0}
+.try form{display:flex;flex-wrap:wrap;gap:10px;align-items:end}
+.try label{display:flex;flex-direction:column;font-size:13px;color:var(--muted)}
+.try input{font:inherit;font-size:15px;color:var(--fg);background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:6px 10px;min-width:12em}
+.try button{font:inherit;font-size:15px;color:#fff;background:var(--accent);border:0;border-radius:8px;padding:7px 16px;cursor:pointer}
+.try>pre{max-height:420px;overflow:auto;background:var(--code);border-radius:8px;padding:12px;margin:12px 0 0;white-space:pre-wrap;overflow-wrap:anywhere}
 footer{border-top:1px solid var(--line);color:var(--muted);font-size:14px;padding:24px 0 40px}
 footer p{margin:4px 0}
 @media (max-width:680px){
@@ -204,10 +210,13 @@ footer p{margin:4px 0}
 }
 `;
 
-const SCRIPT = `for(const b of document.querySelectorAll("[data-copy]"))b.addEventListener("click",()=>{navigator.clipboard.writeText(b.previousElementSibling.textContent).then(()=>{b.textContent="Copied";setTimeout(()=>{b.textContent="Copy"},1500)})});`;
+const SCRIPT = `for(const b of document.querySelectorAll("[data-copy]"))b.addEventListener("click",()=>{navigator.clipboard.writeText(b.previousElementSibling.textContent).then(()=>{b.textContent="Copied";setTimeout(()=>{b.textContent="Copy"},1500)})});for(const f of document.querySelectorAll("form[data-try]"))f.addEventListener("submit",e=>{e.preventDefault();const o=f.nextElementSibling;o.hidden=false;o.textContent="Running…";fetch(f.getAttribute("action")+"?"+new URLSearchParams(new FormData(f))).then(r=>r.json()).then(j=>{o.textContent=JSON.stringify(j,null,2)},()=>{o.textContent="The request failed."})});`;
 
-/** No spec text is ever in a script, and this policy lets no script run but the copy buttons'. */
-export const CSP = `default-src 'none'; style-src 'unsafe-inline'; img-src data:; script-src 'sha256-${createHash("sha256").update(SCRIPT).digest("base64")}'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'`;
+/**
+ * No spec text is ever in a script, and this policy lets no script run but the copy buttons' and the try
+ * forms', which fetch only this origin's /v1/try. Without the script a try form opens the JSON instead.
+ */
+export const CSP = `default-src 'none'; style-src 'unsafe-inline'; img-src data:; script-src 'sha256-${createHash("sha256").update(SCRIPT).digest("base64")}'; connect-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'`;
 
 // docs/media/logo.svg, made by docs/media/draw.mjs: the favicon and the header's mark
 const ICON = `data:image/svg+xml,${encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64" role="img" aria-label="API Anything"><style>@media (prefers-color-scheme: dark){.mark{stroke:#ecebe6}}</style><path class="mark" d="M32,9L32,55M12.1,20.5L51.9,43.5M12.1,43.5L51.9,20.5" fill="none" stroke="#0b0b0b" stroke-width="10" stroke-linecap="round"/></svg>')}`;
@@ -282,6 +291,7 @@ const proofStrip = (s: PublicStats) =>
   `<p class="proof">${[
     `${plural(s.installs.last7Days, "install")} active this week`,
     `${plural(s.calls.last7Days, "call")} this week`,
+    `${s.installs.activated.ok.total.toLocaleString("en-US")} of ${plural(s.installs.seen.total, "install")} seen made a call that worked`,
     `${plural(s.community.sites, "site")} taught by the community`,
   ].join(" · ")}</p>`;
 
@@ -347,7 +357,32 @@ function provenanceNote(p: Provenance, n: number): string {
   return `Seeded by the maintainers${ops ? `; ${ops} of its ${plural(n, "operation")} came from installs` : ""}.`;
 }
 
-export function sitePage(s: ServedSite, origin: string, provenance?: Provenance): string {
+/** An op a visitor can run from the page (registry/src/try.ts `tryable`), with the args its form starts from. */
+export interface Tryable {
+  op: Operation;
+  args: Record<string, unknown>;
+}
+
+function tryBlock(site: string, origin: string, tries: Tryable[]): string {
+  const forms = tries.map(({ op, args }) => {
+    const path = `/v1/try/${encodeURIComponent(site)}/${encodeURIComponent(op.name)}`;
+    const inputs = op.params.map((p) => {
+      const v = args[p.name];
+      const hint = p.hint ?? p.description;
+      return `<label>${esc(p.name)}<input name="${esc(p.name)}" value="${v === undefined ? "" : esc(argText(v))}"${hint ? ` placeholder="${esc(clip(hint, 60))}"` : ""}${p.required ? " required" : ""}></label>`;
+    });
+    const query = new URLSearchParams(Object.entries(args).map(([k, v]) => [k, argText(v)])).toString();
+    return `<div class="try"><p><code>${esc(op.name)}</code>${op.description ? ` <small>${esc(clip(op.description, 160))}</small>` : ""}</p>
+<form method="get" action="${esc(path)}" data-try>${inputs.join("")}<button type="submit">Run</button></form>
+<pre hidden aria-live="polite"></pre>
+${command(esc(`curl -s ${shellArg(`${origin}${path}${query ? `?${query}` : ""}`)}`))}</div>`;
+  });
+  return `<h2 id="run">Run it here, no install</h2>
+<p class="note">Run one of these from the catalog's server, with no install: one live read, sent once without cookies, limited per network and cached for 10 minutes. Your agent calls the site from your own machine instead.</p>
+${forms.join("\n")}`;
+}
+
+export function sitePage(s: ServedSite, origin: string, provenance?: Provenance, tries: Tryable[] = []): string {
   const title = titleOf(s);
   const rows = s.operations.map((o) => {
     const sum = summarize(o.operation);
@@ -404,7 +439,7 @@ ${provenance ? `<p class="note">${provenanceNote(provenance, s.operations.length
 ${command(esc(INSTALL))}
 <p class="note">Then ask your agent, which finds this site by itself, or call it from a shell:</p>
 ${command(sampleCommands(s.name, sampleOp(s)))}
-<h2>Operations</h2>
+${tries.length ? `${tryBlock(s.name, origin, tries)}\n` : ""}<h2>Operations</h2>
 <table class="ops">
 <thead><tr><th>Operation</th><th>Method</th><th>Login</th><th>Writes</th><th>Status</th></tr></thead>
 <tbody>

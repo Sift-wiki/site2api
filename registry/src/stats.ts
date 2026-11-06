@@ -10,10 +10,30 @@ import type { D1Database } from "./store.js";
 /** The uploader of a maintainer's seed (worker.ts `adminSeed`, store.ts `seedSite`). */
 const SEED = "seed";
 
+/**
+ * Installs from first contact to sharing, by install key. The registry sees a key only once its install
+ * uploads or reports, so an install with sharing off is never counted.
+ */
+export interface Funnel {
+  /** distinct keys in `keys`; `perDay`: keys first seen each UTC day of the last 30, oldest first, today included */
+  seen: { total: number; last30Days: number; perDay: { day: string; new: number }[] };
+  /** keys with an accepted report (any outcome); `ok`: with an ok one. Windows by the report's time */
+  activated: {
+    total: number;
+    last7Days: number;
+    last30Days: number;
+    ok: { total: number; last7Days: number; last30Days: number };
+  };
+  /** keys that uploaded a version or reported in the last 30 days */
+  sharing: { last30Days: number };
+  /** when these were counted: at most an hour before `generated` */
+  countedAt: string;
+}
+
 export interface PublicStats {
   generated: string;
-  /** distinct installs that reported, uploaded, claimed or reported an interface in the window */
-  installs: { last7Days: number; last30Days: number };
+  /** last7Days/last30Days: distinct installs that reported, uploaded, claimed or reported an interface in the window */
+  installs: { last7Days: number; last30Days: number } & Funnel;
   /** calls reported in the last 7 UTC days, today included; okRate is ok / (ok + fail + wrong) */
   calls: { last7Days: number; ok: number; okRate?: number };
   /** sites with a live op, and their live ops */
@@ -56,6 +76,83 @@ async function activeInstalls(db: D1Database, since: string): Promise<number> {
     .bind(since, since, SEED, since, since)
     .first<{ n: number }>();
   return row?.n ?? 0;
+}
+
+const FUNNEL_SECONDS = 3600;
+
+async function n(db: D1Database, sql: string, ...values: unknown[]): Promise<number> {
+  return (
+    (
+      await db
+        .prepare(sql)
+        .bind(...values)
+        .first<{ n: number }>()
+    )?.n ?? 0
+  );
+}
+
+async function countFunnel(db: D1Database, now: number): Promise<Funnel> {
+  const ago = (days: number) => new Date(now - days * DAY).toISOString();
+  const firstDay = utcDay(now - 29 * DAY);
+  const days = await db
+    .prepare("SELECT substr(first_seen, 1, 10) AS day, COUNT(*) AS n FROM keys WHERE first_seen >= ? GROUP BY day")
+    .bind(firstDay)
+    .all<{ day: string; n: number }>();
+  const byDay = new Map(days.results.map((r) => [r.day, r.n]));
+  const perDay = Array.from({ length: 30 }, (_, i) => {
+    const day = utcDay(now - (29 - i) * DAY);
+    return { day, new: byDay.get(day) ?? 0 };
+  });
+  const reported = (since: string, ok: boolean) =>
+    n(db, `SELECT COUNT(DISTINCT key) AS n FROM reports WHERE at >= ?${ok ? " AND outcome = 'ok'" : ""}`, since);
+  return {
+    seen: {
+      total: await n(db, "SELECT COUNT(*) AS n FROM keys"),
+      last30Days: perDay.reduce((s, d) => s + d.new, 0),
+      perDay,
+    },
+    activated: {
+      // keys.reports outlives the report rows a purged version takes with it
+      total: await n(
+        db,
+        "SELECT COUNT(*) AS n FROM (SELECT key FROM keys WHERE reports > 0 UNION SELECT key FROM reports)",
+      ),
+      last7Days: await reported(ago(7), false),
+      last30Days: await reported(ago(30), false),
+      ok: {
+        total: await n(db, "SELECT COUNT(DISTINCT key) AS n FROM reports WHERE outcome = 'ok'"),
+        last7Days: await reported(ago(7), true),
+        last30Days: await reported(ago(30), true),
+      },
+    },
+    sharing: {
+      last30Days: await n(
+        db,
+        "SELECT COUNT(*) AS n FROM (SELECT key FROM reports WHERE at >= ? UNION SELECT uploader FROM versions WHERE created_at >= ? AND uploader <> ?)",
+        ago(30),
+        ago(30),
+        SEED,
+      ),
+    },
+    countedAt: new Date(now).toISOString(),
+  };
+}
+
+/** The funnel as last counted, recounted when that was over an hour ago. */
+export async function funnel(db: D1Database, now: number): Promise<Funnel> {
+  const held = await db
+    .prepare("SELECT body, at FROM snapshots WHERE name = 'funnel'")
+    .first<{ body: string; at: string }>();
+  if (held && now - Date.parse(held.at) < FUNNEL_SECONDS * 1000 && Date.parse(held.at) <= now)
+    return JSON.parse(held.body) as Funnel;
+  const counted = await countFunnel(db, now);
+  await db
+    .prepare(
+      "INSERT INTO snapshots (name, body, at) VALUES ('funnel', ?, ?) ON CONFLICT (name) DO UPDATE SET body = excluded.body, at = excluded.at",
+    )
+    .bind(JSON.stringify(counted), counted.countedAt)
+    .run();
+  return counted;
 }
 
 /** Sites an install first shared, and the served versions installs uploaded; `site` narrows to one site. */
@@ -107,7 +204,11 @@ export async function publicStats(
   const rate = successRate(calls?.ok ?? 0, calls?.bad ?? 0);
   return {
     generated: new Date(now).toISOString(),
-    installs: { last7Days: await activeInstalls(db, ago(7)), last30Days: await activeInstalls(db, ago(30)) },
+    installs: {
+      last7Days: await activeInstalls(db, ago(7)),
+      last30Days: await activeInstalls(db, ago(30)),
+      ...(await funnel(db, now)),
+    },
     calls: { last7Days: calls?.total ?? 0, ok: calls?.ok ?? 0, ...(rate !== undefined ? { okRate: rate } : {}) },
     sites: { live: live.length, operations: liveOps.length },
     community: {

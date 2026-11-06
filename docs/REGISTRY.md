@@ -4,7 +4,9 @@ Agents share one catalog of website operations, and the same agents fill it, ver
 it as a side effect of using it. The registry is a small service (`registry/`, a Cloudflare Worker
 with D1) that stores operations and counts reports. Every expensive step — learning, verifying,
 repairing — runs on users' machines, which already have the browser, the sessions and home
-connections that sites do not block. The wire contract is `src/registry-api.ts`.
+connections that sites do not block. The wire contract is `src/registry-api.ts`. The one request the
+registry ever sends to a site is a visitor's try of an allowlisted public read ("Trying an op from the
+catalog"), and a Worker var switches it off.
 
 ## The rule
 
@@ -138,14 +140,31 @@ one install from another, no key and no network hash:
 
 ```json
 { "generated": "…",
-  "installs": { "last7Days": 41, "last30Days": 120 },
+  "installs": { "last7Days": 41, "last30Days": 120,
+    "seen": { "total": 1204, "last30Days": 1180, "perDay": [{ "day": "2026-10-07", "new": 12 }, "…"] },
+    "activated": { "total": 812, "last7Days": 64, "last30Days": 590,
+      "ok": { "total": 701, "last7Days": 52, "last30Days": 511 } },
+    "sharing": { "last30Days": 600 },
+    "countedAt": "…" },
   "calls": { "last7Days": 2300, "ok": 2010, "okRate": 0.93 },
   "sites": { "live": 55, "operations": 140 },
   "community": { "sites": 6, "operations": 19, "uploadsLast30Days": 33 },
   "wanted": 18 }
 ```
 
-- `installs`: distinct keys that reported, uploaded, claimed or reported an interface in the window.
+- `installs`: `last7Days` and `last30Days` are distinct keys that reported, uploaded, claimed or reported
+  an interface in the window. The rest is the install funnel, by key:
+  - `seen`: keys in `keys`, all time, and the keys first seen on each of the last 30 UTC days, oldest
+    first, today included. A key reaches `keys` when its install first uploads or reports, so an install
+    with sharing off, or one that never called a registry op, is never seen: `seen` is a floor on working
+    installs, not a count of downloads.
+  - `activated`: keys with an accepted report of any outcome (`keys.reports`, which outlives the report
+    rows a purged version takes with it); `ok`, keys with an ok report, which is the number of installs
+    known to have made a call that worked. The 7- and 30-day windows read when the key's latest report on
+    each version arrived.
+  - `sharing`: keys that uploaded a version or reported in the last 30 days.
+  - `countedAt`: counting reads every key, so the funnel is kept in `snapshots` and recounted at most once
+    an hour (the 60 s edge cache works only on a custom domain, below).
 - `calls`: reports accepted in the last 7 UTC days, today included, from the `calls` table (a count per
   day and outcome; `reports` keeps only each install's latest outcome per version, so it cannot count
   calls). `okRate` is ok / (ok + fail + wrong), absent with none of those. The daily job deletes days
@@ -155,11 +174,62 @@ one install from another, no key and no network hash:
   versions installs uploaded in 30 days, any status.
 - `wanted`: domains on the demand list.
 
-The home page shows a strip from the same counts ("N installs active this week · M calls this week · K
-sites taught by the community") when they could be read, and leaves it out otherwise. A site an install
+The home page shows a strip from the same counts ("N installs active this week · M calls this week · A of
+S installs seen made a call that worked · K sites taught by the community") when they could be read, and
+leaves it out otherwise. `api-anything stats` on the client reads only the local call log and sends
+nothing, so it does not show these. A site an install
 first shared carries a "taught by an install" badge in the home list and on its page; a seeded site's
 page says the maintainers seeded it, and either says how many of its ops came from installs. No key, and
 nothing derived from one, is shown.
+
+## Trying an op from the catalog
+
+Everywhere else the catalog stores and counts, and every call runs on a user's machine. Trying the tool
+then needs Node 22 and an install, so a visitor who only wants to see what an op answers cannot. `GET
+/v1/try/:site/:op?<arg>=<value>…` (`registry/src/try.ts`) is the one exception: the Worker sends one
+live read to the site and answers what the client's `call()` would, `{ok, class, data, truncated?, tier:
+1, ms, reason?, retryAfterMs?}`, plus `"via": "catalog-try"`, `cached: true` when it came from the cache,
+and a `next` with the install and the `api-anything call` command. With no args it runs the op's
+published examples. Each allowlisted site's page has a "Run it here, no install" form per op, filled
+with those examples, and the curl line; the page's one script sends the form to this endpoint and shows
+the JSON (the CSP adds `connect-src 'self'` for it), and without the script the form opens the JSON.
+
+It runs only when all of these hold, checked on every request:
+
+- the site and op are in `TRY_OPS`, a list in the code: hacker-news `frontPage` and `getItem`, wikipedia
+  `searchArticles` and `getSummary`, openlibrary `getWork` and `getAuthor`, usgs-earthquakes `recent` and
+  `getEvent`, nasa-images `search`. Bundled public reads of harmless data, answered over plain HTTP by
+  hosts that answer a datacenter's address. Anything else is a 404 with nothing read or sent;
+- the version the catalog serves for it is live, `readOnly`, a GET, `minTier` 1, not learned signed in,
+  with no slot holding a `cookie:` or `session:` ref or a lookup's answer, and no `public` names;
+- its request is https to a public host (`badAddress`) on the registrable domain of the site's
+  `baseUrl`, and so is the filled request; the site passes `vetShared`;
+- `TRY_ENABLED` is `true` (`registry/wrangler.jsonc` sets it; unset or any other value is off, a 503).
+
+What it sends: the filled template with an empty cookie jar, so only the op's own literal headers and
+its args. Nothing of the visitor's request (cookies, authorization, IP headers) goes on. Redirects are
+followed at most 3 times and only on the op's site. The answer is judged and extracted by the client's
+own `src/classify.ts` and `src/extract.ts`, HTML included (node-html-parser bundles for Workers), and
+capped as a call's output is.
+
+The limits, each a Worker var to tighten without a code change:
+
+| limit | default (var) |
+|---|---|
+| tries per network (IPv4 /24, IPv6 /32, hashed) a minute, a cached one included | 10 (`TRY_PER_MINUTE`) |
+| tries per network a UTC day | 100 (`TRY_PER_DAY`) |
+| requests sent to sites a UTC day, all networks | 5000 (`TRY_PER_DAY_ALL`) |
+| time for the whole exchange, redirects and body included | 8 s (`TRY_TIMEOUT_MS`) |
+| the site's answer, declared or streamed | 1 MB (`TRY_MAX_BYTES`) |
+| an ok answer cached by its version and filled URL | 600 s (`TRY_CACHE_SECONDS`) |
+
+Over a network's budget is a 429 with Retry-After; over the day's total a 503. The counters live in
+`rates`. A try reports nothing and counts toward no promotion: it is the catalog's request, not an
+install's. The requests come from Cloudflare's addresses, which is why the list holds only sites that
+answer them, and why it is short: every op on it is a request the catalog makes in its own name. To
+switch it off without a code change, set `TRY_ENABLED` to `false` among the Worker's variables in the
+dashboard (takes effect at once; the next deploy restores `registry/wrangler.jsonc`'s value), or in that
+file and deploy. To drop one op, remove it from `TRY_OPS`.
 
 ## Pages for search engines
 
@@ -346,7 +416,9 @@ maintainer sets its status (`POST /v1/admin/versions/:hash`), when it:
   (`UPLOADS_PER_HOUR_ALL`). Every limit answers 429 with Retry-After.
 - Public reads (`/v1/search`, `/v1/sites/:name`, `/v1/index`, `/v1/demand`, `/v1/stats`, `/`,
   `/sites/:name`, `/wanted/:domain`, `/sitemap.xml`) are cached for 60 s at the edge, keyed by URL. A signed read skips the cache, since it may include the
-  signer's own `review` versions.
+  signer's own `review` versions. The Workers Cache API has no effect on a `*.workers.dev` host, only
+  on a custom domain, so on workers.dev nothing is cached (this one and `/v1/try`'s): every read runs
+  its queries, which is why the stats' install funnel is kept in `snapshots`.
 - A maintainer can block a version or a site.
 
 What these rules leave open:
@@ -373,8 +445,10 @@ timestamps including when it first went live, its report counts), `reports`
 (hash, key, network hash, outcome, tier, at), `keys` (public key, first seen, counts), `rates` (hourly
 counters, kept for a day), `claims` (fingerprint, site, key, network hash, name hash, at), `demand`
 (registrable domain, network hash, at; deleted after 90 days), `interfaces` and `interface_reports`
-(url, domain, kind; key, network hash, at), `calls` (UTC day, outcome, count; deleted after 90 days).
-No args, no response data, no IP addresses.
+(url, domain, kind; key, network hash, at), `calls` (UTC day, outcome, count; deleted after 90 days),
+`snapshots` (the public stats' install funnel as last counted: counts only). No args, no response data,
+no IP addresses. A try (`/v1/try`) stores only its counters in `rates`; the cache holds its answer for 10
+minutes.
 
 About the caller, the registry keeps its reports, keyed by install key and time, and nothing else:
 no account, no IP address (a network is a salted hash, used to count distinct networks and for rate

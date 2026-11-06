@@ -62,6 +62,7 @@ import {
   wantDomain,
   wantedClaims,
 } from "./store.js";
+import { exampleArgs, tryApi, tryable } from "./try.js";
 import {
   HASH,
   matchSig,
@@ -320,17 +321,6 @@ async function addInterface(c: Ctx) {
 async function indexApi(c: Ctx) {
   const sites = await catalog(c.env.DB, await keyOf(c, false));
   return json({ generated: new Date(c.now).toISOString(), sites: sites.filter(confirmed).map(entryOf) });
-}
-
-/** The op's published example args, defaults filled; undefined when a required param has neither. */
-function exampleArgs(op: Operation): Record<string, unknown> | undefined {
-  const out: Record<string, unknown> = {};
-  for (const p of op.params) {
-    const v = p.example ?? p.default;
-    if (v !== undefined) out[p.name] = v;
-    else if (p.required) return undefined;
-  }
-  return out;
 }
 
 async function verifyJobs(c: Ctx) {
@@ -622,10 +612,15 @@ async function landing(c: Ctx, name: string) {
   if (!site) return html(homePage([], c.url.origin, name), 404);
   const by = await community(c.env.DB, name);
   return html(
-    sitePage(site, c.url.origin, {
-      byInstall: by.sites.has(name),
-      opsByInstalls: site.operations.filter((o) => by.hashes.has(o.hash)).length,
-    }),
+    sitePage(
+      site,
+      c.url.origin,
+      {
+        byInstall: by.sites.has(name),
+        opsByInstalls: site.operations.filter((o) => by.hashes.has(o.hash)).length,
+      },
+      tryable(c.env, site),
+    ),
   );
 }
 
@@ -670,6 +665,11 @@ const ROUTES: [method: string, path: RegExp, handler: Handler, auth?: Auth, maxB
   ["GET", /^\/v1\/index$/, indexApi],
   ["GET", /^\/v1\/demand$/, demandApi],
   ["GET", /^\/v1\/stats$/, statsApi],
+  [
+    "GET",
+    new RegExp(`^/v1/try/(${NAME.slice(1, -1)}/[A-Za-z][\\w.-]{0,63})$`),
+    (c, param) => tryApi({ env: c.env, request: c.request, url: c.url, now: c.now, param }),
+  ],
   ["GET", /^\/v1\/verify-jobs$/, verifyJobs, "signed"],
   ["POST", /^\/v1\/versions$/, upload, "signed"],
   ["POST", /^\/v1\/reports$/, reports, "signed"],

@@ -7,6 +7,7 @@ import { evidence, install, op, registry, report, seed, send, site } from "./hel
 const NET1 = "198.51.100.7";
 const NET2 = "192.0.2.44";
 const NET3 = "203.0.113.80";
+const DAY = 86_400_000;
 type Env = ReturnType<typeof registry>["env"];
 
 const ask = (env: Env, q: string, ip: string) => send(env, "GET", `/v1/search?q=${encodeURIComponent(q)}`, { ip });
@@ -164,8 +165,19 @@ describe("public stats", () => {
     assert.equal(r.status, 200, r.text);
     const { generated, ...counts } = r.body;
     assert.ok(Date.parse(generated));
+    const { seen, countedAt, ...installs } = counts.installs;
+    assert.equal(countedAt, generated);
+    assert.equal(seen.total, 5);
+    assert.equal(seen.perDay.length, 30);
+    assert.deepEqual(seen.perDay.at(-1), { day: generated.slice(0, 10), new: 5 });
+    assert.deepEqual(installs, {
+      last7Days: 5,
+      last30Days: 5,
+      activated: { total: 4, last7Days: 4, last30Days: 4, ok: { total: 2, last7Days: 2, last30Days: 2 } },
+      sharing: { last30Days: 5 },
+    });
+    delete counts.installs;
     assert.deepEqual(counts, {
-      installs: { last7Days: 5, last30Days: 5 },
       calls: { last7Days: 4, ok: 2, okRate: 0.667 },
       sites: { live: 2, operations: 2 },
       community: { sites: 1, operations: 1, uploadsLast30Days: 1 },
@@ -176,7 +188,7 @@ describe("public stats", () => {
     const home = await send(env, "GET", "/");
     assert.match(
       home.text,
-      /<p class="proof">5 installs active this week · 4 calls this week · 1 site taught by the community<\/p>/,
+      /<p class="proof">5 installs active this week · 4 calls this week · 2 of 5 installs seen made a call that worked · 1 site taught by the community<\/p>/,
     );
   });
 
@@ -185,7 +197,75 @@ describe("public stats", () => {
     const r = await send(env, "GET", "/v1/stats");
     assert.equal(r.status, 200);
     assert.deepEqual(r.body.calls, { last7Days: 0, ok: 0 });
-    assert.deepEqual(r.body.installs, { last7Days: 0, last30Days: 0 });
+    const { perDay, ...seen } = r.body.installs.seen;
+    assert.deepEqual(seen, { total: 0, last30Days: 0 });
+    assert.ok(perDay.every((d: { new: number }) => d.new === 0));
+    assert.deepEqual(r.body.installs.activated, {
+      total: 0,
+      last7Days: 0,
+      last30Days: 0,
+      ok: { total: 0, last7Days: 0, last30Days: 0 },
+    });
+    assert.deepEqual(r.body.installs.sharing, { last30Days: 0 });
+    assert.equal(r.body.installs.last7Days, 0);
+  });
+
+  test("the install funnel: seen per day, activated by report, sharing by upload or report, windows by time", async () => {
+    const { env, raw } = registry();
+    const now = Date.now();
+    const at = (days: number) => new Date(now - days * DAY).toISOString();
+    const key = raw.prepare("INSERT INTO keys (key, first_seen, uploads, reports) VALUES (?, ?, ?, ?)");
+    const rep = raw.prepare(
+      "INSERT INTO reports (hash, key, network, outcome, tier, ms, at) VALUES (?, ?, 'n', ?, 1, 10, ?)",
+    );
+    // seen 40 days ago, reported ok 20 days ago: activated in 30 days, not 7
+    key.run("old", at(40), 0, 3);
+    rep.run("h1", "old", "ok", at(20));
+    // seen 2 days ago, a fail this week: activated, never ok
+    key.run("failing", at(2), 0, 1);
+    rep.run("h1", "failing", "fail", at(1));
+    // seen today, ok today, on two versions: counted once
+    key.run("works", at(0), 0, 2);
+    rep.run("h1", "works", "ok", at(0));
+    rep.run("h2", "works", "ok", at(0));
+    // seen 5 days ago and only uploaded: sharing, not activated
+    key.run("uploader", at(5), 1, 0);
+    await seed(env, { site, operations: [op()] });
+    raw.prepare("UPDATE versions SET uploader = 'uploader', created_at = ?").run(at(5));
+    // reports purged with an archived version 60 days ago: still activated, by keys.reports
+    key.run("purged", at(70), 0, 4);
+    // a report that sent nothing known: seen, not activated
+    key.run("idle", at(3), 0, 0);
+
+    const s = (await send(env, "GET", "/v1/stats")).body.installs;
+    assert.equal(s.seen.total, 6);
+    assert.equal(s.seen.last30Days, 4, "old and purged were first seen before the window");
+    const day = (d: number) => s.seen.perDay.find((x: { day: string }) => x.day === at(d).slice(0, 10)).new;
+    assert.deepEqual([day(0), day(2), day(3), day(5), day(29)], [1, 1, 1, 1, 0]);
+    assert.equal(s.seen.perDay[0].day, at(29).slice(0, 10));
+    assert.deepEqual(s.activated, {
+      total: 4,
+      last7Days: 2,
+      last30Days: 3,
+      ok: { total: 2, last7Days: 1, last30Days: 2 },
+    });
+    assert.deepEqual(s.sharing, { last30Days: 4 });
+    const text = JSON.stringify(s);
+    for (const k of ["old", "failing", "works", "uploader", "purged", "idle"])
+      assert.ok(!text.includes(`"${k}"`), "no key is served");
+  });
+
+  test("the funnel is counted at most once an hour, then recounted", async () => {
+    const { env, raw } = registry();
+    const first = await send(env, "GET", "/v1/stats");
+    assert.equal(first.body.installs.seen.total, 0);
+    raw.prepare("INSERT INTO keys (key, first_seen) VALUES ('k', ?)").run(new Date().toISOString());
+    const held = await send(env, "GET", "/v1/stats");
+    assert.equal(held.body.installs.seen.total, 0, "an hour has not passed");
+    assert.equal(held.body.installs.countedAt, first.body.installs.countedAt);
+    raw.prepare("UPDATE snapshots SET at = ?").run(new Date(Date.now() - 61 * 60_000).toISOString());
+    const recounted = await send(env, "GET", "/v1/stats");
+    assert.equal(recounted.body.installs.seen.total, 1);
   });
 
   test("the stats and wanted pages are cached at the edge like the other public reads", async () => {
