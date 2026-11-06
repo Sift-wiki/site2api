@@ -414,13 +414,18 @@ export async function count(db: D1Database, subject: string, kind: string, hour:
   return row?.n ?? n;
 }
 
-export const touchKey = (db: D1Database, key: string, now: string, uploads: number, reports: number) =>
+/** Counts a key's uploads and reports; `ok`: an ok report of it was accepted, which sets `activated_at` once. */
+export const touchKey = (db: D1Database, key: string, now: string, uploads: number, reports: number, ok = false) =>
   db
     .prepare(
-      "INSERT INTO keys (key, first_seen, uploads, reports) VALUES (?, ?, ?, ?) ON CONFLICT (key) DO UPDATE SET uploads = uploads + excluded.uploads, reports = reports + excluded.reports",
+      "INSERT INTO keys (key, first_seen, uploads, reports, activated_at) VALUES (?, ?, ?, ?, ?) ON CONFLICT (key) DO UPDATE SET uploads = uploads + excluded.uploads, reports = reports + excluded.reports, activated_at = COALESCE(keys.activated_at, excluded.activated_at)",
     )
-    .bind(key, now, uploads, reports)
+    .bind(key, now, uploads, reports, ok ? now : null)
     .run();
+
+/** Sets an existing key's `activated_at`, unless it is set already. */
+export const activateKey = (db: D1Database, key: string, now: string) =>
+  db.prepare("UPDATE keys SET activated_at = ? WHERE key = ? AND activated_at IS NULL").bind(now, key);
 
 /** Every version that could still be served, with what the archive decision reads. */
 export async function archiveCandidates(db: D1Database): Promise<(Archivable & { hash: string })[]> {
