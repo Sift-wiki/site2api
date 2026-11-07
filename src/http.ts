@@ -12,6 +12,13 @@ import { reserveSend } from "./store.js";
 import type { StoredCookie } from "./types.js";
 import { badAddress } from "./vet.js";
 
+/**
+ * The most of one response body this process buffers. A shared spec may point at any public host, so
+ * a body is capped before parsing and extraction see it; 32 MiB is far above any page or JSON answer
+ * the bundled operations read.
+ */
+export const MAX_BODY_BYTES = 32 * 1024 * 1024;
+
 export interface Sent {
   status: number;
   headers: Record<string, string>;
@@ -536,8 +543,11 @@ export async function send(
         hop.headers = cookie ? { ...headers, cookie } : headers;
         continue;
       }
-      const raw = unzstd(new Uint8Array(await res.arrayBuffer()), res.headers.get("content-encoding"));
-      const text = decodeBody(raw, res.headers.get("content-type") ?? "");
+      const raw = await readCappedBody(res);
+      const inflated = unzstd(raw, res.headers.get("content-encoding"));
+      if (inflated.byteLength > MAX_BODY_BYTES)
+        throw new Error(`the response is over ${MAX_BODY_BYTES / 1024 / 1024} MiB once decoded; refused`);
+      const text = decodeBody(inflated, res.headers.get("content-type") ?? "");
       return {
         status: res.status,
         headers: Object.fromEntries(res.headers),
@@ -558,6 +568,35 @@ export async function send(
       );
     throw e;
   }
+}
+
+/**
+ * The body, refused once it passes `MAX_BODY_BYTES`: a declared length is checked before any of it is
+ * read, and a streamed body stops at the cap. This is a byte bound, not a time one: the request's
+ * timeout does not limit how much a host can send.
+ */
+async function readCappedBody(res: Response): Promise<Uint8Array> {
+  const over = (bytes?: number) =>
+    new Error(
+      `the response is ${bytes === undefined ? "over" : `${bytes} bytes, over`} ${MAX_BODY_BYTES / 1024 / 1024} MiB; refused before reading it all`,
+    );
+  const declared = Number(res.headers.get("content-length") ?? "");
+  if (Number.isFinite(declared) && declared > MAX_BODY_BYTES) throw over(declared);
+  if (!res.body) return new Uint8Array(await res.arrayBuffer());
+  const reader = res.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value.byteLength;
+    if (total > MAX_BODY_BYTES) {
+      await reader.cancel();
+      throw over(total);
+    }
+    chunks.push(value);
+  }
+  return Buffer.concat(chunks);
 }
 
 /**

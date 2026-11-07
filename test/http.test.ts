@@ -5,7 +5,7 @@ import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, test } from "node:test";
-import { buildRequest, nextHop, privateAddress, publicAddress, resolver, send } from "../src/http.js";
+import { buildRequest, MAX_BODY_BYTES, nextHop, privateAddress, publicAddress, resolver, send } from "../src/http.js";
 import type { Session } from "../src/session.js";
 import { type Operation, OperationSchema } from "../src/spec.js";
 import type { StoredCookie } from "../src/types.js";
@@ -190,6 +190,24 @@ test("send: injectable fetch, returns status/headers/body/url/ms", async () => {
   assert.equal(seen!.init.method, "POST");
   assert.equal((seen!.init.headers as Record<string, string>)["x-csrf-token"], "csrf123");
   assert.ok(r.ms >= 0);
+});
+
+test("send: a body past the cap is refused before it is buffered whole", async () => {
+  const chunk = new Uint8Array(1024 * 1024); // 1 MiB, reused, so this test allocates one MiB
+  const fetchImpl = (async () => {
+    let sent = 0;
+    const body = new ReadableStream({
+      pull(controller) {
+        if (sent++ * chunk.byteLength > MAX_BODY_BYTES) return controller.close();
+        controller.enqueue(chunk);
+      },
+    });
+    return new Response(body, { status: 200 });
+  }) as unknown as typeof fetch;
+  await assert.rejects(
+    () => send(op(), { text: "a", tweet_id: "5" }, session, { site: "cap", fetchImpl, minIntervalMs: 0 }),
+    /over 32 MiB/,
+  );
 });
 
 test("send against a local server: GET has no body, per-site pacing, timeout", async () => {
