@@ -49,13 +49,14 @@ jobs:
 
   python:
     # The Python client in python/: build it, install the wheel in a fresh venv and run the unit tests
-    # against it (a fake server on localhost; no Node, no network). 3.9 is the oldest supported.
+    # against it (a fake server on localhost; no Node, no network). Every minor pyproject allows from
+    # 3.9 up is tested: a typing or stdlib change between minors is not visible from one end only.
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     strategy:
       fail-fast: false
       matrix:
-        python: ["3.9", "3.13"]
+        python: ["3.9", "3.10", "3.11", "3.12", "3.13"]
     name: python (${{ matrix.python }})
     defaults:
       run:
