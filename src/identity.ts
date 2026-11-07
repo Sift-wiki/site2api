@@ -74,7 +74,9 @@ function readStored(): Stored {
   try {
     return readJson<Stored>(settingsFile(), {}) ?? {};
   } catch {
-    return {};
+    // The file exists but cannot be read or parsed. Fail closed: a user who chose local-only must not
+    // be sent back to the catalog because their settings.json became unreadable.
+    return { localOnly: true };
   }
 }
 
