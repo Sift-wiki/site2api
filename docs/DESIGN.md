@@ -1374,8 +1374,10 @@ block strings skipped: `query mutation { }` is a query), never with a param as t
 base64, the JSON root or a batch item: the caller would write the request), and never on a GraphQL
 request whose document a param fills; a `match` naming a host, path or operationName (the match is what a trigger run
 lets through as the op's own request); op and param names a letter then letters, digits, `_ . -`;
-regexes (`pick` `~`, `embedded`, param `pattern`) at most 200 characters with no quantified group
-inside a quantified group; at most 50 operations, descriptions and hints at most 500 characters,
+regexes (`pick` `~`, `embedded`, param `pattern`) at most 200 characters, with no quantified group
+inside a quantified group, no quantified group whose alternatives overlap (one a prefix of another,
+equal, or accepted by a sibling's class), and no two adjacent repeats whose atoms accept the same
+character (`.*.*`, `[0-9]*[0-9]*`); at most 50 operations, descriptions and hints at most 500 characters,
 notes at most 8 KB, the file at most 256 KB; a param's `enum` at most 100 values of at most 500
 characters each; at most 10 checks per op, each arg a param of the op and at most 500 characters, a
 purpose at most 500; no checks on a write (verify would send it); no `unproven` mark; no provider key
@@ -1401,7 +1403,8 @@ carry for anyone to read (Maps, Firebase, YouTube), so it is a question for the 
 **What the rules do not cover.** A read sent as GET or as a non-GraphQL POST can still change
 something; trigger steps can click what the page lets them before `readGuard` acts on the page's own
 unsafe requests, and page script at tier 2 and 3 sends what it likes with the browser's cookies; the
-regex rule catches the common catastrophic shapes and is no bound on run time (`(a|aa)+` passes);
+regex rule catches the common catastrophic shapes and is no bound on run time (a pair of bounded
+repeats, `[a-z]{1,200}[a-z]{1,200}`, passes);
 what a hostname resolves to is checked at tiers 1 and 2 only, and fetch (Node's or Chrome's) resolves it
 again when it connects, so a DNS answer that changes in between (rebinding) is not caught, and tier 3
 navigation is not checked at all; shared workers are not guarded (see Browser).
