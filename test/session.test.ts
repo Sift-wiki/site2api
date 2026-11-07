@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, statSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { mkdtempSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -15,6 +16,7 @@ import {
   safeName,
   saveSession,
   signInCookies,
+  tryLock,
 } from "../src/session.js";
 import type { StoredCookie } from "../src/types.js";
 
@@ -244,4 +246,35 @@ test("an operation's origins count as the site's own for its learn's write only,
   assert.deepEqual(loadSession("p").origins, ["https://private-value.test"]);
   mergeCapture("p", [c("lu", "rotated", "private-value.test")]);
   assert.deepEqual(loadSession("p").kinds, { "one/host": "setting" });
+});
+
+test("a lock is taken over only when its writer is gone, not when it is merely old", () => {
+  process.env.API_ANYTHING_HOME = mkdtempSync(join(tmpdir(), "api-anything-lock-"));
+  const file = join(home(), "lock-test.json");
+  const lock = `${file}.lock`;
+  let ran = 0;
+  const run = () => {
+    ran++;
+    return "ran";
+  };
+
+  // a live writer keeps its lock past the old 10 s cutoff: a save can wait 15 s on the key store
+  writeFileSync(lock, String(process.ppid));
+  const old = new Date(Date.now() - 15_000);
+  utimesSync(lock, old, old);
+  assert.equal(tryLock(file, run, 100), undefined, "a live writer's lock is not stolen");
+  assert.equal(ran, 0);
+
+  // its writer is gone: the lock is stale and the next caller takes it
+  const dead = spawnSync(process.execPath, ["-e", ""]).pid!;
+  writeFileSync(lock, String(dead));
+  utimesSync(lock, old, old);
+  assert.deepEqual(tryLock(file, run, 100), { value: "ran" });
+
+  // a lock still being written (no pid yet) is left alone for two seconds, then taken
+  writeFileSync(lock, "");
+  assert.equal(tryLock(file, run, 100), undefined, "a lock being written is left alone");
+  const stale = new Date(Date.now() - 3_000);
+  utimesSync(lock, stale, stale);
+  assert.deepEqual(tryLock(file, run, 100), { value: "ran" });
 });

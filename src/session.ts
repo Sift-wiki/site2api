@@ -1,9 +1,7 @@
 /** Per-site cookie jar and session values under ~/.api-anything (0700 dirs, 0600 files, sealed by seal.ts). */
 import {
   chmodSync,
-  closeSync,
   mkdirSync,
-  openSync,
   readdirSync,
   readFileSync,
   renameSync,
@@ -113,19 +111,33 @@ export const pause = (ms: number) => Atomics.wait(new Int32Array(new SharedArray
 /** Lock files this process holds: a nested lock of the same file runs inside the outer one. */
 const holding = new Set<string>();
 
+/** A lock whose writer is gone is `stale`; one with no readable pid is stale after two seconds. */
+function lockIsStale(lock: string): boolean {
+  try {
+    const age = Date.now() - statSync(lock).mtimeMs;
+    const pid = Number(readFileSync(lock, "utf8"));
+    if (!Number.isInteger(pid) || pid <= 0) return age > 2000; // being written
+    if (pid === process.pid) return false;
+    try {
+      process.kill(pid, 0);
+      return false;
+    } catch (e) {
+      return (e as NodeJS.ErrnoException).code === "ESRCH";
+    }
+  } catch {
+    return false; // released meanwhile
+  }
+}
+
 function acquire(lock: string, waitMs: number): boolean {
   const deadline = Date.now() + waitMs;
   for (;;) {
     try {
-      closeSync(openSync(lock, "wx", 0o600));
+      writeFileSync(lock, String(process.pid), { flag: "wx", mode: 0o600 });
       return true;
     } catch (e) {
       if ((e as NodeJS.ErrnoException).code !== "EEXIST") throw e;
-      try {
-        if (Date.now() - statSync(lock).mtimeMs > 10_000) rmSync(lock, { force: true });
-      } catch {
-        /* released meanwhile */
-      }
+      if (lockIsStale(lock)) rmSync(lock, { force: true });
       if (Date.now() > deadline) return false;
       pause(2);
     }
@@ -144,15 +156,16 @@ function held<T>(lock: string, fn: () => T): T {
 
 /**
  * Run fn holding an exclusive lock file next to `file`, so a read-modify-write in one process
- * never drops another process's update. A lock older than 10 s is a crashed holder's and is taken over.
+ * never drops another process's update. A lock is taken over only when its writer is gone.
  * Re-entrant within a process: fn may lock the same file again.
  */
 export function withLock<T>(file: string, fn: () => T): T {
   ensureDir(dirname(file));
   const lock = `${file}.lock`;
   if (holding.has(lock)) return fn();
-  // ponytail: after 10 s of contention go ahead unlocked rather than hang a call
-  return acquire(lock, 10_000) ? held(lock, fn) : fn();
+  // Longer than the key store's own 15 s wait (seal.ts), because a save can block in writeSealed
+  // while it holds this lock; a shorter wait would give up beside a live writer.
+  return acquire(lock, 20_000) ? held(lock, fn) : fn();
 }
 
 /** `withLock` that gives up after `waitMs` instead of going ahead unlocked: undefined when it did not run. */
