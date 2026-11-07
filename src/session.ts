@@ -93,6 +93,14 @@ export function writePrivate(file: string, text: string): void {
   renameSync(tmp, file);
 }
 
+/**
+ * The error for a file that is not JSON. The parser's own message can quote the text it failed on,
+ * and a session file's text holds live values, so only the path is named.
+ */
+export function corruptFile(file: string): Error {
+  return new Error(`${file} is corrupt (not valid JSON); fix or delete it`);
+}
+
 export function readJson<T>(file: string, fallback: T): T {
   let text: string;
   try {
@@ -103,8 +111,8 @@ export function readJson<T>(file: string, fallback: T): T {
   }
   try {
     return JSON.parse(text) as T;
-  } catch (e) {
-    throw new Error(`${file} is corrupt (${(e as Error).message}); fix or delete it`);
+  } catch {
+    throw corruptFile(file);
   }
 }
 

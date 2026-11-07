@@ -23,7 +23,7 @@ import {
 } from "node:fs";
 import { tmpdir, userInfo } from "node:os";
 import { delimiter, dirname, join } from "node:path";
-import { ensureDir, home, pause, pruneCaptures, readJson, tryLock, writePrivate } from "./session.js";
+import { corruptFile, ensureDir, home, pause, pruneCaptures, readJson, tryLock, writePrivate } from "./session.js";
 
 /** The version marker inside a sealed file's envelope; a later format gets another number. */
 export const SEALED = "api-anything/1";
@@ -552,8 +552,8 @@ function plainValue<T>(text: string, file: string, next: string): T {
   let v: unknown;
   try {
     v = JSON.parse(text);
-  } catch (e) {
-    throw new Error(`${file} is corrupt (${(e as Error).message}); fix or delete it`);
+  } catch {
+    throw corruptFile(file);
   }
   if (v && typeof v === "object" && "sealed" in v)
     throw new SealError(
@@ -579,8 +579,8 @@ export function readSealed<T>(file: string, fallback: T, label: string, next: st
   const inner = open(text, file, label, next);
   try {
     return JSON.parse(inner) as T;
-  } catch (e) {
-    throw new Error(`${file} is corrupt (${(e as Error).message}); fix or delete it`);
+  } catch {
+    throw corruptFile(file);
   }
 }
 

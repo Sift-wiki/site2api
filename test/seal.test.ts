@@ -584,6 +584,17 @@ test("a downgrade to 0.3.2 refuses a sealed session loudly instead of reading it
   assert.deepEqual(loadSession032(join(home, "json-envelope.json")).cookies, []);
 });
 
+test("a corrupt file's error names the file, not the text it holds", () => {
+  setKeyStore(null); // no key: the file is read as plaintext JSON
+  mkdirSync(join(home, "sessions"), { recursive: true });
+  writeFileSync(sessionFile("corrupt"), '{"cookies": SECRETVALUE}');
+  assert.throws(
+    () => loadSession("corrupt"),
+    (e: unknown) => e instanceof Error && /is corrupt/.test(e.message) && !/SECRETVALUE/.test(e.message),
+    "the parser's excerpt, which quotes the file, is not passed on",
+  );
+});
+
 test("a short GCM tag or a wrong-length IV is refused before decrypting", () => {
   setKeyStore(memoryStore());
   saveSession("site", { cookies: jar(), values: {} });
