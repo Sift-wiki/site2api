@@ -148,8 +148,9 @@ export const macosKeychain = (bin = "/usr/bin/security"): KeyStore => ({
 });
 
 /** stderr of a Secret Service client when no keyring daemon serves the bus: no store here, not a failure */
-const NO_SECRET_SERVICE =
-  /org\.freedesktop\.secrets was not provided|ServiceUnknown|autolaunch D-Bus|Could not connect/i;
+const NO_SECRET_SERVICE = /org\.freedesktop\.secrets was not provided|ServiceUnknown/i;
+/** stderr of a bus that exists but could not be reached: the store is there in principle, so this fails the write */
+const BUS_UNREACHABLE = /autolaunch D-Bus|Could not connect/i;
 
 /** The Secret Service through libsecret's `secret-tool`, when it is installed and a session bus answers. */
 export const secretTool = (): KeyStore => ({
@@ -166,6 +167,13 @@ export const secretTool = (): KeyStore => ({
     // a lookup that finds nothing exits 1 quietly; anything on stderr is a bus or keyring failure
     if (r.status === 1 && !r.stderr.trim()) return undefined;
     if (NO_SECRET_SERVICE.test(r.stderr)) throw new KeyUnavailable(`no Secret Service: ${r.stderr.trim()}`);
+    // A daemon that is down is not a machine without a store: fail the write rather than fall back to
+    // plaintext because a keyring was restarting.
+    if (BUS_UNREACHABLE.test(r.stderr))
+      throw new SealError(
+        `the Secret Service could not be reached: ${r.stderr.trim()}`,
+        "start the keyring daemon (or the D-Bus session bus), then retry; set API_ANYTHING_PLAINTEXT=1 to keep sessions unsealed instead",
+      );
     throw new Error(`secret-tool lookup: ${r.stderr.trim() || `exit ${r.status}`}`);
   },
   put(key) {

@@ -15,7 +15,7 @@ import {
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { delimiter, join } from "node:path";
 import { afterEach, beforeEach, test } from "node:test";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { promisify } from "node:util";
@@ -303,6 +303,44 @@ exit 1
   setKeyStore(store);
   assert.equal(loadSession("site").cookies[0]!.value, SECRET);
 });
+
+/* ------------------------------------------------------------ secret-tool failures */
+
+test(
+  "Secret Service: a service that is not provided means no store; a bus that cannot be reached is an error",
+  { skip: process.platform === "win32" ? "secret-tool is a shell script on this host" : false },
+  () => {
+    const dir = mkdtempSync(join(tmpdir(), "aa-secret-tool-"));
+    const bin = join(dir, "secret-tool");
+    const saved = { path: process.env.PATH, bus: process.env.DBUS_SESSION_BUS_ADDRESS };
+    process.env.PATH = `${dir}${delimiter}${saved.path ?? ""}`;
+    process.env.DBUS_SESSION_BUS_ADDRESS = "unix:path=/nonexistent";
+    try {
+      writeFileSync(bin, "#!/bin/sh\necho 'org.freedesktop.secrets was not provided' >&2\nexit 1\n");
+      chmodSync(bin, 0o755);
+      assert.throws(
+        () => secretTool().get(),
+        (e: unknown) => e instanceof KeyUnavailable,
+        "no keyring daemon for the bus at all: no store here",
+      );
+
+      writeFileSync(bin, "#!/bin/sh\necho 'Could not connect: Connection refused' >&2\nexit 1\n");
+      chmodSync(bin, 0o755);
+      assert.throws(
+        () => secretTool().get(),
+        (e: unknown) =>
+          e instanceof SealError && /could not be reached/.test(e.message) && /start the keyring daemon/.test(e.next),
+        "a daemon that is down fails the write instead of becoming a plaintext home",
+      );
+    } finally {
+      if (saved.path === undefined) delete process.env.PATH;
+      else process.env.PATH = saved.path;
+      if (saved.bus === undefined) delete process.env.DBUS_SESSION_BUS_ADDRESS;
+      else process.env.DBUS_SESSION_BUS_ADDRESS = saved.bus;
+      rmSync(dir, { recursive: true, force: true });
+    }
+  },
+);
 
 /* ------------------------------------------------------------ review fixes */
 
