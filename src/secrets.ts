@@ -5,7 +5,7 @@
  */
 import { type Leaf, type Step, walk } from "./codec.js";
 import type { Session } from "./session.js";
-import type { Request } from "./spec.js";
+import type { Request, Site } from "./spec.js";
 import type { CaptureResult, TriggerStep } from "./types.js";
 
 export const SESSION_HEADER =
@@ -49,6 +49,38 @@ export function literalCredentials(req: Request, pub: Set<string>): Leaf[] {
       !pub.has(leafName(l.at).toLowerCase()) &&
       isCredential(leafName(l.at), l.value),
   );
+}
+
+/**
+ * The borderline placements the scan knowingly lets through (docs/DESIGN.md "What the scan does not
+ * cover"): a per-session name holding a number or a value under six characters, and a plain value
+ * under a credential-like name. Report-only, for `--strict-scan`; none of these refuses a save.
+ */
+export function borderlineCredentials(spec: Pick<Site, "operations">): string[] {
+  const out: string[] = [];
+  const check = (req: Request, where: string) => {
+    for (const l of walk(req)) {
+      if (l.container) continue;
+      const name = leafName(l.at);
+      const value = l.value;
+      // a slot template is not a value the spec carries
+      if (!value || value.length > 200 || /[{}<>]/.test(value)) continue;
+      if (isCredential(name, value)) continue; // already an error, not a borderline case
+      if (!(SESSION_HEADER.test(name) || SESSION_FIELD.test(name) || credentialName(name))) continue;
+      const at = `${where} ${l.at.join(" > ")}`;
+      if (l.type === "number" || /^\d+$/.test(value))
+        out.push(`${at} holds a number under ${name}: a credential that is a number is not scanned`);
+      else if (value.length < 6)
+        out.push(`${at} holds ${value.length} characters under ${name}: shorter than the scan's 6-character floor`);
+      else if (credentialName(name) && value.length < 16 && !highEntropy(value) && !URLISH.test(value))
+        out.push(`${at} holds a plain-looking value under ${name}: the scan skips it, so check it is not a credential`);
+    }
+  };
+  for (const op of spec.operations) {
+    check(op.request, `op ${op.name} request`);
+    for (const slot of op.slots) if (slot.from) check(slot.from.request, `op ${op.name} lookup`);
+  }
+  return [...new Set(out)];
 }
 
 export const URLISH = /^[a-z][a-z0-9+.-]*:\/\//i;

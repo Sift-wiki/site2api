@@ -24,6 +24,7 @@ import { pickedShape } from "./classify.js";
 import { type Leaf, setAt, walk } from "./codec.js";
 import {
   besideOrigins,
+  borderlineCredentials,
   credentialsOf,
   ipIn,
   leafName,
@@ -700,7 +701,7 @@ export const unconfirmedWrite = (r: WriteRecord) =>
  */
 export function exportSite(
   name: string,
-  o: { keepExamples?: boolean } = {},
+  o: { keepExamples?: boolean; strict?: boolean } = {},
 ): { spec: Site; secrets: string[]; warnings: string[] } {
   const r = loadSite(name);
   if (!r) throw new Error(`no site "${name}"`);
@@ -773,6 +774,8 @@ export function exportSite(
   const own = [spec.baseUrl, ...spec.operations.flatMap(opUrls)];
   const scan = scanSecrets(spec, credentialsOf(besideOrigins(loadSession(name), own)), allowed);
   // one finding per place: the exact live hit already names it
+  const borderline = o.strict ? borderlineCredentials(spec) : [];
+  // one finding per place: the exact live hit already names it
   const more = named.filter(([p]) => !scan.secrets.some((s) => s.startsWith(`${p} `))).map(([, why]) => why);
-  return { spec, secrets: [...scan.secrets, ...more], warnings: [...scan.warnings, ...ips] };
+  return { spec, secrets: [...scan.secrets, ...more], warnings: [...scan.warnings, ...ips, ...borderline] };
 }
