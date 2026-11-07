@@ -59,3 +59,15 @@ test("at the edge, a search that recorded demand is not cached, so every network
     delete g.caches;
   }
 });
+
+test("searches are budgeted per network: past the hour's limit answers 429 with Retry-After", async () => {
+  const { env } = registry({ SEARCHES_PER_HOUR: "2" });
+  assert.equal((await search(env, "first", "198.51.100.20")).status, 200);
+  assert.equal((await search(env, "second", "198.51.100.20")).status, 200);
+  const over = await search(env, "third", "198.51.100.20");
+  assert.equal(over.status, 429, over.text);
+  assert.match(over.body.error, /2 searches an hour from this network/);
+  assert.ok(Number(over.headers.get("retry-after")) > 0);
+  // another network has its own budget
+  assert.equal((await search(env, "fourth", "203.0.113.21")).status, 200);
+});

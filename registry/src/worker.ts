@@ -203,6 +203,15 @@ async function spend(c: Ctx, kind: "upload" | "report", key: string, prefix: str
     throw tooMany(`the registry takes at most ${c.t.uploadsPerHourAll} uploads an hour; try later`, next, c.now);
 }
 
+/** Search is unauthenticated, so its budget is per network; every search counts, not only one that records demand. */
+async function spendSearch(c: Ctx, prefix: string) {
+  const hour = Math.floor(c.now / HOUR);
+  const next = (hour + 1) * HOUR;
+  const n = await count(c.env.DB, `net:${prefix}`, "search", hour, 1);
+  if (n > c.t.searchesPerHour)
+    throw tooMany(`over ${c.t.searchesPerHour} searches an hour from this network`, next, c.now);
+}
+
 /** A key first seen less than an hour ago uploads at most `newKeyUploads` versions. */
 async function newKeyLimit(c: Ctx, key: string) {
   const row = await getKey(c.env.DB, key);
@@ -244,6 +253,8 @@ async function searchApi(c: Ctx) {
   const q = c.url.searchParams.get("q")?.trim();
   if (!q) throw new HttpError(400, "search takes q: words, a domain or a URL");
   if (q.length > MAX_SEARCH_QUERY) throw new HttpError(400, `q is longer than ${MAX_SEARCH_QUERY} characters`);
+  const { network, prefix } = await networksOf(c.request, salt(c));
+  await spendSearch(c, prefix);
   const limit = Math.min(Math.max(Number(c.url.searchParams.get("limit")) || 5, 1), 20);
   const sites = await catalog(c.env.DB, await keyOf(c, false));
   const matches = await withInterfaces(c, search(sites, q, limit));
@@ -263,7 +274,6 @@ async function searchApi(c: Ctx) {
   // a site agents want and nobody shared: its domain, never the words of a search
   const domain = matches.length ? undefined : asked;
   if (domain) {
-    const { network } = await networksOf(c.request, salt(c));
     await wantDomain(c.env.DB, domain, network, new Date(c.now).toISOString());
     // not cached: the next network asking for it is counted too
     return json({ matches }, 200, { "cache-control": "no-store" });
