@@ -81,6 +81,7 @@ npm test        # unit + offline e2e (the browser parts skip when no Chromium br
 npm run build   # compile src to dist/ (npm install runs it too, through prepare)
 npm run demo -- 'agent memory'  # examples/research.mjs against Hacker News (live site)
 npm run smoke:pack  # pack, install the tarball in a temp dir, run its CLI and library (needs the npm registry)
+npm run ci:local    # the same sequence CI runs (lint, check, test, smoke:pack), one command
 ```
 
 CI runs `lint`, `check`, `test` with `REQUIRE_BROWSER=1` (a missing Chrome fails the run instead

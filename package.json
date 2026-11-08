@@ -45,6 +45,7 @@
     "format": "biome check --write .",
     "demo": "node examples/research.mjs",
     "smoke:pack": "node --import tsx test/smoke-pack.ts",
+    "ci:local": "npm run lint && npm run check && npm test && npm run smoke:pack",
     "prepublishOnly": "npm run check && npm run lint"
   },
   "keywords": [
