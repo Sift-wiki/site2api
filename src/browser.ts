@@ -8,6 +8,7 @@ import { basename, join } from "node:path";
 import { brotliDecompressSync, gunzipSync, inflateSync } from "node:zlib";
 import type { BrowserContext, Cookie, chromium, Dialog, Frame, Page, Request, Response, Route } from "playwright-core";
 import { botWall } from "./classify.js";
+import { MAX_BODY_BYTES } from "./http.js";
 import { SIGN_IN_AUTOCOMPLETE, SIGN_IN_REFUSAL } from "./secrets.js";
 import { home, siteOf, writePrivate } from "./session.js";
 import type { Request as Hop } from "./spec.js";
@@ -638,9 +639,14 @@ function requestBody(req: Request): string | undefined {
   const enc = (req.headers()["content-encoding"] ?? "").toLowerCase();
   const buf = enc ? req.postDataBuffer() : null;
   if (buf) {
+    const bound = { maxOutputLength: MAX_BODY_BYTES };
     try {
       return (
-        enc.includes("gzip") ? gunzipSync(buf) : enc.includes("br") ? brotliDecompressSync(buf) : inflateSync(buf)
+        enc.includes("gzip")
+          ? gunzipSync(buf, bound)
+          : enc.includes("br")
+            ? brotliDecompressSync(buf, bound)
+            : inflateSync(buf, bound)
       ).toString("utf8");
     } catch {
       /* not really encoded: fall through */
