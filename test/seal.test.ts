@@ -306,41 +306,53 @@ exit 1
 
 /* ------------------------------------------------------------ secret-tool failures */
 
-test(
-  "Secret Service: a service that is not provided means no store; a bus that cannot be reached is an error",
-  { skip: process.platform === "win32" ? "secret-tool is a shell script on this host" : false },
-  () => {
-    const dir = mkdtempSync(join(tmpdir(), "aa-secret-tool-"));
-    const bin = join(dir, "secret-tool");
-    const saved = { path: process.env.PATH, bus: process.env.DBUS_SESSION_BUS_ADDRESS };
-    process.env.PATH = `${dir}${delimiter}${saved.path ?? ""}`;
+test("Secret Service: no service on the bus, or no bus to autolaunch, means no store; a bus that refuses is an error", {
+  skip: process.platform === "win32" ? "the fake secret-tool is a shell script" : false,
+}, () => {
+  const dir = mkdtempSync(join(tmpdir(), "aa-secret-tool-"));
+  const fake = (stderr: string) => {
+    writeFileSync(join(dir, "secret-tool"), `#!/bin/sh\necho '${stderr}' >&2\nexit 1\n`);
+    chmodSync(join(dir, "secret-tool"), 0o755);
+  };
+  process.env.PATH = `${dir}${delimiter}${process.env.PATH ?? ""}`;
+  try {
     process.env.DBUS_SESSION_BUS_ADDRESS = "unix:path=/nonexistent";
-    try {
-      writeFileSync(bin, "#!/bin/sh\necho 'org.freedesktop.secrets was not provided' >&2\nexit 1\n");
-      chmodSync(bin, 0o755);
-      assert.throws(
-        () => secretTool().get(),
-        (e: unknown) => e instanceof KeyUnavailable,
-        "no keyring daemon for the bus at all: no store here",
-      );
+    fake("secret-tool: The name org.freedesktop.secrets was not provided by any .service files");
+    assert.throws(() => secretTool().get(), KeyUnavailable, "no keyring daemon on the bus: no store here");
 
-      writeFileSync(bin, "#!/bin/sh\necho 'Could not connect: Connection refused' >&2\nexit 1\n");
-      chmodSync(bin, 0o755);
-      assert.throws(
-        () => secretTool().get(),
-        (e: unknown) =>
-          e instanceof SealError && /could not be reached/.test(e.message) && /start the keyring daemon/.test(e.next),
-        "a daemon that is down fails the write instead of becoming a plaintext home",
-      );
-    } finally {
-      if (saved.path === undefined) delete process.env.PATH;
-      else process.env.PATH = saved.path;
-      if (saved.bus === undefined) delete process.env.DBUS_SESSION_BUS_ADDRESS;
-      else process.env.DBUS_SESSION_BUS_ADDRESS = saved.bus;
-      rmSync(dir, { recursive: true, force: true });
-    }
-  },
-);
+    // GLib could not find a bus at all, like the no-bus check before the lookup
+    process.env.DBUS_SESSION_BUS_ADDRESS = "autolaunch:";
+    fake("secret-tool: Cannot autolaunch D-Bus without X11 $DISPLAY");
+    assert.throws(() => secretTool().get(), KeyUnavailable, "no bus to autolaunch: no store here");
+
+    process.env.DBUS_SESSION_BUS_ADDRESS = "unix:path=/nonexistent";
+    fake("secret-tool: Could not connect: Connection refused");
+    assert.throws(
+      () => secretTool().get(),
+      (e: unknown) =>
+        e instanceof SealError &&
+        /could not be reached/.test(e.message) &&
+        /start the D-Bus session bus/.test(e.next) &&
+        /API_ANYTHING_KEY/.test(e.next) &&
+        !/API_ANYTHING_PLAINTEXT/.test(e.next),
+      "a bus that is set but down fails the write instead of becoming a plaintext home",
+    );
+
+    // a never-sealed home: the refused save writes nothing, plaintext or sealed
+    setKeyStore(secretTool());
+    const told: string[] = [];
+    onPlaintext((why) => told.push(why));
+    assert.throws(
+      () => saveSession("site", { cookies: jar(), values: {} }),
+      (e: unknown) => e instanceof SealError && /could not be reached/.test(e.message),
+    );
+    assert.ok(!existsSync(sessionFile("site")), "no plaintext session file");
+    assert.ok(!existsSync(join(home, "sealed.json")));
+    assert.deepEqual(told, []);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
 
 /* ------------------------------------------------------------ review fixes */
 

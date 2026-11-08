@@ -480,7 +480,8 @@ not overwrite your sealed sessions (it cannot use them either).
 On a machine with no key store at all, a home that has never sealed a file keeps 0600 plaintext JSON
 as before: the CLI says so once on stderr, and `status` lists a `plaintext` problem for each such
 session. Set `API_ANYTHING_PLAINTEXT=1` if that is your choice, to silence both. Any other key problem
-is an error and nothing is written in plaintext: a locked or failing key store, any error with
+is an error and nothing is written in plaintext: a locked or failing key store (on Linux, a session
+bus that is set but refuses the connection counts as failing, not missing), any error with
 `API_ANYTHING_KEY` set, or a missing key store in a home that has sealed files. The error's `next`
 says what to fix; the next command asks the key store again. Files written before sealing still
 read, and are sealed in place the first time a key is available; one that cannot be sealed yet (busy

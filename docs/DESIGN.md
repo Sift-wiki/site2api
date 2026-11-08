@@ -1815,10 +1815,11 @@ behind the Keychain; storing them less protected than the browser did would undo
     stored item after a hash of the home: one key per user keeps a moved or copied home readable.
 - **Fail closed.** Plaintext is written in one case only: this home has never sealed a file, and
   the key store is not here at all (`KeyUnavailable`: no `security`, `secret-tool` or PowerShell
-  binary, no session bus, no Secret Service on the bus, an unsupported OS). Every other key error is a
-  `SealError` with a `next`, and nothing is written: a store that exists and fails (a locked
-  keychain, a timeout), any error with `API_ANYTHING_KEY` set, and a missing store in a home that has
-  sealed. A home has sealed once `sealed.json` exists (written before the first sealed file) or any
+  binary, no session bus, a bus GLib cannot autolaunch for want of an X11 `$DISPLAY`, no Secret
+  Service on the bus, an unsupported OS). Every other key error is a `SealError` with a `next`, and
+  nothing is written: a store that exists and fails (a locked keychain, a timeout, a session bus
+  address whose socket refuses the connection or is gone), any error with `API_ANYTHING_KEY` set, and
+  a missing store in a home that has sealed. A home has sealed once `sealed.json` exists (written before the first sealed file) or any
   session or capture file is sealed; there, not even `API_ANYTHING_PLAINTEXT=1` writes plaintext.
   Failures are never cached, so the next operation asks the store again; a key, and a store found
   missing, are cached for the process.
