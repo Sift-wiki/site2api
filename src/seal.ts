@@ -297,12 +297,16 @@ function sealedKeys(): string[] {
   return keys;
 }
 
-/** A lock whose holder writes its pid: taken over only when that process is gone, or after `KEY_LOCK_MS`. */
+/**
+ * A lock whose holder writes its pid: taken over only when that process is gone. A live holder keeps
+ * it however long it holds it — making the key can wait on a keychain or Secret Service prompt for
+ * minutes — so age alone never takes a lock from a running process; a lock whose pid cannot be read
+ * (a partial write) is taken after two seconds.
+ */
 function staleLock(lock: string): string | undefined {
   try {
     const text = readFileSync(lock, "utf8");
     const age = Date.now() - statSync(lock).mtimeMs;
-    if (age > KEY_LOCK_MS) return text;
     const pid = Number(text);
     if (!Number.isInteger(pid) || pid <= 0) return age > 2000 ? text : undefined; // being written
     if (pid === process.pid) return undefined;

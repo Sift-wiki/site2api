@@ -397,7 +397,8 @@ test("fail closed: once a home has sealed, a missing key store refuses writes (m
 test("key creation: the lock is not taken from a live holder, however old, and is taken from a dead one", () => {
   const file = join(home, "data-key");
   writeFileSync(`${file}.lock`, String(process.ppid));
-  const old = new Date(Date.now() - 30_000);
+  // older than KEY_LOCK_MS (120 s): a keychain or Secret Service prompt can outlast the cutoff
+  const old = new Date(Date.now() - 121_000);
   utimesSync(`${file}.lock`, old, old);
   let ran = false;
   assert.throws(
@@ -411,7 +412,7 @@ test("key creation: the lock is not taken from a live holder, however old, and i
       ),
     (e: unknown) => e instanceof SealError && /held/.test(e.message),
   );
-  assert.equal(ran, false, "a 30 s old lock of a live process is still its own");
+  assert.equal(ran, false, "an over-two-minute-old lock of a live process is still its own");
 
   const dead = spawnSync(process.execPath, ["-e", ""]).pid!;
   writeFileSync(`${file}.lock`, String(dead));
@@ -420,6 +421,25 @@ test("key creation: the lock is not taken from a live holder, however old, and i
     "ran",
   );
   assert.ok(!existsSync(`${file}.lock`));
+});
+
+test("key creation: a lock with no readable pid is taken once it is two seconds old", () => {
+  const file = join(home, "data-key-partial");
+  writeFileSync(`${file}.lock`, ""); // a holder caught between open and write
+  const recent = new Date(Date.now() - 500);
+  utimesSync(`${file}.lock`, recent, recent);
+  assert.throws(
+    () => keyLock(file, () => "ran", 100),
+    (e: unknown) => e instanceof SealError && /held/.test(e.message),
+    "a lock being written right now is left alone",
+  );
+  const old = new Date(Date.now() - 3_000);
+  utimesSync(`${file}.lock`, old, old);
+  assert.equal(
+    keyLock(file, () => "ran", 300),
+    "ran",
+    "a lock that never got a pid is taken after two seconds",
+  );
 });
 
 test("key creation: a store shared by every home locks per user, not per home", () => {
