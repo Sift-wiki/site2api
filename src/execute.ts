@@ -49,6 +49,7 @@ import {
   withDefaults,
 } from "./http.js";
 import { loadSettings, localOnly, localOnlyOff } from "./identity.js";
+import { LockBusy } from "./lock.js";
 import { derive, LookupFailed, sendDerived } from "./lookup.js";
 import { projectView, type ResultCursor, type ResultView, resultView, viewProblem } from "./results.js";
 import { SealError } from "./seal.js";
@@ -761,6 +762,8 @@ async function tryTier(ctx: Ctx, op: Operation, tier: Tier): Promise<Attempt> {
     if (e instanceof LookupFailed) return { tier, ...e.judged, unsent: true };
     // nothing was sent when the browser could not start
     if (e instanceof ProfileInUse) return { tier, class: "error", reason: e.message, hint: PROFILE_HINT, unsent: true };
+    // the send slot's lock stayed busy (reserveSend): nothing was sent, and a retry may get it
+    if (e instanceof LockBusy) return { tier, class: "error", reason: e.message, hint: e.next, unsent: true };
     // someone else's spec names an address on this machine or the local network: nothing was sent, and no tier sends it
     if (e instanceof AddressRefused)
       return {
@@ -1539,6 +1542,16 @@ async function run(
     try {
       gate = beginWrite(siteName, op.name, args, { again: opts.again, idempotencyKey: opts.idempotencyKey });
     } catch (e) {
+      // Another process holds the ledger, maybe recording this same write: never sent past it, even with again.
+      if (e instanceof LockBusy)
+        return done({
+          ok: false,
+          class: "error",
+          reason: `the write was not sent: ${e.message}`,
+          next: e.next,
+          nextCall: { action: "retry" },
+          retry: "safe",
+        });
       // Without a record a repeat cannot be caught: only a caller that already said "send it again" goes on.
       if (!opts.again)
         return done({

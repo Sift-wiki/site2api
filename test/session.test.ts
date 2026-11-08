@@ -1,8 +1,9 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, statSync } from "node:fs";
+import { mkdtempSync, readdirSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { test } from "node:test";
+import { LockBusy, lockPath } from "../src/lock.js";
 import {
   cookieHeaderFor,
   cookieValue,
@@ -15,8 +16,12 @@ import {
   safeName,
   saveSession,
   signInCookies,
+  tryLock,
+  withLock,
 } from "../src/session.js";
+import { openReadWrite } from "../src/sqlite.js";
 import type { StoredCookie } from "../src/types.js";
+import { holdInChild, kill, killLater } from "./fixture/locks.js";
 
 const X = "https://x.com/i/api/graphql/ID/UserByScreenName";
 const c = (name: string, value: string, domain: string, extra: Partial<StoredCookie> = {}): StoredCookie => ({
@@ -244,4 +249,84 @@ test("an operation's origins count as the site's own for its learn's write only,
   assert.deepEqual(loadSession("p").origins, ["https://private-value.test"]);
   mergeCapture("p", [c("lu", "rotated", "private-value.test")]);
   assert.deepEqual(loadSession("p").kinds, { "one/host": "setting" });
+});
+
+test("withLock: another live process's lock blocks it, it throws LockBusy without running fn, and the holder's death frees it at once", async () => {
+  const file = join(mkdtempSync(join(tmpdir(), "aa-lock-")), "state.json");
+  const child = await holdInChild(file);
+  try {
+    let ran = false;
+    assert.throws(
+      () =>
+        withLock(
+          file,
+          () => {
+            ran = true;
+          },
+          200,
+        ),
+      (e: unknown) => e instanceof LockBusy && e.message.includes(file) && /^retry/.test(e.next),
+    );
+    assert.equal(ran, false, "no unlocked fallback");
+    assert.equal(
+      tryLock(file, () => "ran", 100),
+      undefined,
+    );
+  } finally {
+    await kill(child);
+  }
+  assert.deepEqual(
+    tryLock(file, () => "ran", 0),
+    { value: "ran" },
+    "a killed holder's lock is free with no wait: no age, no pid",
+  );
+  // a lock file only, 0600, and no journal beside it
+  assert.deepEqual(readdirSync(dirname(file)), [basename(lockPath(file))]);
+  assert.equal(statSync(lockPath(file)).mode & 0o777, 0o600);
+});
+
+test("withLock: a waiter gets the lock the moment its holder is killed", async () => {
+  const file = join(mkdtempSync(join(tmpdir(), "aa-lock-")), "pace.json");
+  const child = await holdInChild(file);
+  const killer = killLater(child.pid!, 300);
+  const t = Date.now();
+  try {
+    assert.equal(
+      withLock(file, () => "ran", 10_000),
+      "ran",
+    );
+    assert.ok(Date.now() - t < 5000, `${Date.now() - t} ms`);
+  } finally {
+    await kill(child);
+    killer.kill();
+  }
+});
+
+test("withLock: re-entrant in one process, released when fn throws, and connections in one process exclude each other", async () => {
+  const file = join(mkdtempSync(join(tmpdir(), "aa-lock-")), "writes.json");
+  assert.equal(
+    withLock(file, () => withLock(file, () => tryLock(file, () => "inner", 0)?.value)),
+    "inner",
+  );
+  assert.throws(() =>
+    withLock(file, () => {
+      throw new Error("boom");
+    }),
+  );
+  // a lock left held by the throw would make this connection busy
+  assert.deepEqual(
+    tryLock(file, () => 1, 0),
+    { value: 1 },
+  );
+  const a = openReadWrite(lockPath(file));
+  const b = openReadWrite(lockPath(file));
+  try {
+    a.exec("BEGIN EXCLUSIVE");
+    assert.throws(() => b.exec("BEGIN EXCLUSIVE"), /database is locked/);
+  } finally {
+    a.close();
+    b.close();
+  }
+  // and another process can take it once this one let go
+  await kill(await holdInChild(file));
 });

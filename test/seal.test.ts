@@ -1,6 +1,6 @@
 /** Sealing of session and capture files: the key store, the envelope, migration and the no-key fallback. */
 import assert from "node:assert/strict";
-import { execFile, spawn, spawnSync } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import {
   chmodSync,
   existsSync,
@@ -41,6 +41,7 @@ import { CAPTURE_TTL_MS, loadSession, mergeCapture, saveSession, sessionFile } f
 import { loadSnapshot, saveSnapshot } from "../src/snapshots.js";
 import { status } from "../src/status.js";
 import type { StoredCookie } from "../src/types.js";
+import { holdInChild, kill, lockChild } from "./fixture/locks.js";
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const SECRET = "live-session-cookie-value-0123456789";
@@ -444,52 +445,42 @@ test("fail closed: once a home has sealed, a missing key store refuses writes (m
   }
 });
 
-test("key creation: the lock is not taken from a live holder, however old, and is taken from a dead one", () => {
+test("key creation: another live process's key lock makes keyLock throw its SealError on timeout, without running fn; killing it frees the lock at once", async () => {
   const file = join(home, "data-key");
-  writeFileSync(`${file}.lock`, String(process.ppid));
-  // older than KEY_LOCK_MS (120 s): a keychain or Secret Service prompt can outlast the cutoff
-  const old = new Date(Date.now() - 121_000);
-  utimesSync(`${file}.lock`, old, old);
+  const child = await holdInChild(file);
   let ran = false;
-  assert.throws(
-    () =>
-      keyLock(
-        file,
-        () => {
-          ran = true;
-        },
-        300,
-      ),
-    (e: unknown) => e instanceof SealError && /held/.test(e.message),
-  );
-  assert.equal(ran, false, "an over-two-minute-old lock of a live process is still its own");
-
-  const dead = spawnSync(process.execPath, ["-e", ""]).pid!;
-  writeFileSync(`${file}.lock`, String(dead));
+  try {
+    assert.throws(
+      () =>
+        keyLock(
+          file,
+          () => {
+            ran = true;
+          },
+          300,
+        ),
+      (e: unknown) => e instanceof SealError && /held/.test(e.message) && /^retry/.test(e.next),
+    );
+  } finally {
+    await kill(child);
+  }
+  assert.equal(ran, false);
   assert.equal(
-    keyLock(file, () => "ran", 300),
+    keyLock(file, () => "ran", 0),
     "ran",
   );
-  assert.ok(!existsSync(`${file}.lock`));
 });
 
-test("key creation: a lock with no readable pid is taken once it is two seconds old", () => {
-  const file = join(home, "data-key-partial");
-  writeFileSync(`${file}.lock`, ""); // a holder caught between open and write
-  const recent = new Date(Date.now() - 500);
-  utimesSync(`${file}.lock`, recent, recent);
-  assert.throws(
-    () => keyLock(file, () => "ran", 100),
-    (e: unknown) => e instanceof SealError && /held/.test(e.message),
-    "a lock being written right now is left alone",
+test("key creation: processes racing on the key lock never both run fn", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "aa-keylock-"));
+  const [file, log, go] = [join(dir, "user", "data-key"), join(dir, "log"), join(dir, "go")];
+  const runs = [lockChild("race", file, log, go), lockChild("race", file, log, go)].map(
+    (p) => new Promise((resolve, reject) => p.on("exit", (code) => (code === 0 ? resolve(code) : reject(code)))),
   );
-  const old = new Date(Date.now() - 3_000);
-  utimesSync(`${file}.lock`, old, old);
-  assert.equal(
-    keyLock(file, () => "ran", 300),
-    "ran",
-    "a lock that never got a pid is taken after two seconds",
-  );
+  await new Promise((r) => setTimeout(r, 1000)); // both are up and waiting
+  writeFileSync(go, "");
+  await Promise.all(runs);
+  assert.equal(readFileSync(log, "utf8"), "+-".repeat(6), "each entry is followed by its exit before the next");
 });
 
 test("key creation: a store shared by every home locks per user, not per home", () => {
@@ -566,21 +557,23 @@ test("key creation: the key used is the one the store returns after the put", ()
   assert.equal(loadSession("site").cookies[0]!.value, SECRET);
 });
 
-test("migration seals a session under its writers' lock: a busy one is left, reported, and sealed by a later run", () => {
+test("migration seals a session under its writers' lock: a busy one is left, reported, and sealed by a later run", async () => {
   mkdirSync(join(home, "sessions"), { recursive: true });
   writeFileSync(sessionFile("busy"), JSON.stringify({ cookies: jar(), values: {} }));
-  writeFileSync(`${sessionFile("busy")}.lock`, ""); // another process is mid-update
+  const other = await holdInChild(sessionFile("busy")); // another process is mid-update
   const store = memoryStore();
   setKeyStore(store);
-  saveSession("other", { cookies: [], values: {} });
-  assert.ok(readFileSync(sessionFile("busy"), "utf8").includes(SECRET), "not written over under another's lock");
-  assert.notEqual(marker().migrated, true, "not recorded as done with a file left");
-  assert.deepEqual(
-    plaintextProblems().map((p) => p.site),
-    ["busy"],
-  );
-
-  rmSync(`${sessionFile("busy")}.lock`);
+  try {
+    saveSession("other", { cookies: [], values: {} });
+    assert.ok(readFileSync(sessionFile("busy"), "utf8").includes(SECRET), "not written over under another's lock");
+    assert.notEqual(marker().migrated, true, "not recorded as done with a file left");
+    assert.deepEqual(
+      plaintextProblems().map((p) => p.site),
+      ["busy"],
+    );
+  } finally {
+    await kill(other);
+  }
   // the same process (a long-lived MCP server) retries on the next status, with the key it has cached
   assert.deepEqual(plaintextProblems(), []);
   assert.ok(isSealedText(readFileSync(sessionFile("busy"), "utf8")));

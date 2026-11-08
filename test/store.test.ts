@@ -4,8 +4,9 @@ import { mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync } from "n
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
+import { LockBusy } from "../src/lock.js";
 import { OMITTED } from "../src/secrets.js";
-import { saveSession } from "../src/session.js";
+import { lockWait, saveSession } from "../src/session.js";
 import type { Site } from "../src/spec.js";
 import {
   appendHeal,
@@ -27,6 +28,7 @@ import {
   staleList,
   staleMark,
 } from "../src/store.js";
+import { holdInChild, kill } from "./fixture/locks.js";
 
 const site = (description: string): Site => ({
   name: "demo",
@@ -360,4 +362,26 @@ test("cool-downs: one per site, until it runs out or a login clears it; the wait
   assert.equal(cooling("demo", now)?.status, 451);
   clearCoolDown("demo");
   assert.equal(cooling("demo", now), undefined);
+});
+
+test("send slots and the write ledger: a lock another process keeps throws LockBusy, reserving and recording nothing", async () => {
+  const { home } = fresh();
+  lockWait.ms = 200;
+  try {
+    const pace = await holdInChild(join(home, "pace.json"));
+    try {
+      assert.throws(() => reserveSend("a", 1000, 0), LockBusy, "no process-local slot in its place");
+    } finally {
+      await kill(pace);
+    }
+    const ledger = await holdInChild(join(home, "writes.json"));
+    try {
+      assert.throws(() => beginWrite("x", "vote", { id: 7 }), LockBusy);
+    } finally {
+      await kill(ledger);
+    }
+    assert.equal(beginWrite("x", "vote", { id: 7 }).send, true, "nothing was recorded by the refused one");
+  } finally {
+    lockWait.ms = 30_000;
+  }
 });

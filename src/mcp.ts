@@ -22,6 +22,7 @@ import { returnedFields } from "./extract.js";
 import { localOnlyOff } from "./identity.js";
 import { type Job, Jobs, type Permits } from "./jobs.js";
 import { prepareLink } from "./links.js";
+import { LockBusy } from "./lock.js";
 import {
   browserSource,
   cookieNames,
@@ -393,7 +394,7 @@ async function guard(fn: () => Promise<Reply>): Promise<Reply> {
         ok: false,
         error: msg,
         next:
-          e instanceof SealError
+          e instanceof SealError || e instanceof LockBusy
             ? mcpNext(e.next)
             : /invalid site name|no site/.test(msg)
               ? "list_sites"
@@ -1110,7 +1111,7 @@ async function importLogin(t: ReturnType<typeof resolveLoginTarget>): Promise<Re
         ok: false,
         site: t.site,
         error: (e as Error).message,
-        next: `ask the user to run: api-anything login ${t.site}`,
+        next: e instanceof LockBusy ? e.next : `ask the user to run: api-anything login ${t.site}`,
       },
       true,
     );

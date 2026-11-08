@@ -923,8 +923,17 @@ time comes off it (a value's start right after another's).
 The classifier cuts the quote without the session; redacting after the cut and dropping a cut
 value's prefix gives the same result without passing the session to it. A value that is an origin
 is left. `data` is the answer the user asked for and is not redacted. The jar, `state.json` and a
-spec (every add and heal, re-read under the lock) are read-modify-written under a lock file, so
-concurrent processes and calls lose nothing.
+spec (every add and heal, re-read under the lock) are read-modify-written under a lock, so
+concurrent processes and calls lose nothing. The lock (`lock.ts`) is an SQLite file beside the one it
+guards (`<file>.lk`), held by an exclusive transaction that writes nothing: the OS (fcntl, LockFileEx)
+releases it when its holder dies, so nothing guesses whether a holder is alive (no pid, no age) and
+nothing takes a lock over. A lock file is never removed, since a process waiting on a removed file
+would hold a lock nobody else checks; each is empty. A waiter gives up after 30 s with `LockBusy` (a
+retryable error with a `next`) and never goes ahead unlocked: a write is not sent, a send slot is not
+taken, a baseline is not kept, a login is not reported done. Callers whose file is a hint (`state.json`,
+the call log) carry on without it, as for a home that cannot be written. Within a process the lock is
+re-entrant. The `.lock` files of 0.4 and earlier are neither used nor removed: an older process running
+beside a newer one does not exclude it.
 
 **Call log.** Every finished call (a write's readback is part of its call, not one of its own)
 appends one line to `~/.api-anything/calls.jsonl`: `{at, site, op, class, tier, ms, healed?,
@@ -1810,12 +1819,11 @@ behind the Keychain; storing them less protected than the browser did would undo
     in-memory one, and a process under `node:test` (`NODE_TEST_CONTEXT`) never reaches an OS store.
   - **Creating the key** is first-writer-wins, since `secret-tool store` and DPAPI's file replace a
     key that is there. A process that finds no key takes the key lock, looks the key up again, and
-    only then puts a new one; it then uses what the store reads back. The lock is not `withLock`
-    (which expires at 10 s and then goes ahead unlocked, while one store subprocess may take 15 s): its
-    file holds the holder's pid, it is taken over only when that process is gone or after 120 s (three
-    store calls of up to 15 s, plus margin), and a waiter that times out fails instead of going ahead.
+    only then puts a new one; it then uses what the store reads back. The lock is `withLock`'s OS lock
+    (below), held however long its holder takes, with a longer wait: 120 s (three store calls of up to
+    15 s, and a prompt answered), after which a waiter fails with a `SealError` instead of going ahead.
     The Keychain and the Secret Service are shared by every home of the user, so their lock is per
-    user (`$XDG_RUNTIME_DIR` or the per-user temporary directory, `api-anything-<uid>/data-key.lock`),
+    user (`$XDG_RUNTIME_DIR` or the per-user temporary directory, `api-anything-<uid>/data-key.lk`),
     not per home; DPAPI's blob lives in the home, so its lock does too. This was chosen over naming the
     stored item after a hash of the home: one key per user keeps a moved or copied home readable.
 - **Fail closed.** Plaintext is written in one case only: this home has never sealed a file, and

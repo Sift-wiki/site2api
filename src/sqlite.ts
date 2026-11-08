@@ -4,8 +4,8 @@ import type { DatabaseSync } from "node:sqlite";
 
 let sqlite: typeof import("node:sqlite") | undefined;
 
-/** Open a database read-only. A static import of node:sqlite would warn before any filter could run. */
-export function openReadOnly(file: string): DatabaseSync {
+/** A static import of node:sqlite would warn before any filter could run. */
+function load(): typeof import("node:sqlite") {
   if (!sqlite) {
     const emit = process.emitWarning;
     process.emitWarning = ((warning: string | Error, ...rest: unknown[]) => {
@@ -18,5 +18,15 @@ export function openReadOnly(file: string): DatabaseSync {
       process.emitWarning = emit;
     }
   }
-  return new sqlite.DatabaseSync(file, { readOnly: true });
+  return sqlite;
+}
+
+/** Open a database read-only. */
+export function openReadOnly(file: string): DatabaseSync {
+  return new (load().DatabaseSync)(file, { readOnly: true });
+}
+
+/** Open a database read-write, creating it when missing. */
+export function openReadWrite(file: string): DatabaseSync {
+  return new (load().DatabaseSync)(file);
 }

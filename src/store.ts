@@ -22,6 +22,7 @@ import { fileURLToPath } from "node:url";
 import { BudgetSpent, HOUR_MS, limited, overBudget, type Pace, type SendBudget } from "./budget.js";
 import { pickedShape } from "./classify.js";
 import { type Leaf, setAt, walk } from "./codec.js";
+import { LockBusy } from "./lock.js";
 import {
   besideOrigins,
   credentialsOf,
@@ -371,7 +372,8 @@ const record = (v: unknown): Record<string, unknown> =>
  * nothing) and counts the send when the budget caps the hour, so two callers can never both take the
  * last request of an hour. The slots are kept in pace.json and the counts in sends.json, both under
  * pace.json's lock, so separate processes (a CLI loop, agents in parallel) queue up too; a home that
- * cannot be written paces and counts this process only.
+ * cannot be written paces and counts this process only. A lock another process kept for the whole
+ * wait throws `LockBusy`, reserving nothing: counting this process alone there would let both send.
  */
 export function reserveSend(site: string, intervalMs: number, now = Date.now(), budget?: SendBudget): number {
   const gap = Math.round(intervalMs * (1 - PACE_JITTER + Math.random() * 2 * PACE_JITTER));
@@ -413,7 +415,7 @@ export function reserveSend(site: string, intervalMs: number, now = Date.now(), 
       return at;
     });
   } catch (e) {
-    if (e instanceof BudgetSpent) throw e;
+    if (e instanceof BudgetSpent || e instanceof LockBusy) throw e;
     const at = take(ownSlots.get(site) ?? 0, lastHour(ownSends.get(site), now));
     ownSlots.set(site, at + gap);
     if (counts) ownSends.set(site, [...lastHour(ownSends.get(site), now), at].slice(-MAX_PER_HOUR));
