@@ -3,11 +3,11 @@
  * process holds. node:test module mocks need --experimental-test-module-mocks; execute.test.ts launches it.
  */
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, mock, test } from "node:test";
-import type { CaptureResult, StoredCookie } from "../../src/types.js";
+import type { CaptureResult, Exchange, StoredCookie } from "../../src/types.js";
 
 const HOME = mkdtempSync(join(tmpdir(), "api-anything-tier3-lock-"));
 process.env.API_ANYTHING_HOME = HOME;
@@ -18,6 +18,8 @@ let runs = 0;
 let afterSend: "answer" | "busy" = "answer";
 /** what the site answers the write, and the cookies the run ends with */
 let page: { status: number; body: string; cookies: StoredCookie[] } = { status: 200, body: '{"id":1}', cookies: [] };
+/** another request the page fires during the run, stopped in the browser */
+let companion: string | undefined;
 const { LockBusy } = await import("../../src/lock.js");
 const browser = await import("../../src/browser.js");
 mock.module(new URL("../../src/browser.ts", import.meta.url).href, {
@@ -25,13 +27,25 @@ mock.module(new URL("../../src/browser.ts", import.meta.url).href, {
     ...browser,
     browserAvailable: () => true,
     closeBrowser: async () => {},
-    runTrigger: async (): Promise<CaptureResult> => {
+    runTrigger: async (o: { intercept?: (e: Exchange, acting: boolean) => boolean }): Promise<CaptureResult> => {
       runs++;
       if (afterSend === "busy") throw new LockBusy(join(HOME, "elsewhere.json"), 200);
       const request = { method: "POST", url: "http://127.0.0.1/api/create", headers: {}, body: "{}" };
       const response = { status: page.status, headers: {}, body: page.body, contentType: "application/json" };
+      const own: Exchange = { id: 1, resourceType: "fetch", request, response };
+      const others: Exchange[] = [];
+      if (companion) {
+        const other: Exchange = {
+          id: 2,
+          resourceType: "fetch",
+          request: { method: "POST", url: companion, headers: {}, body: "{}" },
+        };
+        assert.equal(o.intercept?.(own, true), false, "the write itself is sent");
+        assert.equal(o.intercept?.(other, true), true, "the companion write is stopped");
+        others.push({ ...other, aborted: true });
+      }
       return {
-        exchanges: [{ id: 1, resourceType: "fetch", request, response }],
+        exchanges: [own, ...others],
         cookies: page.cookies,
         finalUrl: "http://127.0.0.1/compose",
       };
@@ -67,6 +81,7 @@ const reset = () => {
   runs = 0;
   afterSend = "answer";
   page = { status: 200, body: '{"id":1}', cookies: [] };
+  companion = undefined;
   create();
 };
 
@@ -197,4 +212,26 @@ test("a tier-3 write's session that could not be saved: loadSession returns exac
   assert.deepEqual(onDisk(), file, "the file is untouched");
   assert.deepEqual(loadSession("fixture"), before, "nothing of the unsaved capture is laid over the file");
   assert.deepEqual(loadSession("fixture").cookies, file.cookies);
+});
+
+test("a tier-3 write's session that could not be saved: a captured cookie in a stopped request's path never reaches the result", async () => {
+  reset();
+  saveSession("fixture", { cookies: [{ ...rotated, value: "old-session-value-1b2c3d4e5f60" }], values: {} });
+  page = { status: 200, body: '{"id":1}', cookies: [rotated] };
+  companion = `http://127.0.0.1/api/refresh/${ROTATED}`;
+  const r = await callHeld();
+  assert.equal(runs, 1);
+  assert.deepEqual([r.ok, r.write], [true, "accepted"], JSON.stringify(r));
+  assert.match(r.warning ?? "", /was not saved/);
+  assert.match(
+    r.reason ?? "",
+    /\/api\/refresh\//,
+    "the stopped request is noted, so redaction is what keeps the value out",
+  );
+  assert.ok(!JSON.stringify(r).includes(ROTATED), JSON.stringify(r));
+  for (const file of ["writes.json", "calls.jsonl"]) {
+    const kept = readFileSync(join(HOME, file), "utf8");
+    assert.match(kept, /"fixture"/, `${file} recorded the call`);
+    assert.ok(!kept.includes(ROTATED), file);
+  }
 });

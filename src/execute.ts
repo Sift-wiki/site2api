@@ -297,11 +297,12 @@ interface Ctx {
   unconfirmed?: boolean;
   /**
    * every cookie a tier-1 redirect chain set (one sent on the next hop can be rotated out before the call
-   * ends) or a tier-3 run captured, saved or not
+   * ends) or a tier-3 run captured, saved or not. Appended in place, so a copy of the ctx with other
+   * args adds to the call's own list.
    */
-  seen?: StoredCookie[];
-  /** the session values each tier-3 run captured, saved or not */
-  seenValues?: Record<string, string>[];
+  seen: StoredCookie[];
+  /** the session values each tier-3 run captured, saved or not; appended in place, as `seen` */
+  seenValues: Record<string, string>[];
   /** the seed of the op's gen slots: one per call, so the call's own retries send the same values */
   gen: string;
   /** the site's budget, held to at each send (`pace`) */
@@ -638,6 +639,12 @@ const hide = (text: string, sessions: (Pick<Session, "cookies" | "values"> | und
   return redact(text, union, { cut });
 };
 
+/** What the call captured, saved or not, as sessions for `hide`: any text field can quote it. */
+const captured = (c: Pick<Ctx, "seen" | "seenValues">) => [
+  { cookies: c.seen, values: {} },
+  ...c.seenValues.map((values) => ({ cookies: [], values })),
+];
+
 /**
  * One try at a tier, logged for the call's write status. A reason quotes the response, which can
  * echo a credential (a 401 naming the token it refused): redacted against the jar as it was before
@@ -648,11 +655,12 @@ async function attempt(ctx: Ctx, op: Operation, tier: Tier): Promise<Attempt> {
   const before = sessionOrNone(ctx.site);
   const a = await tryTier(ctx, op, tier);
   ctx.log.push(a);
-  const seen = [
-    { cookies: ctx.seen ?? [], values: {} },
-    ...(ctx.seenValues ?? []).map((values) => ({ cookies: [], values })),
-  ];
-  return { ...a, reason: hide(a.reason, [before, sessionOrNone(ctx.site), ...seen], true) };
+  const sessions = [before, sessionOrNone(ctx.site), ...captured(ctx)];
+  return {
+    ...a,
+    reason: hide(a.reason, sessions, true),
+    ...(a.note ? { note: hide(a.note, sessions) } : {}),
+  };
 }
 
 async function tryTier(ctx: Ctx, op: Operation, tier: Tier): Promise<Attempt> {
@@ -662,8 +670,8 @@ async function tryTier(ctx: Ctx, op: Operation, tier: Tier): Promise<Attempt> {
       await pace(ctx.site, ctx.opts.minIntervalMs, ctx.budget);
       const run = await runOpTrigger(ctx.site, op, ctx.args);
       // The page's answer can quote what the run captured: kept for redaction whether or not it was saved.
-      ctx.seen = [...(ctx.seen ?? []), ...run.capture.cookies];
-      if (run.values && Object.keys(run.values).length) ctx.seenValues = [...(ctx.seenValues ?? []), run.values];
+      ctx.seen.push(...run.capture.cookies);
+      if (run.values && Object.keys(run.values).length) ctx.seenValues.push(run.values);
       const judged = run.matched && judgeExchange(op, run.matched);
       // The page is told nothing of a redirect that was stopped, its status included: this is the answer.
       const resent: Attempt | undefined = run.resends
@@ -717,7 +725,7 @@ async function tryTier(ctx: Ctx, op: Operation, tier: Tier): Promise<Attempt> {
       });
       // A rotating cookie (a rolling session, __cf_bm) must ride on the next call.
       if (sent.setCookies) {
-        ctx.seen = [...(ctx.seen ?? []), ...sent.setCookies];
+        ctx.seen.push(...sent.setCookies);
         try {
           mergeCapture(ctx.site, sent.setCookies);
         } catch {
@@ -1395,6 +1403,8 @@ async function run(
   let jar: Session | undefined;
   /** this write's ledger record, settled with what the call did */
   let ledger: string | undefined;
+  /** what the call's sends captured (the ctx's, made later): any text field of the result can quote it */
+  const seen: Pick<Ctx, "seen" | "seenValues"> = { seen: [], seenValues: [] };
   /** the site's cool-down this call was answered from, sending nothing: no news for the registry */
   let held: CoolDown | undefined;
   /** the site's budget was spent, or API_ANYTHING_PACE is wrong, so nothing was sent: no news for the registry either */
@@ -1415,7 +1425,7 @@ async function run(
       f.warning = unsavedWarning(siteName, unsaved);
       f.next ??= `the write was sent: do not send it again. The session the site set during it was not saved; ${unsavedNext(siteName)}`;
     }
-    const sessions = [jar, sessionOrNone(siteName)];
+    const sessions = [jar, sessionOrNone(siteName), ...captured(seen)];
     if (f.reason) f.reason = hide(f.reason, sessions, true);
     if (f.next) f.next = hide(f.next, sessions);
     if (f.warning) f.warning = hide(f.warning, sessions);
@@ -1635,6 +1645,7 @@ async function run(
     shared: site.shared,
     unconfirmed: capped,
     gen,
+    ...seen,
     ...(sendBudget ? { budget: sendBudget } : {}),
   };
   // Why a call ran above tier 1, so a slow call explains itself.
@@ -1808,9 +1819,10 @@ export async function heal(
   const t0 = Date.now();
   const log: Attempt[] = [];
   let resolved: Operation | undefined;
+  const seen: Pick<Ctx, "seen" | "seenValues"> = { seen: [], seenValues: [] };
   const done = (r: Result, extra: { strategy?: string } = {}): CallResult & { strategy?: string } => {
     const f = finish(r, resolved, resolved ? siteName : undefined, log);
-    const sessions = [resolved ? sessionOrNone(siteName) : undefined];
+    const sessions = [resolved ? sessionOrNone(siteName) : undefined, ...captured(seen)];
     if (f.reason) f.reason = hide(f.reason, sessions, true);
     if (f.next) f.next = hide(f.next, sessions);
     if (f.heal) f.heal = { ...f.heal, changes: f.heal.changes.map((c) => hide(c, sessions)) };
@@ -1855,6 +1867,7 @@ export async function heal(
     shared: site.shared,
     unconfirmed: capped,
     gen: randomBytes(8).toString("hex"),
+    ...seen,
   };
   const tier = Math.min(Math.max(op.minTier, rememberedTier(siteName, op.name) ?? 1), 2) as Tier;
   const h = await safeHeal(
