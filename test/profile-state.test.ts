@@ -3,7 +3,7 @@
  * hosts and names only (values are never read).
  */
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -63,16 +63,22 @@ test("a sign-in cookie for another site does not count when hosts are given", ()
   assert.equal(profileSignedIn([]), true, "with no hosts, any account cookie counts");
 });
 
-test("a pending WAL or journal means cookies that are not in the file yet", () => {
-  mkdirSync(dirname(dbFile()), { recursive: true });
-  writeFileSync(dbFile(), "");
-  writeFileSync(`${dbFile()}-wal`, "pending");
-  assert.equal(profileSignedIn(["x.test"]), true);
-});
+// A zeroed journal is not hot to SQLite, so the database still opens and only the file check can say true.
+for (const suffix of ["-wal", "-journal"]) {
+  test(`a pending ${suffix.slice(1)} means cookies that are not in the file yet`, () => {
+    cookieDb([[".x.test", "_ga"]]);
+    assert.equal(profileSignedIn(["x.test"]), false, "the database alone holds no sign-in");
+    writeFileSync(`${dbFile()}${suffix}`, Buffer.alloc(512));
+    assert.equal(profileSignedIn(["x.test"]), true);
+  });
+}
 
 test("a cookie database that cannot be read is treated as possibly signed in", () => {
-  mkdirSync(dirname(dbFile()), { recursive: true });
-  writeFileSync(dbFile(), "not a database");
+  cookieDb([[".x.test", "_ga"]]);
+  // Keep the 100-byte SQLite header so only opening or querying can fail.
+  const bytes = readFileSync(dbFile());
+  bytes.fill(0xff, 100);
+  writeFileSync(dbFile(), bytes);
   assert.equal(profileSignedIn(["x.test"]), true);
 });
 
