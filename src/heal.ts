@@ -627,6 +627,23 @@ const RECAPTURE =
  */
 export function loadCapture(id: string, now = Date.now()): CaptureFile {
   const file = captureFile(id);
+  const missing = () => new CaptureUnavailable(`no capture "${id}"`, RECAPTURE);
+  const expired = (at: number) => {
+    rmSync(file, { force: true });
+    return new CaptureUnavailable(
+      `capture "${id}" is from ${new Date(at).toISOString()}, past its 24 h lifetime (it holds the run's cookies), and was deleted`,
+      RECAPTURE,
+    );
+  };
+  // The file's own age first, so one past its lifetime is deleted even when it cannot be decrypted.
+  let written: number;
+  try {
+    written = statSync(file).mtimeMs;
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code === "ENOENT") throw missing();
+    throw e;
+  }
+  if (now - written > CAPTURE_TTL_MS) throw expired(written);
   let c: CaptureFile | undefined;
   try {
     c = readSealed<CaptureFile | undefined>(file, undefined, captureLabel(id), `delete ${file}, then ${RECAPTURE}`);
@@ -634,15 +651,10 @@ export function loadCapture(id: string, now = Date.now()): CaptureFile {
     if (e instanceof SealError) throw new CaptureUnavailable(e.message, e.next, false);
     throw e;
   }
-  if (!c) throw new CaptureUnavailable(`no capture "${id}"`, RECAPTURE);
-  const at = Date.parse(c.at) || statSync(file).mtimeMs;
-  if (now - at > CAPTURE_TTL_MS) {
-    rmSync(file, { force: true });
-    throw new CaptureUnavailable(
-      `capture "${id}" is from ${new Date(at).toISOString()}, past its 24 h lifetime (it holds the run's cookies), and was deleted`,
-      RECAPTURE,
-    );
-  }
+  if (!c) throw missing();
+  // sealing a plaintext capture in place rewrites it, so the time it holds can be older than the file
+  const at = Date.parse(c.at) || written;
+  if (now - at > CAPTURE_TTL_MS) throw expired(at);
   return c;
 }
 

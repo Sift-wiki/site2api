@@ -247,7 +247,13 @@ function readJsonFile(file: string): Record<string, unknown> {
   if (!existsSync(file)) return {};
   const text = readFileSync(file, "utf8");
   if (!text.trim()) return {};
-  const v = JSON.parse(text) as unknown;
+  let v: unknown;
+  try {
+    v = JSON.parse(text);
+  } catch {
+    // an agent's config can hold other servers' tokens, which the parser's message would quote
+    throw new Error(`${file} is not valid JSON: fix it, then run setup again`);
+  }
   if (!v || typeof v !== "object" || Array.isArray(v)) throw new Error(`${file} is not a JSON object`);
   return v as Record<string, unknown>;
 }

@@ -210,7 +210,7 @@ export async function importSession(site: string, url: string, o: ImportOptions 
   let imported: ImportedSession | undefined;
   const guest = o.guest ?? loadSession(site).guestCookies;
   if (o.file) {
-    const cookies = cookiesFromFile(readFileSync(o.file, "utf8"), url).filter((c) => forSite(c, url));
+    const cookies = cookiesFromFile(readFileSync(o.file, "utf8"), url, o.file).filter((c) => forSite(c, url));
     if (cookies.length) imported = { cookies, source: "file", browser: "file", profile: o.file };
   } else {
     // An agent with a shell can run login itself, and macOS may hand over the Keychain key silently

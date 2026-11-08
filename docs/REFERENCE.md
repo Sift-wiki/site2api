@@ -336,7 +336,8 @@ nothing and needs no browser. Output is one line of JSON:
   other than its args), `verify` (the last verify on this version failed), `write` (a write may
   have gone through), `plaintext` (a session file is stored unsealed because no key is available,
   a session or capture written before sealing is not sealed yet, or the key fails, such as a wrong
-  `API_ANYTHING_KEY`). `next` is phrased as a call's `next`;
+  `API_ANYTHING_KEY`), `settings` (`settings.json` cannot be read, so this install is local-only until
+  it is fixed or replaced). `next` is phrased as a call's `next`;
 - `storage`: whether session and capture files are sealed here, `{sealed: true, key}` with the key's
   source, or `{sealed: false, why, chosen}`. Finding out may create the key in the OS store, as the
   first save would.

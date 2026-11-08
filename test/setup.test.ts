@@ -263,6 +263,14 @@ test("a config that can't be edited still leaves the skill installed", async () 
   assert.equal(read(paths.vscodeJson()), '{\n  // my servers\n  "servers": {}\n}\n');
 });
 
+test("an agent config that is not JSON is named in the error, never quoted: it can hold other servers' tokens", async () => {
+  write(paths.cursorJson(), '{"t":SECRETX}');
+  const r = await setup({ agents: ["cursor"] });
+  assert.equal(r.agents[0]!.mcp, "failed");
+  assert.equal(r.agents[0]!.error, `${paths.cursorJson()} is not valid JSON: fix it, then run setup again`);
+  assert.equal(read(paths.cursorJson()), '{"t":SECRETX}');
+});
+
 test("--dry-run says what would change and changes nothing", async () => {
   const before = seed();
   const r = await setup({ agents: [...ALL], dryRun: true, share: true });

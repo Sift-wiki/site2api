@@ -4,8 +4,9 @@
  */
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import fs, { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
+import { syncBuiltinESMExports } from "node:module";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -14,7 +15,15 @@ import { fileURLToPath } from "node:url";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { verifyCandidates } from "../src/background.js";
-import { localOnly, saveSettings, setLocalOnly, settingsFile } from "../src/identity.js";
+import {
+  answerShare,
+  answerVerify,
+  loadSettings,
+  localOnly,
+  saveSettings,
+  setLocalOnly,
+  settingsFile,
+} from "../src/identity.js";
 import { createServer as mcpServer } from "../src/mcp.js";
 import { uploadName } from "../src/publish.js";
 import {
@@ -28,6 +37,7 @@ import {
   upgradeBundled,
 } from "../src/registry.js";
 import { flushReports, queueReport } from "../src/report.js";
+import { record } from "../src/setup.js";
 import { answerClaims, shareOps } from "../src/share.js";
 import { parseSite } from "../src/spec.js";
 import { loadSite, saveSite } from "../src/store.js";
@@ -234,4 +244,66 @@ test("an unreadable settings.json fails closed: local-only, and no request reach
   // the documented way out still works: it rewrites a readable file
   setLocalOnly(false);
   assert.equal(localOnly(), false);
+});
+
+test("an answer never replaces an unreadable settings.json: the inferred local-only is not written", async () => {
+  const bad = '{"share": true, SECRETX';
+  writeFileSync(settingsFile(), bad);
+  const refused = (e: unknown) =>
+    e instanceof Error &&
+    e.message.startsWith(`${settingsFile()} is not valid JSON, so the answer was not saved`) &&
+    /api-anything setup --local-only --share-only/.test(e.message) &&
+    !e.message.includes("SECRETX");
+  assert.throws(() => answerShare(true), refused);
+  assert.throws(() => answerVerify(true), refused);
+  await assert.rejects(record({ share: true, verify: true }), refused, "setup's flags too");
+  assert.equal(readFileSync(settingsFile(), "utf8"), bad, "the file is left as it was");
+  assert.equal(localOnly(), true, "still fail closed");
+  assert.equal(loadSettings().localOnly, undefined, "the inferred flag is not one a reader can save back");
+
+  // setLocalOnly replaces it with the one choice it could not read back; the rest starts unanswered
+  setLocalOnly(false);
+  assert.deepEqual(JSON.parse(readFileSync(settingsFile(), "utf8")), { share: false, verify: false });
+  answerShare(true);
+  const saved = JSON.parse(readFileSync(settingsFile(), "utf8"));
+  assert.equal(saved.share, true);
+  assert.equal("localOnly" in saved, false);
+  assert.equal(localOnly(), false);
+  noConnection();
+});
+
+test("settings.json that is not an object, or a directory, fails closed too", () => {
+  writeFileSync(settingsFile(), "null");
+  assert.equal(localOnly(), true);
+  assert.throws(() => answerShare(true), /settings\.json is not a JSON object, so the answer was not saved/);
+  rmSync(settingsFile());
+  mkdirSync(settingsFile());
+  assert.equal(localOnly(), true);
+  assert.throws(() => answerShare(true), /settings\.json cannot be read \(EISDIR\), so the answer was not saved/);
+  noConnection();
+});
+
+test("an answer reads settings.json once: a read that fails after the first never drops local-only", () => {
+  saveSettings({ share: false, askedAt: "2026-11-01T00:00:00.000Z", verify: false, localOnly: true });
+  const real = fs.readFileSync;
+  let reads = 0;
+  // every read of settings.json after the first fails, as an EIO or a concurrent corruption would
+  fs.readFileSync = ((...a: Parameters<typeof real>) => {
+    if (a[0] === settingsFile() && ++reads > 1) throw Object.assign(new Error("EIO: i/o error, read"), { code: "EIO" });
+    return real(...a);
+  }) as typeof real;
+  syncBuiltinESMExports();
+  try {
+    for (const answer of [() => answerShare(true), () => answerVerify(true), () => answerShare(false)]) {
+      reads = 0;
+      answer();
+      assert.equal(JSON.parse(real(settingsFile(), "utf8")).localOnly, true, "local-only is kept");
+      assert.equal(reads, 1, "one read per answer");
+    }
+  } finally {
+    fs.readFileSync = real;
+    syncBuiltinESMExports();
+  }
+  assert.equal(localOnly(), true);
+  noConnection();
 });

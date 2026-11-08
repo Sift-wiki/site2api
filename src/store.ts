@@ -33,7 +33,7 @@ import {
   scanSecrets,
   signInFills,
 } from "./secrets.js";
-import { ensureDir, home, loadSession, readJson, safeName, withLock, writePrivate } from "./session.js";
+import { corruptFile, ensureDir, home, loadSession, readJson, safeName, withLock, writePrivate } from "./session.js";
 import { MAX_PER_HOUR, type Operation, parseSite, type Site } from "./spec.js";
 import { vetShared } from "./vet.js";
 
@@ -67,9 +67,16 @@ export function loadSite(name: string, directory = bundledDir()): Resolved | und
   for (const [dir, source] of specDirs(directory)) {
     const path = join(dir, file);
     if (!existsSync(path)) continue;
+    let raw: unknown;
+    try {
+      raw = JSON.parse(readFileSync(path, "utf8"));
+    } catch (e) {
+      if (e instanceof SyntaxError) throw corruptFile(path);
+      throw new Error(`${path}: ${(e as Error).message}`);
+    }
     try {
       // The file name is the site's address; saving under a different inner name would overwrite another site.
-      const site = { ...parseSite(JSON.parse(readFileSync(path, "utf8"))), name };
+      const site = { ...parseSite(raw), name };
       // someone else's spec, pulled or a heal's copy of one, meets the rules of today, not of its pull
       // pull writes the record with every spec, so one without it is no spec pull wrote
       if (source === "registry" && !site.shared) throw new Error("a pulled spec without its record; pull it again");

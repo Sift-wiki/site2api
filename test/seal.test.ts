@@ -272,6 +272,26 @@ test("a capture past its 24 h is refused with a next, and deleted; a sealed fres
   assert.throws(() => loadCapture("cstale"), /no capture "cstale"/, "the expired file is gone");
 });
 
+test("a capture past its 24 h is deleted even when it cannot be decrypted; a fresh unreadable one is kept", () => {
+  setKeyStore(memoryStore());
+  mkdirSync(join(home, "captures"), { recursive: true });
+  const file = (id: string) => join(home, "captures", `${id}.json`);
+  writeFileSync(file("cbadold"), `${MAGIC}{"sealed":`);
+  const old = (Date.now() - 25 * 3600_000) / 1000;
+  utimesSync(file("cbadold"), old, old);
+  assert.throws(
+    () => loadCapture("cbadold"),
+    (e: unknown) => e instanceof CaptureUnavailable && /24 h lifetime/.test(e.message) && e.recapture,
+  );
+  assert.equal(existsSync(file("cbadold")), false, "the expired file is gone, though it never decrypted");
+  writeFileSync(file("cbad"), `${MAGIC}{"sealed":`);
+  assert.throws(
+    () => loadCapture("cbad"),
+    (e: unknown) => e instanceof CaptureUnavailable && /integrity check/.test(e.message) && !e.recapture,
+  );
+  assert.equal(existsSync(file("cbad")), true, "a fresh one is left for the user to see");
+});
+
 test("the Keychain store reads with find-generic-password, adds through stdin without -U, and keeps a key added first", () => {
   const dir = mkdtempSync(join(tmpdir(), "aa-security-"));
   const bin = join(dir, "security");
@@ -431,7 +451,14 @@ test("fail closed: once a home has sealed, a missing key store refuses writes (m
 
   for (const dropMarker of [false, true]) {
     if (dropMarker) rmSync(join(home, "sealed.json"));
-    setKeyStore(null);
+    // the store that sealed them is the one configured, but it is not here (no binary, no bus)
+    setKeyStore({
+      name: "memory",
+      get() {
+        throw new KeyUnavailable("memory is not here");
+      },
+      put() {},
+    });
     process.env.API_ANYTHING_PLAINTEXT = "1"; // not even the plaintext choice writes over a sealed home
     assert.throws(
       () => saveSession("site", { cookies: jar("plain"), values: {} }),
@@ -655,13 +682,100 @@ test("a downgrade to 0.3.2 refuses a sealed session loudly instead of reading it
 });
 
 test("a corrupt file's error names the file, not the text it holds", () => {
+  // short enough that the parser's excerpt would quote all of it
+  const text = '{"c":SECRETX}';
+  const file = sessionFile("corrupt");
+  const exact = (e: unknown) =>
+    e instanceof Error &&
+    e.message === `${file} is corrupt (not valid JSON); fix or delete it` &&
+    !e.message.includes("SECRETX");
   setKeyStore(null); // no key: the file is read as plaintext JSON
   mkdirSync(join(home, "sessions"), { recursive: true });
-  writeFileSync(sessionFile("corrupt"), '{"cookies": SECRETVALUE}');
+  writeFileSync(file, text);
+  assert.throws(() => loadSession("corrupt"), exact, "the parser's excerpt, which quotes the file, is not passed on");
+  // sealed, with text inside that is not JSON
+  setKeyStore(memoryStore());
+  writeSealed(file, text, "session:corrupt");
+  assert.ok(isSealedText(readFileSync(file, "utf8")));
+  assert.throws(() => loadSession("corrupt"), exact, "nor is the decrypted text's");
+});
+
+test("an envelope's or marker's own fields are described in an error, never quoted", () => {
+  setKeyStore(memoryStore());
+  saveSession("site", { cookies: jar(), values: {} });
+  const file = sessionFile("site");
+  const env = envelope(file);
+  const SENTINEL = "SENTINEL-0123456789";
+  const clean = (e: unknown) => e instanceof SealError && !e.message.includes(SENTINEL) && !e.next.includes(SENTINEL);
+  for (const text of [
+    `${MAGIC}${JSON.stringify({ ...env, sealed: SENTINEL })}`,
+    `${MAGIC}${JSON.stringify({ ...env, alg: SENTINEL })}`,
+    JSON.stringify({ sealed: SENTINEL, cookies: [] }),
+  ]) {
+    writeFileSync(file, text);
+    assert.throws(
+      () => loadSession("site"),
+      (e: unknown) => clean(e) && /integrity check/.test((e as Error).message),
+      text.slice(0, 60),
+    );
+  }
+});
+
+test("a key store a file or the marker names is repeated only when this code knows it, and never decides whether it opens", () => {
+  const NAME = "privatecookietoken";
+  const clean = (e: unknown) =>
+    e instanceof SealError &&
+    !`${e.message} ${e.next}`.includes(NAME) &&
+    /a key from an unrecognized key store|\(an unrecognized key store\)/.test(e.message);
+  setKeyStore(memoryStore());
+  saveSession("site", { cookies: jar(), values: {} });
+  const file = sessionFile("site");
+  const env = envelope(file);
+  writeEnvelope(file, { ...env, key: NAME });
+  assert.equal(loadSession("site").cookies[0]!.value, SECRET, "the right key opens it, whatever the name says");
+
+  setKeyStore(memoryStore()); // another key
+  assert.throws(() => loadSession("site"), clean);
+  process.env.API_ANYTHING_KEY = "some passphrase";
   assert.throws(
-    () => loadSession("corrupt"),
-    (e: unknown) => e instanceof Error && /is corrupt/.test(e.message) && !/SECRETVALUE/.test(e.message),
-    "the parser's excerpt, which quotes the file, is not passed on",
+    () => loadSession("site"),
+    (e: unknown) =>
+      clean(e) &&
+      /unset API_ANYTHING_KEY to read it with a key from an unrecognized key store/.test((e as SealError).next),
+  );
+  delete process.env.API_ANYTHING_KEY;
+
+  // no key here at all: neither the marker's name nor the file's reaches the error, its next or status
+  setKeyStore(null);
+  writeFileSync(join(home, "sealed.json"), JSON.stringify({ v: 1, at: "", key: NAME }));
+  assert.throws(() => loadSession("site"), clean);
+  assert.throws(() => saveSession("other", { cookies: [], values: {} }), clean);
+  const seen = JSON.stringify(status());
+  assert.ok(!seen.includes(NAME), seen);
+  assert.match(seen, /sealed with a key from an unrecognized key store/);
+
+  // a name this code defines is still said
+  writeFileSync(join(home, "sealed.json"), JSON.stringify({ v: 1, at: "", key: "macos-keychain" }));
+  assert.throws(
+    () => saveSession("other", { cookies: [], values: {} }),
+    (e: unknown) =>
+      e instanceof SealError &&
+      /sealed with the macos-keychain key/.test(e.message) &&
+      /the macos-keychain key store/.test(e.next),
+  );
+});
+
+test("a library caller's own key store, whatever its name, seals and opens, and messages name it", () => {
+  setKeyStore({ ...memoryStore(), name: "CustomKeychain" });
+  saveSession("site", { cookies: jar(), values: {} });
+  assert.equal(envelope(sessionFile("site")).key, "CustomKeychain");
+  assert.equal(loadSession("site").cookies[0]!.value, SECRET);
+  assert.deepEqual(sealing(), { sealed: true, key: "CustomKeychain" });
+  process.env.API_ANYTHING_KEY = "some passphrase";
+  assert.throws(
+    () => loadSession("site"),
+    (e: unknown) =>
+      e instanceof SealError && /another key \(CustomKeychain\) than the one in use \(passphrase\)/.test(e.message),
   );
 });
 

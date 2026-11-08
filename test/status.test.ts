@@ -4,7 +4,7 @@
  */
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, before, beforeEach, test } from "node:test";
@@ -279,4 +279,22 @@ test("the CLI prints status as compact JSON, and refuses a site it does not know
   assert.equal(bad.code, 1);
   assert.equal(JSON.parse(bad.stdout).ok, false);
   rmSync(home, { recursive: true, force: true });
+});
+
+test("status reports a settings.json that cannot be read, with the way back, never its text", () => {
+  const file = join(home, "settings.json");
+  const settings = () => status().problems.filter((p) => p.problem === "settings");
+  assert.deepEqual(settings(), []);
+  writeFileSync(file, '{"share": SECRETX');
+  const [p] = settings();
+  assert.equal(p?.site, "*");
+  assert.match(p!.detail, /settings\.json is not valid JSON: until it reads, this install is local-only/);
+  assert.match(p!.next, /api-anything setup --local-only --share-only/);
+  assert.doesNotMatch(JSON.stringify(p), /SECRETX/);
+  writeFileSync(file, "[]");
+  assert.match(settings()[0]!.detail, /is not a JSON object/);
+  rmSync(file);
+  mkdirSync(file);
+  assert.match(settings()[0]!.detail, /settings\.json cannot be read \(EISDIR\)/);
+  assert.match(status("demo").problems.find((x) => x.problem === "settings")!.detail, /EISDIR/, "with a site too");
 });

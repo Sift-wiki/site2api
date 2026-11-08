@@ -70,15 +70,29 @@ export const VERIFY_QUESTION =
 
 type Stored = Partial<Settings>;
 
-function readStored(): Stored {
+/** settings.json as stored, and when it exists but cannot be read or is not a JSON object, why. */
+function readStored(): { s: Stored; unreadable?: string } {
+  let v: unknown;
   try {
-    return readJson<Stored>(settingsFile(), {}) ?? {};
-  } catch {
-    // The file exists but cannot be read or parsed. Fail closed: a user who chose local-only must not
-    // be sent back to the catalog because their settings.json became unreadable.
-    return { localOnly: true };
+    v = readJson<unknown>(settingsFile(), {});
+  } catch (e) {
+    // the reason only: the parser's own message can quote the file
+    const code = (e as NodeJS.ErrnoException).code;
+    return { s: {}, unreadable: code ? `cannot be read (${code})` : "is not valid JSON" };
   }
+  if (!v || typeof v !== "object" || Array.isArray(v)) return { s: {}, unreadable: "is not a JSON object" };
+  return { s: v as Stored };
 }
+
+/** Why settings.json exists but cannot be read, naming the file; undefined when it reads (or is absent). */
+export function settingsProblem(): string | undefined {
+  const { unreadable } = readStored();
+  return unreadable && `${settingsFile()} ${unreadable}`;
+}
+
+/** How the user gets a readable settings.json back, for a `next`. */
+export const settingsFix = (): string =>
+  `fix or delete ${settingsFile()} (setup asks its questions again), or replace it: api-anything setup --local-only --share-only, or --no-local-only`;
 
 /**
  * An install that answered the old question, which also said "test a few new operations a day from your
@@ -100,8 +114,9 @@ function migrate(s: Stored): Stored {
   return next;
 }
 
-export function loadSettings(): Settings {
-  const s = migrate(readStored());
+/** The stored answers as every caller sees them: a question never answered is off. */
+function settingsOf(stored: Stored): Settings {
+  const s = migrate(stored);
   const share = s.share === true && !!s.askedAt;
   return {
     share,
@@ -113,6 +128,8 @@ export function loadSettings(): Settings {
   };
 }
 
+export const loadSettings = (): Settings => settingsOf(readStored().s);
+
 /** `verify` is always written: a file without it is one an older version wrote, which `migrate` reads. */
 export function saveSettings(s: Omit<Settings, "verify"> & { verify?: boolean }): void {
   writePrivate(settingsFile(), `${JSON.stringify({ ...s, verify: s.verify ?? false }, null, 2)}\n`);
@@ -121,21 +138,34 @@ export function saveSettings(s: Omit<Settings, "verify"> & { verify?: boolean })
 const now = () => new Date().toISOString();
 
 /**
+ * The stored answers, for a writer that keeps them. An unreadable file is not replaced: it may hold a
+ * local-only choice, and a replacement would either drop it or write one the user never made. One read
+ * only: a second one that failed (EIO, a write meanwhile) would hand back defaults without local-only.
+ */
+function current(): Settings {
+  const { s, unreadable } = readStored();
+  if (unreadable) throw new Error(`${settingsFile()} ${unreadable}, so the answer was not saved: ${settingsFix()}`);
+  return settingsOf(s);
+}
+
+/**
  * Keeps the user's answer to `QUESTION`: it is not asked again. A no also turns verification off, since
  * its outcomes go to the catalog as reports. `verify` is always written, so the migration below never
  * mistakes this answer for one to the old question.
  */
 export function answerShare(share: boolean): void {
-  const s = loadSettings();
-  saveSettings({ ...s, share, askedAt: now(), ...(share ? {} : { verify: false }) });
+  saveSettings({ ...current(), share, askedAt: now(), ...(share ? {} : { verify: false }) });
 }
 
 /** Keeps the user's answer to `VERIFY_QUESTION`. */
 export function answerVerify(verify: boolean): void {
-  saveSettings({ ...loadSettings(), verify, verifyAskedAt: now(), verifyFrom: "asked" });
+  saveSettings({ ...current(), verify, verifyAskedAt: now(), verifyFrom: "asked" });
 }
 
-/** Turns local-only mode on or off in settings.json. */
+/**
+ * Turns local-only mode on or off in settings.json. The one writer that replaces an unreadable file: the
+ * flag it cannot read back is the one the user is choosing now. The rest starts unanswered.
+ */
 export function setLocalOnly(on: boolean): void {
   const { localOnly: _, ...s } = loadSettings();
   saveSettings({ ...s, ...(on ? { localOnly: true as const } : {}) });
@@ -143,8 +173,15 @@ export function setLocalOnly(on: boolean): void {
 
 const envLocalOnly = () => /^(1|true|yes|on)$/i.test(process.env.API_ANYTHING_LOCAL_ONLY ?? "");
 
-/** No request goes to the registry: `API_ANYTHING_LOCAL_ONLY=1`, or `setup --local-only`. */
-export const localOnly = (): boolean => envLocalOnly() || readStored().localOnly === true;
+/**
+ * No request goes to the registry: `API_ANYTHING_LOCAL_ONLY=1`, or `setup --local-only`, or a
+ * settings.json that cannot be read (fail closed; never written back, see `current`).
+ */
+export const localOnly = (): boolean => {
+  if (envLocalOnly()) return true;
+  const { s, unreadable } = readStored();
+  return !!unreadable || s.localOnly === true;
+};
 
 /** How the user turns local-only mode off, for a `next`. */
 export const localOnlyOff = (): string =>
