@@ -32,6 +32,7 @@ import { loadSettings, localOnly, localOnlyOff, setLocalOnly } from "./identity.
 import { AmbiguousProfile } from "./import.js";
 import { type Candidate, capturePages, matches, pageUrls, rankCandidates } from "./learn.js";
 import { learnSite } from "./learnsite.js";
+import { LockBusy } from "./lock.js";
 import {
   cookieNames,
   ImportRefused,
@@ -1270,6 +1271,7 @@ async function cmdCall({ v, pos }: Parsed): Promise<number> {
   });
   out(pulled ? { ...r, pulled: site } : r);
   if (r.heal) process.stderr.write(healNote(site, name, r.heal));
+  if (r.warning) process.stderr.write(`warning: ${r.warning}\n`);
   if (!r.ok) process.stderr.write(`next: ${r.next}\n`);
   return r.ok ? 0 : 1;
 }
@@ -2110,7 +2112,7 @@ try {
   out({ ok: false, error: oneLine((e as Error).message), ...(f?.extra ?? {}) });
   const next =
     f?.next ??
-    (e instanceof CaptureUnavailable || e instanceof SealError ? e.next : undefined) ??
+    (e instanceof CaptureUnavailable || e instanceof SealError || e instanceof LockBusy ? e.next : undefined) ??
     (e instanceof ProfileInUse
       ? PROFILE_HINT
       : e instanceof LocalOnlyError

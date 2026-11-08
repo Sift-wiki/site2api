@@ -189,24 +189,33 @@ export function saveSnapshot(key: string, s: Snapshot, now = Date.now()): Saved 
 
 /**
  * Read the last answer and keep the next one under the file's lock, so concurrent calls compare in
- * turn. `saved`: whether `next` was kept (undefined when there was none to keep).
+ * turn. `saved`: whether `next` was kept (undefined when there was none to keep). Without the lock
+ * (busy, or a home that cannot be written) fn still compares with the last answer, and nothing is kept.
  */
 export function swapSnapshot<T>(
   key: string,
   fn: (prev: Snapshot | undefined) => { next?: Snapshot; out: T },
 ): { out: T; saved?: Saved } {
-  const run = () => {
-    const r = fn(loadSnapshot(key));
-    return { out: r.out, ...(r.next ? { saved: saveSnapshot(key, r.next) } : {}) };
-  };
+  let ran = false;
   try {
-    return withLock(fileOf(key), run);
-  } catch {
-    return run();
+    return withLock(fileOf(key), () => {
+      ran = true;
+      const r = fn(loadSnapshot(key));
+      return { out: r.out, ...(r.next ? { saved: saveSnapshot(key, r.next) } : {}) };
+    });
+  } catch (e) {
+    if (ran) throw e;
+    const r = fn(loadSnapshot(key));
+    const reason = `its lock could not be taken (${(e as Error).message.split("\n")[0]})`;
+    return { out: r.out, ...(r.next ? { saved: { kept: false, reason } } : {}) };
   }
 }
 
-/** Remove what nobody read or wrote for 30 days: old answers, and the temp and lock files of a crashed process. */
+/**
+ * Remove what nobody read or wrote for 30 days: old answers, and the temp and old-format lock files of
+ * a crashed process. A `.lk` lock is kept: its mtime never moves, and removing one a process holds or
+ * waits on would let another take a second lock on a new file (lock.ts). It is empty.
+ */
 export function prune(now = Date.now()): void {
   prunedAt = now;
   let names: string[];
@@ -216,6 +225,7 @@ export function prune(now = Date.now()): void {
     return;
   }
   for (const name of names) {
+    if (name.endsWith(".lk")) continue;
     const file = join(dir(), name);
     try {
       if (now - statSync(file).mtimeMs > KEEP_SNAPSHOT_MS) rmSync(file, { force: true });

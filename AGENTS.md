@@ -22,6 +22,7 @@ holds the evidence behind it, including the api-anything bugs that must not come
 | `src/heal.ts` | add, rescan, recapture, tier-3 trigger runs, captures |
 | `src/execute.ts` | `call()`: the tier ladder, classifier actions, heal guards, write rules |
 | `src/seal.ts` | AES-256-GCM sealing of session and capture files; the data key from the OS store or `API_ANYTHING_KEY`; the no-key fallback |
+| `src/lock.ts` | the cross-process lock beside a file: an exclusive SQLite transaction the OS releases when its holder dies; `LockBusy` |
 | `src/session.ts`, `src/store.ts` | `~/.api-anything`: cookie jar, specs, heal log, state, write ledger, call log, export |
 | `src/status.ts` | `status`: each op's health from the local files only, each problem with its `next` |
 | `src/checks.ts` | `verify`: run each read's example and checks, judge pass/fail/inconclusive, keep the record `publish` gates on |
@@ -40,7 +41,7 @@ holds the evidence behind it, including the api-anything bugs that must not come
 | `src/skill.ts` | the skill folder's copies: install, the stamp, and refreshing an untouched older copy |
 | `src/login.ts`, `src/import.ts` | sign in by importing the everyday browser's cookies; re-import on `auth` |
 | `src/cli.ts`, `src/mcp.ts`, `src/mcp-learn.ts`, `src/index.ts`, `src/host.ts` | entry points; `mcp-learn.ts` is the MCP `learn_site` tool; `host.ts` is `api-anything/host`, call-only (docs/HOST.md) |
-| `src/profile-state.ts`, `src/sqlite.ts` | whether api-anything's own Chrome profile may hold a site's sign-in: a cookie name not known to be anonymous, offline; node:sqlite opened read-only |
+| `src/profile-state.ts`, `src/sqlite.ts` | whether api-anything's own Chrome profile may hold a site's sign-in: a cookie name not known to be anonymous, offline; node:sqlite loaded without its warning |
 | `src/serve.ts`, `src/openapi.ts` | `serve`: MCP over HTTP, REST endpoints that run the MCP tools' own handlers (`createToolset`), the token, Origin and Host guards; the OpenAPI 3.1 document (docs/SERVE.md) |
 | `src/jobs.ts` | an MCP call still running at its deadline answers with a job; identical calls join it |
 | `src/clients.ts` | `mcp --print-config`: how each MCP client adds the server, with absolute paths |

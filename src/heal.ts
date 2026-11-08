@@ -95,6 +95,8 @@ export interface Attempt {
   hint?: string;
   /** what the caller should know whatever the outcome (a repeat of the write was stopped) */
   note?: string;
+  /** why the session a tier-3 run captured could not be saved (TriggerRun.unsaved) */
+  unsaved?: string;
   /** nothing reached the site (the browser profile was busy, the tier-2 origin page did not load) */
   unsent?: boolean;
   /** the site answered that it did not apply the write (a clear refusal in a 2xx body) */
@@ -350,6 +352,10 @@ export interface TriggerRun {
   capture: CaptureResult;
   /** the request matching op.match that answers this run (see pickHit) */
   matched?: Exchange;
+  /** the session values this run captured (its cookies are `capture.cookies`), saved or not */
+  values?: Record<string, string>;
+  /** why the session this run captured, which differs from the stored one, could not be saved */
+  unsaved?: string;
   /** the trigger landed on a sign-in page instead of the content */
   loginWall?: string;
   /** a write's own request was sent again by the page this many times, and stopped each time */
@@ -446,7 +452,18 @@ export async function runOpTrigger(
   // Session values (a site-wide API key, a guest token) don't depend on the args: refresh them from
   // the op's own request even when the page asked for other args, whose answer is never returned.
   const source = matched ?? hits.find((e) => e.response && e.response.status < 400);
-  mergeCapture(site, capture.cookies, source && { from: source.request.url, values: sessionValuesOf(op, source) });
+  const values = source ? sessionValuesOf(op, source) : {};
+  const captured = source && { from: source.request.url, values };
+  let unsaved: string | undefined;
+  try {
+    mergeCapture(site, capture.cookies, captured);
+  } catch (e) {
+    // A real write has left by now: a session that could not be saved (a busy lock, a read-only home)
+    // must not turn its answer into a failure that reads as unsent and gets it sent again. The site may
+    // have rotated it, though: the call says so, and later calls send the stored one.
+    if (!once) throw e;
+    if (differsFromStored(site, capture.cookies, values)) unsaved = (e as Error).message.split("\n")[0]!;
+  }
   const wall = matched?.response ? undefined : loginWall(capture, t.url);
   const { repeats, resends, others } = once?.stopped ?? {};
   const stopped = [...(others ?? [])];
@@ -454,11 +471,32 @@ export async function runOpTrigger(
   return {
     capture,
     matched,
+    values,
+    ...(unsaved ? { unsaved } : {}),
     ...(wall ? { loginWall: wall } : {}),
     ...(repeats ? { repeats } : {}),
     ...(resends ? { resends } : {}),
     ...(stopped.length || left.length ? { others: { stopped, left } } : {}),
   };
+}
+
+/** Whether saving a run's cookies and session values would change the stored session; true when it cannot be read. */
+function differsFromStored(site: string, cookies: CaptureResult["cookies"], values: Record<string, string>): boolean {
+  let s: Session;
+  try {
+    s = loadSession(site);
+  } catch {
+    return true;
+  }
+  const key = (c: { name: string; domain: string; path: string }) => `${c.name}\0${c.domain.toLowerCase()}\0${c.path}`;
+  const stored = new Map(s.cookies.map((c) => [key(c), c]));
+  const now = Date.now();
+  // an expired cookie the store lacks is dropped by the merge, so it changes nothing
+  const changes = (c: (typeof cookies)[number]) => {
+    const was = stored.get(key(c));
+    return was ? was.value !== c.value || was.expires !== c.expires : !(c.expires > 0 && c.expires * 1000 <= now);
+  };
+  return cookies.some(changes) || Object.entries(values).some(([n, v]) => s.values[n] !== v);
 }
 
 /** The page's last load: a redirect's end carries no #fragment, and a reload answers again. */

@@ -1,20 +1,10 @@
 /** Per-site cookie jar and session values under ~/.api-anything (0700 dirs, 0600 files, sealed by seal.ts). */
-import {
-  chmodSync,
-  closeSync,
-  mkdirSync,
-  openSync,
-  readdirSync,
-  readFileSync,
-  renameSync,
-  rmSync,
-  statSync,
-  writeFileSync,
-} from "node:fs";
+import { chmodSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { getDomain } from "tldts";
 import { siteOf } from "./domain.js";
+import { hold, LockBusy } from "./lock.js";
 import { readSealed, writeSealed } from "./seal.js";
 import { besideOrigins, credentialsOf, originsOf } from "./secrets.js";
 import type { StoredCookie } from "./types.js";
@@ -116,59 +106,25 @@ export function readJson<T>(file: string, fallback: T): T {
   }
 }
 
-export const pause = (ms: number) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
-
-/** Lock files this process holds: a nested lock of the same file runs inside the outer one. */
-const holding = new Set<string>();
-
-function acquire(lock: string, waitMs: number): boolean {
-  const deadline = Date.now() + waitMs;
-  for (;;) {
-    try {
-      closeSync(openSync(lock, "wx", 0o600));
-      return true;
-    } catch (e) {
-      if ((e as NodeJS.ErrnoException).code !== "EEXIST") throw e;
-      try {
-        if (Date.now() - statSync(lock).mtimeMs > 10_000) rmSync(lock, { force: true });
-      } catch {
-        /* released meanwhile */
-      }
-      if (Date.now() > deadline) return false;
-      pause(2);
-    }
-  }
-}
-
-function held<T>(lock: string, fn: () => T): T {
-  holding.add(lock);
-  try {
-    return fn();
-  } finally {
-    holding.delete(lock);
-    rmSync(lock, { force: true });
-  }
-}
+/** How long `withLock` waits: past a holder's save, which can wait 15 s on the key store. Tests shorten it. */
+export const lockWait = { ms: 30_000 };
 
 /**
- * Run fn holding an exclusive lock file next to `file`, so a read-modify-write in one process
- * never drops another process's update. A lock older than 10 s is a crashed holder's and is taken over.
- * Re-entrant within a process: fn may lock the same file again.
+ * Run fn holding the lock beside `file` (lock.ts), so a read-modify-write in one process never drops
+ * another process's update. Throws `LockBusy` without running fn when another process holds it for
+ * all of `waitMs`. Re-entrant within a process: fn may lock the same file again.
  */
-export function withLock<T>(file: string, fn: () => T): T {
+export function withLock<T>(file: string, fn: () => T, waitMs = lockWait.ms): T {
   ensureDir(dirname(file));
-  const lock = `${file}.lock`;
-  if (holding.has(lock)) return fn();
-  // ponytail: after 10 s of contention go ahead unlocked rather than hang a call
-  return acquire(lock, 10_000) ? held(lock, fn) : fn();
+  const r = hold(file, waitMs, fn);
+  if (!r) throw new LockBusy(file, waitMs);
+  return r.value;
 }
 
-/** `withLock` that gives up after `waitMs` instead of going ahead unlocked: undefined when it did not run. */
+/** `withLock` that answers undefined instead of throwing when fn did not run. */
 export function tryLock<T>(file: string, fn: () => T, waitMs = 1000): { value: T } | undefined {
   ensureDir(dirname(file));
-  const lock = `${file}.lock`;
-  if (holding.has(lock)) return { value: fn() };
-  return acquire(lock, waitMs) ? { value: held(lock, fn) } : undefined;
+  return hold(file, waitMs, fn);
 }
 
 export const CAPTURE_TTL_MS = 24 * 60 * 60_000;

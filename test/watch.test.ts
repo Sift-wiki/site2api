@@ -23,11 +23,21 @@ import { BudgetSpent, envPace, parseDuration, sitePace } from "../src/budget.js"
 import { capChanges, changesOf } from "../src/changes.js";
 import { call } from "../src/execute.js";
 import { createServer } from "../src/mcp.js";
-import { saveSession } from "../src/session.js";
-import { cacheKey, clock, KEEP_SNAPSHOT_MS, opPrint, prune, saveSnapshot } from "../src/snapshots.js";
+import { lockWait, saveSession } from "../src/session.js";
+import {
+  cacheKey,
+  clock,
+  KEEP_SNAPSHOT_MS,
+  loadSnapshot,
+  opPrint,
+  prune,
+  saveSnapshot,
+  swapSnapshot,
+} from "../src/snapshots.js";
 import { parseSite, type Site } from "../src/spec.js";
 import { cooling, reserveSend, saveSite } from "../src/store.js";
 import { vetShared } from "../src/vet.js";
+import { holdInChild, kill } from "./fixture/locks.js";
 import { type Fixture, LISTINGS, startFixture } from "./fixture/server.js";
 
 const run1 = promisify(execFile);
@@ -423,9 +433,11 @@ test("snapshots unused for 30 days are pruned", async () => {
   await call("board", "listings", {}, { ...opts, changes: true });
   assert.equal(snapshots().length, 2, "the cache entry, and the default watcher's baseline");
   const old = new Date(Date.now() - KEEP_SNAPSHOT_MS - 60_000);
-  for (const name of snapshots()) utimesSync(join(SNAPS, name), old, old);
+  for (const name of readdirSync(SNAPS)) utimesSync(join(SNAPS, name), old, old);
   prune();
   assert.deepEqual(snapshots(), []);
+  // a lock is never removed: a process holding or waiting on it would no longer exclude a new one
+  assert.ok(readdirSync(SNAPS).some((f) => f.endsWith(".json.lk")));
 });
 
 test("call_batch and call_operation take maxAgeMs and changesOnly", async () => {
@@ -732,4 +744,20 @@ test("a write's readback is counted, never refused, by a spent budget", async ()
   assert.equal(fx.calls.length, 2, "the write and its readback");
   const next = await call("rb", "listings", {}, opts);
   assert.equal(next.budget, true, "both were counted");
+});
+
+test("a baseline whose lock another process keeps is compared with, and never written over", async () => {
+  saveSnapshot("busy", { at: 1, op: "o", data: [1] });
+  lockWait.ms = 200;
+  const other = await holdInChild(join(SNAPS, "busy.json"));
+  try {
+    const r = swapSnapshot("busy", (prev) => ({ out: prev?.data, next: { at: 2, op: "o", data: [2] } }));
+    assert.deepEqual(r.out, [1]);
+    assert.equal(r.saved?.kept, false);
+    assert.match((r.saved as { reason: string }).reason, /stayed locked/);
+  } finally {
+    await kill(other);
+    lockWait.ms = 30_000;
+  }
+  assert.deepEqual(loadSnapshot("busy")?.data, [1]);
 });

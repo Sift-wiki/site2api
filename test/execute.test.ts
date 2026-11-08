@@ -1,22 +1,24 @@
 /** The ladder's rules with an injected fetch and maxTier 1 (no browser): writes, heal guards, rate. */
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createServer, type Server, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, before, beforeEach, describe, test } from "node:test";
+import { fileURLToPath } from "node:url";
 import { type CallResult, call, finish, stepOf } from "../src/execute.js";
 import { type Attempt, PROFILE_HINT } from "../src/heal.js";
 import { buildRequest } from "../src/http.js";
 import { importSession } from "../src/login.js";
 import { OMITTED } from "../src/secrets.js";
-import { saveSession } from "../src/session.js";
+import { lockWait, saveSession } from "../src/session.js";
 import { parseSite } from "../src/spec.js";
 import { coolDown, cooling, saveSite, staleMark } from "../src/store.js";
 import type { StoredCookie } from "../src/types.js";
 import { makeChromiumDb } from "./fixture/cookie-db.js";
+import { holdInChild, kill } from "./fixture/locks.js";
 
 const HOME = mkdtempSync(join(tmpdir(), "api-anything-exec-"));
 process.env.API_ANYTHING_HOME = HOME;
@@ -1616,3 +1618,50 @@ await new Promise((r) => setTimeout(r, Math.max(0, Number(process.env.AA_START) 
 const r = await call("local", "get", { q: "c" }, { maxTier: 1, minIntervalMs: Number(process.env.AA_INTERVAL) });
 process.stdout.write(String(r.ok));
 `;
+
+test("a lock another process keeps sends nothing: a write's ledger, even with again, and a read's send slot", async () => {
+  lockWait.ms = 200;
+  try {
+    const ledger = await holdInChild(join(HOME, "writes.json"));
+    try {
+      const w = await call(
+        "t",
+        "post",
+        { text: "busy" },
+        { ...opts(() => json({ ok: true })), allowWrites: true, again: true },
+      );
+      assert.deepEqual([w.ok, w.class, w.write, w.retry, seen.length], [false, "error", "not_sent", "safe", 0]);
+      assert.match(w.reason ?? "", /stayed locked/);
+    } finally {
+      await kill(ledger);
+    }
+    const pace = await holdInChild(join(HOME, "pace.json"));
+    try {
+      const r = await call("t", "user", { name: "bob" }, { ...opts(() => json({ user: {} })), minIntervalMs: 1000 });
+      assert.deepEqual([r.ok, r.class, seen.length], [false, "error", 0]);
+      assert.match(r.next ?? "", /^retry/);
+    } finally {
+      await kill(pace);
+    }
+  } finally {
+    lockWait.ms = 30_000;
+  }
+});
+
+test("a busy lock after a tier-3 write was sent never reads as unsent (stubbed browser, real ledger and locks)", () => {
+  const { NODE_TEST_CONTEXT: _context, ...env } = process.env;
+  const r = spawnSync(
+    process.execPath,
+    [
+      "--experimental-test-module-mocks",
+      "--import",
+      "tsx",
+      "--test",
+      "--test-reporter=tap",
+      fileURLToPath(new URL("./fixture/tier3-lock.ts", import.meta.url)),
+    ],
+    { encoding: "utf8", timeout: 60_000, cwd: fileURLToPath(new URL("..", import.meta.url)), env },
+  );
+  assert.equal(r.status, 0, `${r.error ?? ""}\n${r.stdout}\n${r.stderr}`);
+  assert.match(r.stdout, /^# pass 7$/m, "the stubbed suite ran");
+});

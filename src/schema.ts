@@ -124,6 +124,7 @@ export const CALL_RESULT_SCHEMA: JsonSchema = object(
     ms: num,
     reason: str,
     next: str,
+    warning: str,
     nextCall: NEXT_CALL_SCHEMA,
     retry: RETRY,
     retryAfterMs: num,

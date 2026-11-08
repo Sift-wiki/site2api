@@ -7,23 +7,11 @@
  */
 import { spawnSync } from "node:child_process";
 import { createCipheriv, createDecipheriv, createHmac, randomBytes, scryptSync } from "node:crypto";
-import {
-  closeSync,
-  existsSync,
-  linkSync,
-  openSync,
-  readdirSync,
-  readFileSync,
-  readSync,
-  renameSync,
-  rmSync,
-  statSync,
-  utimesSync,
-  writeFileSync,
-} from "node:fs";
+import { closeSync, existsSync, openSync, readdirSync, readFileSync, readSync, statSync, utimesSync } from "node:fs";
 import { tmpdir, userInfo } from "node:os";
 import { delimiter, dirname, join } from "node:path";
-import { corruptFile, ensureDir, home, pause, pruneCaptures, readJson, tryLock, writePrivate } from "./session.js";
+import { hold, lockPath } from "./lock.js";
+import { corruptFile, ensureDir, home, pruneCaptures, readJson, tryLock, writePrivate } from "./session.js";
 
 /** The version marker inside a sealed file's envelope; a later format gets another number. */
 export const SEALED = "api-anything/1";
@@ -37,7 +25,7 @@ const SERVICE = "api-anything";
 const ACCOUNT = "data-key";
 const SCRYPT = { N: 2 ** 15, r: 8, p: 1, maxmem: 64 * 1024 * 1024 };
 const STORE_TIMEOUT_MS = 15_000;
-/** The key-creation lock outlives what its holder does under it: three store calls of up to 15 s each. */
+/** How long a key creator waits for another's: three store calls of up to 15 s each, and a prompt answered. */
 const KEY_LOCK_MS = 120_000;
 
 /**
@@ -52,8 +40,8 @@ export interface KeyStore {
   /** store a new key; may replace one another process stored meanwhile (creation is locked, and read back) */
   put(key: Buffer): void;
   /**
-   * The lock file (without `.lock`) that guards creating this store's key. A store shared by every
-   * home of the user (Keychain, Secret Service) locks per user; by default, per home.
+   * The file whose lock (`lockPath`) guards creating this store's key. A store shared by every home
+   * of the user (Keychain, Secret Service) locks per user; by default, per home.
    */
   readonly lock?: string;
 }
@@ -324,69 +312,18 @@ function sealedKeys(): string[] {
 }
 
 /**
- * A lock whose holder writes its pid: taken over only when that process is gone. A live holder keeps
- * it however long it holds it — making the key can wait on a keychain or Secret Service prompt for
- * minutes — so age alone never takes a lock from a running process; a lock whose pid cannot be read
- * (a partial write) is taken after two seconds.
- */
-function staleLock(lock: string): string | undefined {
-  try {
-    const text = readFileSync(lock, "utf8");
-    const age = Date.now() - statSync(lock).mtimeMs;
-    const pid = Number(text);
-    if (!Number.isInteger(pid) || pid <= 0) return age > 2000 ? text : undefined; // being written
-    if (pid === process.pid) return undefined;
-    try {
-      process.kill(pid, 0);
-      return undefined;
-    } catch (e) {
-      return (e as NodeJS.ErrnoException).code === "ESRCH" ? text : undefined;
-    }
-  } catch {
-    return undefined; // released meanwhile
-  }
-}
-
-/**
- * Run fn holding the lock that guards creating a key. Unlike `withLock` it never expires under a
- * live holder (store subprocesses can outlast `withLock`'s 10 s) and never goes ahead unlocked.
+ * Run fn holding the lock that guards creating a key: `withLock`'s lock, with a longer wait, since
+ * its holder may wait on a keychain or Secret Service prompt.
  */
 export function keyLock<T>(file: string, fn: () => T, waitMs = KEY_LOCK_MS): T {
   ensureDir(dirname(file));
-  const lock = `${file}.lock`;
-  const deadline = Date.now() + waitMs;
-  for (;;) {
-    try {
-      writeFileSync(lock, String(process.pid), { flag: "wx", mode: 0o600 });
-      break;
-    } catch (e) {
-      if ((e as NodeJS.ErrnoException).code !== "EEXIST") throw e;
-    }
-    const stale = staleLock(lock);
-    if (stale !== undefined) {
-      // move it aside and check it is still the one judged stale, not a lock taken meanwhile
-      const aside = `${lock}.${process.pid}.stale`;
-      try {
-        renameSync(lock, aside);
-        if (readFileSync(aside, "utf8") !== stale) linkSync(aside, lock);
-      } catch {
-        // another waiter moved it first
-      }
-      rmSync(aside, { force: true });
-      continue;
-    }
-    if (Date.now() > deadline)
-      throw new SealError(
-        `another api-anything process has held ${lock} for over ${Math.round(waitMs / 1000)} s while making the key`,
-        `retry; if it repeats with no other api-anything running, delete ${lock}`,
-      );
-    pause(10);
-  }
-  try {
-    return fn();
-  } finally {
-    rmSync(lock, { force: true });
-  }
+  const r = hold(file, waitMs, fn);
+  if (!r)
+    throw new SealError(
+      `another api-anything process has held ${lockPath(file)} for over ${Math.round(waitMs / 1000)} s while making the key`,
+      "retry once the other api-anything process has finished making the key; nothing was written",
+    );
+  return r.value;
 }
 
 /** The passphrase's key: scrypt under this home's salt, made on first use, with the key id that tells a wrong passphrase. */
