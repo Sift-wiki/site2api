@@ -1375,9 +1375,11 @@ base64, the JSON root or a batch item: the caller would write the request), and 
 request whose document a param fills; a `match` naming a host, path or operationName (the match is what a trigger run
 lets through as the op's own request); op and param names a letter then letters, digits, `_ . -`;
 regexes (`pick` `~`, `embedded`, param `pattern`) at most 200 characters, with no quantified group
-inside a quantified group, no quantified group whose alternatives overlap (one a prefix of another,
-equal, or accepted by a sibling's class), and no two adjacent repeats whose atoms accept the same
-character (`.*.*`, `[0-9]*[0-9]*`); at most 50 operations, descriptions and hints at most 500 characters,
+inside a quantified group, no group whose alternatives overlap (one a prefix of another, or both
+accepting a shared character at each step: `a|aa`, `[ab]|a`) where it or a group around it repeats
+(`*`, `+` or a count of two or more, so `(a|aa)+` is refused and `(a|aa)?` passes), and no two
+adjacent repeats whose atoms accept a shared character when either has no upper bound (`.*.*`,
+`[0-9]*[0-9]*`, `a{2}a*`); at most 50 operations, descriptions and hints at most 500 characters,
 notes at most 8 KB, the file at most 256 KB; a param's `enum` at most 100 values of at most 500
 characters each; at most 10 checks per op, each arg a param of the op and at most 500 characters, a
 purpose at most 500; no checks on a write (verify would send it); no `unproven` mark; no provider key
