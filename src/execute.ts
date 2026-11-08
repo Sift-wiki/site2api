@@ -98,6 +98,7 @@ import {
   type Resolved,
   rememberedTier,
   rememberTier,
+  SendSlotBusy,
   settleWrite,
   staleMark,
   type WriteGate,
@@ -763,7 +764,19 @@ async function tryTier(ctx: Ctx, op: Operation, tier: Tier): Promise<Attempt> {
     // nothing was sent when the browser could not start
     if (e instanceof ProfileInUse) return { tier, class: "error", reason: e.message, hint: PROFILE_HINT, unsent: true };
     // the send slot's lock stayed busy (reserveSend): nothing was sent, and a retry may get it
-    if (e instanceof LockBusy) return { tier, class: "error", reason: e.message, hint: e.next, unsent: true };
+    if (e instanceof SendSlotBusy) return { tier, class: "error", reason: e.message, hint: e.next, unsent: true };
+    // any other busy lock may be one taken after the send (saving what it answered): a write may have run
+    if (e instanceof LockBusy)
+      return op.readOnly
+        ? { tier, class: "error", reason: e.message, hint: e.next }
+        : {
+            tier,
+            class: "error",
+            reason: e.message,
+            ambiguous: true,
+            hint: "the write may have run: check the site first. Do not retry it unchecked",
+            step: "check_site",
+          };
     // someone else's spec names an address on this machine or the local network: nothing was sent, and no tier sends it
     if (e instanceof AddressRefused)
       return {

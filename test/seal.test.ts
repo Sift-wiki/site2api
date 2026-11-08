@@ -41,7 +41,7 @@ import { CAPTURE_TTL_MS, loadSession, mergeCapture, saveSession, sessionFile } f
 import { loadSnapshot, saveSnapshot } from "../src/snapshots.js";
 import { status } from "../src/status.js";
 import type { StoredCookie } from "../src/types.js";
-import { holdInChild, kill, lockChild } from "./fixture/locks.js";
+import { holdInChild, kill, lockChild, raceReady } from "./fixture/locks.js";
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const SECRET = "live-session-cookie-value-0123456789";
@@ -474,10 +474,12 @@ test("key creation: another live process's key lock makes keyLock throw its Seal
 test("key creation: processes racing on the key lock never both run fn", async () => {
   const dir = mkdtempSync(join(tmpdir(), "aa-keylock-"));
   const [file, log, go] = [join(dir, "user", "data-key"), join(dir, "log"), join(dir, "go")];
-  const runs = [lockChild("race", file, log, go), lockChild("race", file, log, go)].map(
+  const children = [lockChild("race", file, log, go), lockChild("race", file, log, go)];
+  const runs = children.map(
     (p) => new Promise((resolve, reject) => p.on("exit", (code) => (code === 0 ? resolve(code) : reject(code)))),
   );
-  await new Promise((r) => setTimeout(r, 1000)); // both are up and waiting
+  // both are up and polling for go, so they reach the lock within a millisecond or two of each other
+  await Promise.all(children.map(raceReady));
   writeFileSync(go, "");
   await Promise.all(runs);
   assert.equal(readFileSync(log, "utf8"), "+-".repeat(6), "each entry is followed by its exit before the next");

@@ -20,7 +20,7 @@ export class LockBusy extends Error {
   readonly next: string;
   constructor(
     readonly file: string,
-    waitMs: number,
+    readonly waitMs: number,
   ) {
     super(
       `${file} stayed locked by another api-anything process for ${Math.round(waitMs / 1000)} s; nothing was changed`,

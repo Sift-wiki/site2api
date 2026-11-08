@@ -1,12 +1,13 @@
 /** The ladder's rules with an injected fetch and maxTier 1 (no browser): writes, heal guards, rate. */
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createServer, type Server, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, before, beforeEach, describe, test } from "node:test";
+import { fileURLToPath } from "node:url";
 import { type CallResult, call, finish, stepOf } from "../src/execute.js";
 import { type Attempt, PROFILE_HINT } from "../src/heal.js";
 import { buildRequest } from "../src/http.js";
@@ -1645,4 +1646,22 @@ test("a lock another process keeps sends nothing: a write's ledger, even with ag
   } finally {
     lockWait.ms = 30_000;
   }
+});
+
+test("a busy lock after a tier-3 write was sent never reads as unsent (stubbed browser, real ledger and locks)", () => {
+  const { NODE_TEST_CONTEXT: _context, ...env } = process.env;
+  const r = spawnSync(
+    process.execPath,
+    [
+      "--experimental-test-module-mocks",
+      "--import",
+      "tsx",
+      "--test",
+      "--test-reporter=tap",
+      fileURLToPath(new URL("./fixture/tier3-lock.ts", import.meta.url)),
+    ],
+    { encoding: "utf8", timeout: 60_000, cwd: fileURLToPath(new URL("..", import.meta.url)), env },
+  );
+  assert.equal(r.status, 0, `${r.error ?? ""}\n${r.stdout}\n${r.stderr}`);
+  assert.match(r.stdout, /^# pass 3$/m, "the stubbed suite ran");
 });

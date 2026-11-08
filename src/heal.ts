@@ -446,7 +446,13 @@ export async function runOpTrigger(
   // Session values (a site-wide API key, a guest token) don't depend on the args: refresh them from
   // the op's own request even when the page asked for other args, whose answer is never returned.
   const source = matched ?? hits.find((e) => e.response && e.response.status < 400);
-  mergeCapture(site, capture.cookies, source && { from: source.request.url, values: sessionValuesOf(op, source) });
+  try {
+    mergeCapture(site, capture.cookies, source && { from: source.request.url, values: sessionValuesOf(op, source) });
+  } catch (e) {
+    // A real write has left by now: a session that could not be saved (a busy lock, a read-only home)
+    // must not turn its answer into a failure that reads as unsent and gets it sent again.
+    if (!once) throw e;
+  }
   const wall = matched?.response ? undefined : loginWall(capture, t.url);
   const { repeats, resends, others } = once?.stopped ?? {};
   const stopped = [...(others ?? [])];

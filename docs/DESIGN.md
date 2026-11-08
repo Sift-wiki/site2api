@@ -932,8 +932,13 @@ would hold a lock nobody else checks; each is empty. A waiter gives up after 30 
 retryable error with a `next`) and never goes ahead unlocked: a write is not sent, a send slot is not
 taken, a baseline is not kept, a login is not reported done. Callers whose file is a hint (`state.json`,
 the call log) carry on without it, as for a home that cannot be written. Within a process the lock is
-re-entrant. The `.lock` files of 0.4 and earlier are neither used nor removed: an older process running
-beside a newer one does not exclude it.
+re-entrant. Only the send slot's `LockBusy` (`SendSlotBusy`) and the write ledger's, before the write,
+mean nothing was sent; a busy lock later in a call (saving the session a write's run left) may come
+after the send, so that write is `may_have_applied`, never `not_sent`, and a tier-3 write keeps its
+answer when the session cannot be saved. Known limit: the wait is synchronous (SQLite's busy timeout,
+as the old lock's `Atomics.wait` was), so it blocks the process's event loop for as long as it waits.
+The `.lock` files of 0.4 and earlier are neither used nor removed: an older process running beside a
+newer one does not exclude it.
 
 **Call log.** Every finished call (a write's readback is part of its call, not one of its own)
 appends one line to `~/.api-anything/calls.jsonl`: `{at, site, op, class, tier, ms, healed?,

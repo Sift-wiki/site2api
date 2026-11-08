@@ -1,7 +1,7 @@
 /**
  * Another process holding a lock, for tests. Run as a script it holds the lock beside a file until it
- * is killed (`hold <file>`), or takes the key lock three times, logging each entry and exit
- * (`race <file> <log> <go>`).
+ * is killed (`hold <file>`), or says "ready" and, once `go` exists, takes the key lock three times,
+ * logging each entry and exit (`race <file> <log> <go>`).
  */
 import { type ChildProcess, spawn } from "node:child_process";
 import { once } from "node:events";
@@ -31,6 +31,18 @@ export async function holdInChild(file: string): Promise<ChildProcess> {
   return p;
 }
 
+/** Resolves once a `race` child is about to contend; rejects if it exits first. */
+export function raceReady(p: ChildProcess): Promise<void> {
+  return new Promise((resolve, reject) => {
+    let out = "";
+    p.stdout!.on("data", (chunk) => {
+      out += String(chunk);
+      if (out.includes("ready\n")) resolve();
+    });
+    p.once("exit", (code) => reject(new Error(`the race child exited (${code}) before it was ready`)));
+  });
+}
+
 export async function kill(p: ChildProcess): Promise<void> {
   if (p.exitCode !== null || p.signalCode !== null) return;
   const exited = once(p, "exit");
@@ -52,7 +64,8 @@ if (process.argv[1] === SELF) {
     });
     if (!r) process.exit(3);
   } else if (mode === "race") {
-    while (!existsSync(go)) sleep(5);
+    writeSync(1, "ready\n");
+    while (!existsSync(go)) sleep(1);
     for (let i = 0; i < 3; i++)
       keyLock(
         file,
