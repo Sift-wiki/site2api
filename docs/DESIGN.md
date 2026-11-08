@@ -1256,10 +1256,14 @@ covered verification, so its first read writes `verify` equal to `share` (`verif
 and later reads take the field as it is.
 
 **Local-only.** `localOnly()` is `API_ANYTHING_LOCAL_ONLY=1` or `settings.json` `localOnly`
-(`setup --local-only`; `--no-local-only` clears it). `registryRequest` is the one function that sends a
-request to the registry, and with local-only on it throws `LocalOnlyError` before it opens a connection,
-so every path is covered by that one check: search, pull, servedNow, sharedName, reports, verify jobs,
-claims, uploads, interface reports and the bundled upgrade. The callers that would otherwise ask the
+(`setup --local-only`; `--no-local-only` clears it). A `settings.json` that exists but cannot be read,
+or is not a JSON object, fails closed: local-only, sharing and verification off, and a `settings`
+problem in `status`. That inferred flag is never written: an answer to either question refuses to
+replace the file (it could neither keep a local-only choice it cannot read nor add one the user never
+made), and only `setLocalOnly`, whose flag is the one at stake, replaces it. `registryRequest` is the one
+function that sends a request to the registry, and with local-only on it throws `LocalOnlyError` before
+it opens a connection, so every path is covered by that one check: search, pull, servedNow, sharedName,
+reports, verify jobs, claims, uploads, interface reports and the bundled upgrade. The callers that would otherwise ask the
 user something or record an attempt check first: `search` answers from this machine with a `localOnly`
 note, `shareOps` answers each op "local-only", `publish` refuses with that reason, `upgradeBundled`
 records no attempt, `learn_site` asks no sharing question, and a call (CLI or MCP) of a site this machine

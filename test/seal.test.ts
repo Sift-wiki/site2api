@@ -272,6 +272,26 @@ test("a capture past its 24 h is refused with a next, and deleted; a sealed fres
   assert.throws(() => loadCapture("cstale"), /no capture "cstale"/, "the expired file is gone");
 });
 
+test("a capture past its 24 h is deleted even when it cannot be decrypted; a fresh unreadable one is kept", () => {
+  setKeyStore(memoryStore());
+  mkdirSync(join(home, "captures"), { recursive: true });
+  const file = (id: string) => join(home, "captures", `${id}.json`);
+  writeFileSync(file("cbadold"), `${MAGIC}{"sealed":`);
+  const old = (Date.now() - 25 * 3600_000) / 1000;
+  utimesSync(file("cbadold"), old, old);
+  assert.throws(
+    () => loadCapture("cbadold"),
+    (e: unknown) => e instanceof CaptureUnavailable && /24 h lifetime/.test(e.message) && e.recapture,
+  );
+  assert.equal(existsSync(file("cbadold")), false, "the expired file is gone, though it never decrypted");
+  writeFileSync(file("cbad"), `${MAGIC}{"sealed":`);
+  assert.throws(
+    () => loadCapture("cbad"),
+    (e: unknown) => e instanceof CaptureUnavailable && /integrity check/.test(e.message) && !e.recapture,
+  );
+  assert.equal(existsSync(file("cbad")), true, "a fresh one is left for the user to see");
+});
+
 test("the Keychain store reads with find-generic-password, adds through stdin without -U, and keeps a key added first", () => {
   const dir = mkdtempSync(join(tmpdir(), "aa-security-"));
   const bin = join(dir, "security");
@@ -655,13 +675,50 @@ test("a downgrade to 0.3.2 refuses a sealed session loudly instead of reading it
 });
 
 test("a corrupt file's error names the file, not the text it holds", () => {
+  // short enough that the parser's excerpt would quote all of it
+  const text = '{"c":SECRETX}';
+  const file = sessionFile("corrupt");
+  const exact = (e: unknown) =>
+    e instanceof Error &&
+    e.message === `${file} is corrupt (not valid JSON); fix or delete it` &&
+    !e.message.includes("SECRETX");
   setKeyStore(null); // no key: the file is read as plaintext JSON
   mkdirSync(join(home, "sessions"), { recursive: true });
-  writeFileSync(sessionFile("corrupt"), '{"cookies": SECRETVALUE}');
+  writeFileSync(file, text);
+  assert.throws(() => loadSession("corrupt"), exact, "the parser's excerpt, which quotes the file, is not passed on");
+  // sealed, with text inside that is not JSON
+  setKeyStore(memoryStore());
+  writeSealed(file, text, "session:corrupt");
+  assert.ok(isSealedText(readFileSync(file, "utf8")));
+  assert.throws(() => loadSession("corrupt"), exact, "nor is the decrypted text's");
+});
+
+test("an envelope's or marker's own fields are described in an error, never quoted", () => {
+  setKeyStore(memoryStore());
+  saveSession("site", { cookies: jar(), values: {} });
+  const file = sessionFile("site");
+  const env = envelope(file);
+  const SENTINEL = "SENTINEL-0123456789";
+  const clean = (e: unknown) => e instanceof SealError && !e.message.includes(SENTINEL) && !e.next.includes(SENTINEL);
+  for (const text of [
+    `${MAGIC}${JSON.stringify({ ...env, sealed: SENTINEL })}`,
+    `${MAGIC}${JSON.stringify({ ...env, alg: SENTINEL })}`,
+    `${MAGIC}${JSON.stringify({ ...env, key: `${SENTINEL} value` })}`,
+    JSON.stringify({ sealed: SENTINEL, cookies: [] }),
+  ]) {
+    writeFileSync(file, text);
+    assert.throws(
+      () => loadSession("site"),
+      (e: unknown) => clean(e) && /integrity check/.test((e as Error).message),
+      text.slice(0, 60),
+    );
+  }
+  // this home's marker names a key that is no store's name
+  setKeyStore(null);
+  writeFileSync(join(home, "sealed.json"), JSON.stringify({ v: 1, at: "", key: SENTINEL }));
   assert.throws(
-    () => loadSession("corrupt"),
-    (e: unknown) => e instanceof Error && /is corrupt/.test(e.message) && !/SECRETVALUE/.test(e.message),
-    "the parser's excerpt, which quotes the file, is not passed on",
+    () => saveSession("other", { cookies: [], values: {} }),
+    (e: unknown) => clean(e) && /sealed with the unknown key/.test((e as Error).message),
   );
 });
 

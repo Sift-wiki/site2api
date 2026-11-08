@@ -6,6 +6,7 @@
 import { readdirSync } from "node:fs";
 import { join } from "node:path";
 import { loadRecord, type Outcome, opHash } from "./checks.js";
+import { settingsFix, settingsProblem } from "./identity.js";
 import { plaintextFiles, plaintextSessions, SealError, type Sealing, sealing } from "./seal.js";
 import { home } from "./session.js";
 import type { Operation } from "./spec.js";
@@ -49,7 +50,7 @@ export interface SiteStatus {
 export interface Problem {
   site: string;
   op?: string;
-  problem: "cooling" | "stale" | "escalated" | "degraded" | "failing" | "verify" | "write" | "plaintext";
+  problem: "cooling" | "stale" | "escalated" | "degraded" | "failing" | "verify" | "write" | "plaintext" | "settings";
   detail: string;
   next: string;
 }
@@ -414,5 +415,13 @@ export function status(site?: string, now = Date.now()): Status {
     problems.push(...r.problems);
   }
   const kept = storageStatus(site);
+  const settings = settingsProblem();
+  if (settings)
+    kept.problems.push({
+      site: "*",
+      problem: "settings",
+      detail: `${settings}: until it reads, this install is local-only, and sharing and verification are off`,
+      next: settingsFix(),
+    });
   return { ok: true, storage: kept.storage, sites, problems: [...problems, ...kept.problems] };
 }

@@ -428,13 +428,21 @@ export function chooseProfile(o: ProfileQuery): ChosenProfile | undefined {
 
 /* --------------------------------------------------------------- file import */
 
-/** Parse a cookies.txt (Netscape) or JSON array (Cookie-Editor / Playwright shape) export. */
-export function cookiesFromFile(text: string, url: string): StoredCookie[] {
+/**
+ * Parse a cookies.txt (Netscape) or JSON array (Cookie-Editor / Playwright shape) export. `file` names
+ * it in an error, which never quotes it: the parser's message would put cookie values in it.
+ */
+export function cookiesFromFile(text: string, url: string, file = "the cookie export"): StoredCookie[] {
   const trimmed = text.trim();
   const host = new URL(url).hostname;
   if (trimmed.startsWith("[") || trimmed.startsWith("{")) {
-    const parsed = JSON.parse(trimmed);
-    const arr = Array.isArray(parsed) ? parsed : (parsed.cookies ?? []);
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(trimmed);
+    } catch {
+      throw new Error(`${file} is not valid JSON: export the cookies again, as cookies.txt or a JSON array`);
+    }
+    const arr = Array.isArray(parsed) ? parsed : ((parsed as { cookies?: unknown[] } | null)?.cookies ?? []);
     return (arr as Record<string, unknown>[]).map((c) => normalizeJson(c, host));
   }
   // Netscape columns: domain, includeSubdomains, path, secure, expiry, name, value.

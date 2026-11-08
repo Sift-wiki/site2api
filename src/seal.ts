@@ -261,6 +261,9 @@ interface Marker {
   migrated?: boolean;
 }
 
+/** A key store's name (`passphrase`, `macos-keychain`): a key a file names is put in an error only when it is one. */
+const KEY_NAME = /^[a-z][a-z0-9-]{0,23}$/;
+
 const readMarker = (): Marker | undefined => {
   try {
     return JSON.parse(readFileSync(markerFile(), "utf8")) as Marker;
@@ -468,7 +471,8 @@ function dataKey(sealedWith?: string): DataKey | undefined {
   const marker = readMarker();
   const keys = marker ? [] : sealedKeys();
   if (!marker && !keys.length) return undefined;
-  const source = sealedWith ?? marker?.key ?? keys[0]!;
+  const named: unknown = sealedWith ?? marker?.key ?? keys[0];
+  const source = typeof named === "string" && KEY_NAME.test(named) ? named : "unknown";
   throw new SealError(
     `this home's credential files are sealed with the ${source} key, which is not available here (${got.none}); nothing is written unsealed`,
     source === "passphrase"
@@ -529,13 +533,13 @@ function open(text: string, file: string, label: string, next: string): string {
   if (!env || typeof env !== "object") throw broken("its envelope is not an object");
   if (env.sealed !== SEALED || env.alg !== "A256GCM")
     throw new SealError(
-      `${file} failed its integrity check: its marker (${String(env.sealed)}, ${String(env.alg)}) is not one this version reads`,
+      `${file} failed its integrity check: its format marker is not one this version reads`,
       `upgrade api-anything if a newer version wrote it; otherwise ${next}`,
     );
   const iv = bytes(env.iv, 12);
   const tag = bytes(env.tag, 16);
   const data = bytes(env.data);
-  if (!iv || !tag || !data || typeof env.kid !== "string" || typeof env.key !== "string")
+  if (!iv || !tag || !data || typeof env.kid !== "string" || typeof env.key !== "string" || !KEY_NAME.test(env.key))
     throw broken("its iv, tag, data or key id is malformed");
   const k = dataKey(env.key);
   if (!k)
@@ -572,7 +576,7 @@ function plainValue<T>(text: string, file: string, next: string): T {
   }
   if (v && typeof v === "object" && "sealed" in v)
     throw new SealError(
-      `${file} failed its integrity check: it carries a sealed marker (${String((v as Envelope).sealed)}) but is not a sealed file`,
+      `${file} failed its integrity check: it carries a sealed marker but is not a sealed file`,
       next,
     );
   return v as T;

@@ -79,6 +79,17 @@ test("resolution: user copy wins over bundled; save writes a user copy", () => {
   assert.throws(() => loadSite("bad", bundled), /bad\.json: invalid site spec/);
 });
 
+test("a spec that is not JSON is named in the error, never quoted", () => {
+  const { home, bundled } = fresh();
+  mkdirSync(join(home, "sites"), { recursive: true });
+  const path = join(home, "sites", "broken.json");
+  writeFileSync(path, '{"k":SECRETX}');
+  assert.throws(
+    () => loadSite("broken", bundled),
+    (e: unknown) => e instanceof Error && e.message === `${path} is corrupt (not valid JSON); fix or delete it`,
+  );
+});
+
 test("site notes stop at the Maintainer notes heading; the user's copy wins", () => {
   const { home, bundled } = fresh();
   writeFileSync(

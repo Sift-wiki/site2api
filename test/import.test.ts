@@ -548,6 +548,15 @@ test("Firefox plaintext moz_cookies", () => {
   assert.equal(r?.cookies[0]?.expires, 2000000000);
 });
 
+test("a cookie export that is not JSON is named in the error, never quoted", () => {
+  assert.throws(
+    () => cookiesFromFile('[{"value":SECRETX}]', "https://linkedin.com", "/exports/cookies.json"),
+    (e: unknown) =>
+      e instanceof Error &&
+      e.message === "/exports/cookies.json is not valid JSON: export the cookies again, as cookies.txt or a JSON array",
+  );
+});
+
 test("cookiesFromFile parses Netscape and JSON exports", () => {
   const netscape = [
     "# Netscape HTTP Cookie File",
