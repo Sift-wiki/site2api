@@ -4,7 +4,7 @@
  */
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
@@ -223,4 +223,15 @@ test("setup --local-only is a setting, and --no-local-only turns it off", async 
   assert.equal(localOnly(), false);
   assert.match(off.stderr, /Sharing: on/);
   noConnection();
+});
+
+test("an unreadable settings.json fails closed: local-only, and no request reaches the registry", async () => {
+  writeFileSync(settingsFile(), "{ not json");
+  assert.equal(localOnly(), true, "a settings file that cannot be read must not turn local-only off");
+  const r = await search("hacker news");
+  assert.match(String(r.localOnly), /searched this machine only/);
+  noConnection();
+  // the documented way out still works: it rewrites a readable file
+  setLocalOnly(false);
+  assert.equal(localOnly(), false);
 });
