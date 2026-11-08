@@ -18,7 +18,6 @@ import {
   profileLabel,
 } from "./import.js";
 import {
-  forgetUnsaved,
   type ImportApproval,
   loadSession,
   loggedIn,
@@ -402,10 +401,7 @@ export const windowRetry = (site: string, how: string) =>
 export async function logout(site: string): Promise<void> {
   safeName(site);
   // removed, not overwritten with an empty jar: a sealed file whose key is lost must still be resettable
-  withLock(sessionFile(site), () => {
-    rmSync(sessionFile(site), { force: true });
-    forgetUnsaved(site);
-  });
+  withLock(sessionFile(site), () => rmSync(sessionFile(site), { force: true }));
   if (browserAvailable()) {
     try {
       let domain = site.toLowerCase();

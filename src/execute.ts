@@ -240,7 +240,7 @@ export interface CallResult {
   next?: string;
   /**
    * what the caller should know whatever the outcome: the session the site set during a write's tier-3
-   * run could not be saved, so a later call may send the one it replaced
+   * run could not be saved, so later calls send the stored one it may have replaced
    */
   warning?: string;
   /**
@@ -610,11 +610,11 @@ const sentOnce = (site: string, op: Operation) =>
   `the write was sent once and may have run: check the site first. Do not retry: the site answered it with a redirect that would send it a second time, which was not followed; if the operation moved, learn it at its new address: api-anything add ${site} ${op.name} ... --write`;
 
 const unsavedNext = (site: string) =>
-  `if a later call of ${site} says auth, ask the user to run: api-anything login ${site}`;
+  `if a later call of ${site} answers auth, ask the user to run: api-anything login ${site}`;
 
 /** A write's tier-3 run captured a session it could not save: the answer stands, the session may not. */
 const unsavedWarning = (site: string, why: string) =>
-  `the session the site set during this call could not be saved (${why}): this process sends it on its next calls, but another process sends the one it replaced until a save succeeds; ${unsavedNext(site)}`;
+  `the session the site set during this call was not saved (${why}): later calls send the stored one, which the site may have replaced; ${unsavedNext(site)}`;
 
 const sessionOrNone = (site: string): Session | undefined => {
   try {
@@ -1413,7 +1413,7 @@ async function run(
     const unsaved = log.find((a) => a.unsaved)?.unsaved;
     if (unsaved) {
       f.warning = unsavedWarning(siteName, unsaved);
-      f.next ??= `the write was sent: do not send it again for this. ${unsavedNext(siteName)}`;
+      f.next ??= `the write was sent: do not send it again. The session the site set during it was not saved; ${unsavedNext(siteName)}`;
     }
     const sessions = [jar, sessionOrNone(siteName)];
     if (f.reason) f.reason = hide(f.reason, sessions, true);

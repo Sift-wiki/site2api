@@ -39,7 +39,7 @@ mock.module(new URL("../../src/browser.ts", import.meta.url).href, {
   },
 });
 const { call } = await import("../../src/execute.js");
-const { loadSession, lockWait, mergeCapture, saveSession, sessionFile } = await import("../../src/session.js");
+const { loadSession, lockWait, saveSession, sessionFile } = await import("../../src/session.js");
 const { readSealed } = await import("../../src/seal.js");
 const { parseSite } = await import("../../src/spec.js");
 const { loadWrites, saveSite } = await import("../../src/store.js");
@@ -170,20 +170,31 @@ test("a tier-3 write's session that could not be saved: a captured cookie the er
   assert.match(r.reason ?? "", /could not be renewed/, "the body is quoted, so redaction is what keeps the value out");
   assert.ok(!JSON.stringify(r).includes(ROTATED), JSON.stringify(r));
   assert.ok(!JSON.stringify(loadWrites({ site: "fixture" })).includes(ROTATED));
-  assert.match(r.warning ?? "", /could not be saved/);
+  assert.match(r.warning ?? "", /was not saved/);
 });
 
-test("a tier-3 write's session that could not be saved: the write stays accepted, the call warns, and this process keeps the session until a save succeeds", async () => {
+test("a tier-3 write's session that could not be saved: the write stays accepted and the call warns", async () => {
   reset();
   saveSession("fixture", { cookies: [{ ...rotated, value: "old-session-value-1b2c3d4e5f60" }], values: {} });
   page = { status: 200, body: '{"id":1}', cookies: [rotated] };
   const r = await callHeld();
   assert.equal(runs, 1);
   assert.deepEqual([r.ok, r.write], [true, "accepted"], JSON.stringify(r));
-  assert.match(r.warning ?? "", /the session the site set during this call could not be saved/);
-  assert.match(r.next ?? "", /do not send it again.*api-anything login fixture/);
-  assert.equal(loadSession("fixture").cookies.find((c) => c.name === "sid")?.value, ROTATED, "kept in memory");
-  assert.notEqual(onDisk().cookies?.find((c) => c.name === "sid")?.value, ROTATED, "not on disk yet");
-  mergeCapture("fixture", []); // the lock is free now: the next save writes it
-  assert.equal(onDisk().cookies?.find((c) => c.name === "sid")?.value, ROTATED);
+  assert.match(r.warning ?? "", /the session the site set during this call was not saved/);
+  assert.doesNotMatch(r.warning ?? "", /this process sends it/);
+  assert.match(r.next ?? "", /do not send it again\. The session the site set during it was not saved/);
+  assert.match(r.next ?? "", /answers auth, ask the user to run: api-anything login fixture/);
+});
+
+test("a tier-3 write's session that could not be saved: loadSession returns exactly the session on disk", async () => {
+  reset();
+  saveSession("fixture", { cookies: [{ ...rotated, value: "old-session-value-1b2c3d4e5f60" }], values: {} });
+  const before = loadSession("fixture");
+  const file = onDisk();
+  page = { status: 200, body: '{"id":1}', cookies: [rotated] };
+  const r = await callHeld();
+  assert.match(r.warning ?? "", /was not saved/, JSON.stringify(r));
+  assert.deepEqual(onDisk(), file, "the file is untouched");
+  assert.deepEqual(loadSession("fixture"), before, "nothing of the unsaved capture is laid over the file");
+  assert.deepEqual(loadSession("fixture").cookies, file.cookies);
 });

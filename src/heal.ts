@@ -36,7 +36,6 @@ import {
   CAPTURE_TTL_MS,
   cookieHeaderFor,
   home,
-  keepUnsaved,
   loadSession,
   mergeCapture,
   parseCookieHeader,
@@ -461,9 +460,9 @@ export async function runOpTrigger(
   } catch (e) {
     // A real write has left by now: a session that could not be saved (a busy lock, a read-only home)
     // must not turn its answer into a failure that reads as unsent and gets it sent again. The site may
-    // have rotated it, though: this process keeps it, and the call says it was not saved.
+    // have rotated it, though: the call says so, and later calls send the stored one.
     if (!once) throw e;
-    if (keepUnsaved(site, capture.cookies, captured)) unsaved = (e as Error).message.split("\n")[0]!;
+    if (differsFromStored(site, capture.cookies, values)) unsaved = (e as Error).message.split("\n")[0]!;
   }
   const wall = matched?.response ? undefined : loginWall(capture, t.url);
   const { repeats, resends, others } = once?.stopped ?? {};
@@ -479,6 +478,25 @@ export async function runOpTrigger(
     ...(resends ? { resends } : {}),
     ...(stopped.length || left.length ? { others: { stopped, left } } : {}),
   };
+}
+
+/** Whether saving a run's cookies and session values would change the stored session; true when it cannot be read. */
+function differsFromStored(site: string, cookies: CaptureResult["cookies"], values: Record<string, string>): boolean {
+  let s: Session;
+  try {
+    s = loadSession(site);
+  } catch {
+    return true;
+  }
+  const key = (c: { name: string; domain: string; path: string }) => `${c.name}\0${c.domain.toLowerCase()}\0${c.path}`;
+  const stored = new Map(s.cookies.map((c) => [key(c), c]));
+  const now = Date.now();
+  // an expired cookie the store lacks is dropped by the merge, so it changes nothing
+  const changes = (c: (typeof cookies)[number]) => {
+    const was = stored.get(key(c));
+    return was ? was.value !== c.value || was.expires !== c.expires : !(c.expires > 0 && c.expires * 1000 <= now);
+  };
+  return cookies.some(changes) || Object.entries(values).some(([n, v]) => s.values[n] !== v);
 }
 
 /** The page's last load: a redirect's end carries no #fragment, and a reload answers again. */

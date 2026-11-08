@@ -1663,5 +1663,5 @@ test("a busy lock after a tier-3 write was sent never reads as unsent (stubbed b
     { encoding: "utf8", timeout: 60_000, cwd: fileURLToPath(new URL("..", import.meta.url)), env },
   );
   assert.equal(r.status, 0, `${r.error ?? ""}\n${r.stdout}\n${r.stderr}`);
-  assert.match(r.stdout, /^# pass 5$/m, "the stubbed suite ran");
+  assert.match(r.stdout, /^# pass 6$/m, "the stubbed suite ran");
 });
