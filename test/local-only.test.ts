@@ -4,8 +4,9 @@
  */
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import fs, { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
+import { syncBuiltinESMExports } from "node:module";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -279,5 +280,30 @@ test("settings.json that is not an object, or a directory, fails closed too", ()
   mkdirSync(settingsFile());
   assert.equal(localOnly(), true);
   assert.throws(() => answerShare(true), /settings\.json cannot be read \(EISDIR\), so the answer was not saved/);
+  noConnection();
+});
+
+test("an answer reads settings.json once: a read that fails after the first never drops local-only", () => {
+  saveSettings({ share: false, askedAt: "2026-11-01T00:00:00.000Z", verify: false, localOnly: true });
+  const real = fs.readFileSync;
+  let reads = 0;
+  // every read of settings.json after the first fails, as an EIO or a concurrent corruption would
+  fs.readFileSync = ((...a: Parameters<typeof real>) => {
+    if (a[0] === settingsFile() && ++reads > 1) throw Object.assign(new Error("EIO: i/o error, read"), { code: "EIO" });
+    return real(...a);
+  }) as typeof real;
+  syncBuiltinESMExports();
+  try {
+    for (const answer of [() => answerShare(true), () => answerVerify(true), () => answerShare(false)]) {
+      reads = 0;
+      answer();
+      assert.equal(JSON.parse(real(settingsFile(), "utf8")).localOnly, true, "local-only is kept");
+      assert.equal(reads, 1, "one read per answer");
+    }
+  } finally {
+    fs.readFileSync = real;
+    syncBuiltinESMExports();
+  }
+  assert.equal(localOnly(), true);
   noConnection();
 });

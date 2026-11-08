@@ -114,8 +114,9 @@ function migrate(s: Stored): Stored {
   return next;
 }
 
-export function loadSettings(): Settings {
-  const s = migrate(readStored().s);
+/** The stored answers as every caller sees them: a question never answered is off. */
+function settingsOf(stored: Stored): Settings {
+  const s = migrate(stored);
   const share = s.share === true && !!s.askedAt;
   return {
     share,
@@ -127,6 +128,8 @@ export function loadSettings(): Settings {
   };
 }
 
+export const loadSettings = (): Settings => settingsOf(readStored().s);
+
 /** `verify` is always written: a file without it is one an older version wrote, which `migrate` reads. */
 export function saveSettings(s: Omit<Settings, "verify"> & { verify?: boolean }): void {
   writePrivate(settingsFile(), `${JSON.stringify({ ...s, verify: s.verify ?? false }, null, 2)}\n`);
@@ -136,12 +139,13 @@ const now = () => new Date().toISOString();
 
 /**
  * The stored answers, for a writer that keeps them. An unreadable file is not replaced: it may hold a
- * local-only choice, and a replacement would either drop it or write one the user never made.
+ * local-only choice, and a replacement would either drop it or write one the user never made. One read
+ * only: a second one that failed (EIO, a write meanwhile) would hand back defaults without local-only.
  */
 function current(): Settings {
-  const why = settingsProblem();
-  if (why) throw new Error(`${why}, so the answer was not saved: ${settingsFix()}`);
-  return loadSettings();
+  const { s, unreadable } = readStored();
+  if (unreadable) throw new Error(`${settingsFile()} ${unreadable}, so the answer was not saved: ${settingsFix()}`);
+  return settingsOf(s);
 }
 
 /**

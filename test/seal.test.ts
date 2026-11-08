@@ -451,7 +451,14 @@ test("fail closed: once a home has sealed, a missing key store refuses writes (m
 
   for (const dropMarker of [false, true]) {
     if (dropMarker) rmSync(join(home, "sealed.json"));
-    setKeyStore(null);
+    // the store that sealed them is the one configured, but it is not here (no binary, no bus)
+    setKeyStore({
+      name: "memory",
+      get() {
+        throw new KeyUnavailable("memory is not here");
+      },
+      put() {},
+    });
     process.env.API_ANYTHING_PLAINTEXT = "1"; // not even the plaintext choice writes over a sealed home
     assert.throws(
       () => saveSession("site", { cookies: jar("plain"), values: {} }),
@@ -703,7 +710,6 @@ test("an envelope's or marker's own fields are described in an error, never quot
   for (const text of [
     `${MAGIC}${JSON.stringify({ ...env, sealed: SENTINEL })}`,
     `${MAGIC}${JSON.stringify({ ...env, alg: SENTINEL })}`,
-    `${MAGIC}${JSON.stringify({ ...env, key: `${SENTINEL} value` })}`,
     JSON.stringify({ sealed: SENTINEL, cookies: [] }),
   ]) {
     writeFileSync(file, text);
@@ -713,12 +719,63 @@ test("an envelope's or marker's own fields are described in an error, never quot
       text.slice(0, 60),
     );
   }
-  // this home's marker names a key that is no store's name
+});
+
+test("a key store a file or the marker names is repeated only when this code knows it, and never decides whether it opens", () => {
+  const NAME = "privatecookietoken";
+  const clean = (e: unknown) =>
+    e instanceof SealError &&
+    !`${e.message} ${e.next}`.includes(NAME) &&
+    /a key from an unrecognized key store|\(an unrecognized key store\)/.test(e.message);
+  setKeyStore(memoryStore());
+  saveSession("site", { cookies: jar(), values: {} });
+  const file = sessionFile("site");
+  const env = envelope(file);
+  writeEnvelope(file, { ...env, key: NAME });
+  assert.equal(loadSession("site").cookies[0]!.value, SECRET, "the right key opens it, whatever the name says");
+
+  setKeyStore(memoryStore()); // another key
+  assert.throws(() => loadSession("site"), clean);
+  process.env.API_ANYTHING_KEY = "some passphrase";
+  assert.throws(
+    () => loadSession("site"),
+    (e: unknown) =>
+      clean(e) &&
+      /unset API_ANYTHING_KEY to read it with a key from an unrecognized key store/.test((e as SealError).next),
+  );
+  delete process.env.API_ANYTHING_KEY;
+
+  // no key here at all: neither the marker's name nor the file's reaches the error, its next or status
   setKeyStore(null);
-  writeFileSync(join(home, "sealed.json"), JSON.stringify({ v: 1, at: "", key: SENTINEL }));
+  writeFileSync(join(home, "sealed.json"), JSON.stringify({ v: 1, at: "", key: NAME }));
+  assert.throws(() => loadSession("site"), clean);
+  assert.throws(() => saveSession("other", { cookies: [], values: {} }), clean);
+  const seen = JSON.stringify(status());
+  assert.ok(!seen.includes(NAME), seen);
+  assert.match(seen, /sealed with a key from an unrecognized key store/);
+
+  // a name this code defines is still said
+  writeFileSync(join(home, "sealed.json"), JSON.stringify({ v: 1, at: "", key: "macos-keychain" }));
   assert.throws(
     () => saveSession("other", { cookies: [], values: {} }),
-    (e: unknown) => clean(e) && /sealed with the unknown key/.test((e as Error).message),
+    (e: unknown) =>
+      e instanceof SealError &&
+      /sealed with the macos-keychain key/.test(e.message) &&
+      /the macos-keychain key store/.test(e.next),
+  );
+});
+
+test("a library caller's own key store, whatever its name, seals and opens, and messages name it", () => {
+  setKeyStore({ ...memoryStore(), name: "CustomKeychain" });
+  saveSession("site", { cookies: jar(), values: {} });
+  assert.equal(envelope(sessionFile("site")).key, "CustomKeychain");
+  assert.equal(loadSession("site").cookies[0]!.value, SECRET);
+  assert.deepEqual(sealing(), { sealed: true, key: "CustomKeychain" });
+  process.env.API_ANYTHING_KEY = "some passphrase";
+  assert.throws(
+    () => loadSession("site"),
+    (e: unknown) =>
+      e instanceof SealError && /another key \(CustomKeychain\) than the one in use \(passphrase\)/.test(e.message),
   );
 });
 

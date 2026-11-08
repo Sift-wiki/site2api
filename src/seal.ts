@@ -231,6 +231,21 @@ const cache = new Map<string, DataKey | { none: string }>();
 let listener: ((why: string) => void) | undefined;
 let warned = false;
 
+/** The key stores this code defines; with the store in use, the only key names a message repeats. */
+const STORE_NAMES = new Set(["passphrase", ...[macosKeychain(), secretTool(), dpapi()].map((s) => s.name)]);
+
+/**
+ * The key store a sealed file or this home's marker names, when it is one this process knows. Any
+ * other name is text from the file, which a message never repeats (but which never stops it opening).
+ */
+function knownStore(name: unknown): string | undefined {
+  if (typeof name !== "string") return undefined;
+  const inUse = injected === undefined ? platformStore()?.name : injected?.name;
+  return STORE_NAMES.has(name) || name === inUse ? name : undefined;
+}
+
+const keyFrom = (store: string | undefined) => (store ? `the ${store} key` : "a key from an unrecognized key store");
+
 /** Tests: use this store (null: none), or the platform's again (undefined). Forgets every cached key. */
 export function setKeyStore(store: KeyStore | null | undefined): void {
   injected = store;
@@ -260,9 +275,6 @@ interface Marker {
   /** every file written before sealing has been sealed */
   migrated?: boolean;
 }
-
-/** A key store's name (`passphrase`, `macos-keychain`): a key a file names is put in an error only when it is one. */
-const KEY_NAME = /^[a-z][a-z0-9-]{0,23}$/;
 
 const readMarker = (): Marker | undefined => {
   try {
@@ -471,13 +483,12 @@ function dataKey(sealedWith?: string): DataKey | undefined {
   const marker = readMarker();
   const keys = marker ? [] : sealedKeys();
   if (!marker && !keys.length) return undefined;
-  const named: unknown = sealedWith ?? marker?.key ?? keys[0];
-  const source = typeof named === "string" && KEY_NAME.test(named) ? named : "unknown";
+  const source = knownStore(sealedWith ?? marker?.key ?? keys[0]);
   throw new SealError(
-    `this home's credential files are sealed with the ${source} key, which is not available here (${got.none}); nothing is written unsealed`,
+    `this home's credential files are sealed with ${keyFrom(source)}, which is not available here (${got.none}); nothing is written unsealed`,
     source === "passphrase"
       ? "set API_ANYTHING_KEY to the passphrase they were sealed with"
-      : `run api-anything where the ${source} key store is available; or, to start over unsealed here, delete ${markerFile()} and the files in ${join(home(), "sessions")}, ${join(home(), "captures")} and ${join(home(), "snapshots")}, then log in again`,
+      : `run api-anything where ${source ? `the ${source} key store` : "the key store they were sealed with"} is available; or, to start over unsealed here, delete ${markerFile()} and the files in ${join(home(), "sessions")}, ${join(home(), "captures")} and ${join(home(), "snapshots")}, then log in again`,
   );
 }
 
@@ -539,21 +550,22 @@ function open(text: string, file: string, label: string, next: string): string {
   const iv = bytes(env.iv, 12);
   const tag = bytes(env.tag, 16);
   const data = bytes(env.data);
-  if (!iv || !tag || !data || typeof env.kid !== "string" || typeof env.key !== "string" || !KEY_NAME.test(env.key))
+  if (!iv || !tag || !data || typeof env.kid !== "string" || typeof env.key !== "string")
     throw broken("its iv, tag, data or key id is malformed");
   const k = dataKey(env.key);
+  const store = knownStore(env.key);
   if (!k)
     throw new SealError(
-      `${file} is sealed with the ${env.key} key, which is not available here`,
-      env.key === "passphrase" ? "set API_ANYTHING_KEY to the passphrase it was sealed with" : next,
+      `${file} is sealed with ${keyFrom(store)}, which is not available here`,
+      store === "passphrase" ? "set API_ANYTHING_KEY to the passphrase it was sealed with" : next,
     );
   if (k.kid !== env.kid)
     throw new SealError(
-      `${file} was sealed with another key (${env.key}) than the one in use (${k.source})`,
-      env.key === "passphrase"
+      `${file} was sealed with another key (${store ?? "an unrecognized key store"}) than the one in use (${k.source})`,
+      store === "passphrase"
         ? "set API_ANYTHING_KEY to the passphrase it was sealed with"
         : k.source === "passphrase"
-          ? `unset API_ANYTHING_KEY to read it with the ${env.key} key, or ${next}`
+          ? `unset API_ANYTHING_KEY to read it with ${keyFrom(store)}, or ${next}`
           : next,
     );
   try {
