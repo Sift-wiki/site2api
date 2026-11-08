@@ -36,6 +36,7 @@ import {
 import {
   AddressRefused,
   BadHeader,
+  BodyTooLarge,
   buildRequest,
   holdsRef,
   nextHop,
@@ -738,6 +739,24 @@ async function tryTier(ctx: Ctx, op: Operation, tier: Tier): Promise<Attempt> {
     // nothing was sent: the call ends with the budget's answer (`run`)
     if (thrown instanceof BudgetSpent) throw thrown;
     const e = thrown instanceof LookupFailed && thrown.cause instanceof ProfileInUse ? thrown.cause : thrown;
+    // The site answers with more than tier 1 reads: the same request meets the same answer, and a browser
+    // tier would download it whole. When it was a lookup's answer, the op's own request never left.
+    if (e instanceof BodyTooLarge || (e instanceof LookupFailed && e.cause instanceof BodyTooLarge)) {
+      const unsent = e instanceof LookupFailed;
+      const why = "the site's answer is larger than api-anything reads; tell the user";
+      return {
+        tier,
+        class: "error",
+        reason: e.message,
+        ...(unsent ? { unsent: true } : {}),
+        ...(op.readOnly || unsent
+          ? { hint: `do not retry: ${why}`, step: "report" as const }
+          : {
+              hint: `the write may have run: check the site first. Do not retry: ${why}`,
+              step: "check_site" as const,
+            }),
+      };
+    }
     // a derived slot's lookup did not give its value: the op's own request never left
     if (e instanceof LookupFailed) return { tier, ...e.judged, unsent: true };
     // nothing was sent when the browser could not start

@@ -181,6 +181,34 @@ test("headers too large for Node's fetch: a read climbs toward the browser, a wr
   assert.match(w.next ?? "", /may have gone through/);
 });
 
+test("an answer past the body cap is final: no retry, no tier climb, no heal, and not a server failure", async () => {
+  const huge = () =>
+    new Response(new ReadableStream({ pull: (c) => c.enqueue(new Uint8Array(16)) }), {
+      status: 200,
+      headers: { "content-type": "application/json", "content-length": String(64 * 1024 * 1024) },
+    });
+  // a climb would end as blocked, "needs tier 2, capped at 1"
+  const r = await call("t", "user", { name: "alice" }, opts(huge));
+  assert.equal(r.class, "error", JSON.stringify(r));
+  assert.match(r.reason ?? "", /over the 32 MiB cap/);
+  assert.equal(r.retry, "no");
+  assert.equal(r.nextCall?.action, "report");
+  assert.equal(r.server, undefined);
+  assert.equal(r.tier, 1);
+  assert.match(r.next ?? "", /^do not retry/);
+  assert.equal(seen.length, 1);
+  assert.equal(heals().length, 0);
+
+  seen = [];
+  const w = await call("t", "post", { text: "hi" }, { ...opts(huge), allowWrites: true });
+  assert.equal(w.class, "error", JSON.stringify(w));
+  assert.equal(w.write, "may_have_applied");
+  assert.equal(w.retry, "no");
+  assert.equal(w.nextCall?.action, "check_site");
+  assert.match(w.next ?? "", /may have run: check the site first/);
+  assert.equal(seen.length, 1);
+});
+
 test("drift heals by rescan and retries once; drifting again within 10 min marks it stale instead", async () => {
   let current = QID;
   const h: Handler = (url) => {

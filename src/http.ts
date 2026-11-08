@@ -13,11 +13,17 @@ import type { StoredCookie } from "./types.js";
 import { badAddress } from "./vet.js";
 
 /**
- * The most of one response body this process buffers. A shared spec may point at any public host, so
- * a body is capped before parsing and extraction see it; 32 MiB is far above any page or JSON answer
- * the bundled operations read.
+ * The most of one tier-1 response body read from the network, and the most a zstd body this module
+ * decodes may grow to. A shared spec may point at any public host, so the body is cut off while it
+ * streams, before parsing and extraction see it. Decoding and parsing what is kept still allocate
+ * more than this. 32 MiB is far above any page or JSON answer the bundled operations read.
  */
 export const MAX_BODY_BYTES = 32 * 1024 * 1024;
+
+/** A response body past `MAX_BODY_BYTES`: the site gives the same answer again, so no retry or tier helps. */
+export class BodyTooLarge extends Error {}
+
+const CAP = `${MAX_BODY_BYTES / 1024 / 1024} MiB`;
 
 export interface Sent {
   status: number;
@@ -544,10 +550,7 @@ export async function send(
         continue;
       }
       const raw = await readCappedBody(res);
-      const inflated = unzstd(raw, res.headers.get("content-encoding"));
-      if (inflated.byteLength > MAX_BODY_BYTES)
-        throw new Error(`the response is over ${MAX_BODY_BYTES / 1024 / 1024} MiB once decoded; refused`);
-      const text = decodeBody(inflated, res.headers.get("content-type") ?? "");
+      const text = decodeBody(unzstd(raw, res.headers.get("content-encoding")), res.headers.get("content-type") ?? "");
       return {
         status: res.status,
         headers: Object.fromEntries(res.headers),
@@ -576,12 +579,16 @@ export async function send(
  * timeout does not limit how much a host can send.
  */
 async function readCappedBody(res: Response): Promise<Uint8Array> {
-  const over = (bytes?: number) =>
-    new Error(
-      `the response is ${bytes === undefined ? "over" : `${bytes} bytes, over`} ${MAX_BODY_BYTES / 1024 / 1024} MiB; refused before reading it all`,
+  const over = (bytes: number) =>
+    new BodyTooLarge(
+      `the response is ${bytes} bytes, over the ${CAP} cap on a response; refused before reading it all`,
     );
   const declared = Number(res.headers.get("content-length") ?? "");
-  if (Number.isFinite(declared) && declared > MAX_BODY_BYTES) throw over(declared);
+  if (Number.isFinite(declared) && declared > MAX_BODY_BYTES) {
+    // unread, the body would hold the connection open until the request's timeout
+    await res.body?.cancel().catch(() => {});
+    throw over(declared);
+  }
   if (!res.body) return new Uint8Array(await res.arrayBuffer());
   const reader = res.body.getReader();
   const chunks: Uint8Array[] = [];
@@ -601,12 +608,21 @@ async function readCappedBody(res: Response): Promise<Uint8Array> {
 
 /**
  * Node 22's fetch hands back a zstd body still compressed (24 and later decode it). Decode it here
- * when that happened; zlib has zstd from 22.15, before that the body stays as it came.
+ * when that happened; zlib has zstd from 22.15, before that the body stays as it came. The output is
+ * bounded too: a few KB of zstd expand to gigabytes.
  */
 function unzstd(buf: Uint8Array, encoding: string | null): Uint8Array {
   const compressed = buf[0] === 0x28 && buf[1] === 0xb5 && buf[2] === 0x2f && buf[3] === 0xfd;
   if (!compressed || !/\bzstd\b/i.test(encoding ?? "")) return buf;
-  return zlib.zstdDecompressSync?.(buf) ?? buf;
+  try {
+    return zlib.zstdDecompressSync?.(buf, { maxOutputLength: MAX_BODY_BYTES }) ?? buf;
+  } catch (e) {
+    if ((e as { code?: string }).code === "ERR_BUFFER_TOO_LARGE")
+      throw new BodyTooLarge(
+        `the response is ${buf.byteLength} bytes of zstd that decode to over the ${CAP} cap on a response; refused`,
+      );
+    throw e;
+  }
 }
 
 /** Decode with the declared charset (header, else an HTML <meta>), else UTF-8. A BOM is dropped. */

@@ -5,7 +5,17 @@ import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, test } from "node:test";
-import { buildRequest, MAX_BODY_BYTES, nextHop, privateAddress, publicAddress, resolver, send } from "../src/http.js";
+import * as zlib from "node:zlib";
+import {
+  BodyTooLarge,
+  buildRequest,
+  MAX_BODY_BYTES,
+  nextHop,
+  privateAddress,
+  publicAddress,
+  resolver,
+  send,
+} from "../src/http.js";
 import type { Session } from "../src/session.js";
 import { type Operation, OperationSchema } from "../src/spec.js";
 import type { StoredCookie } from "../src/types.js";
@@ -206,8 +216,54 @@ test("send: a body past the cap is refused before it is buffered whole", async (
   }) as unknown as typeof fetch;
   await assert.rejects(
     () => send(op(), { text: "a", tweet_id: "5" }, session, { site: "cap", fetchImpl, minIntervalMs: 0 }),
-    /over 32 MiB/,
+    (e) => e instanceof BodyTooLarge && /over the 32 MiB cap/.test(e.message),
   );
+});
+
+test("send: a declared length past the cap is refused unread, and the body is cancelled", async () => {
+  let cancelled = false;
+  let pulled = 0;
+  const fetchImpl = (async () => {
+    const body = new ReadableStream({
+      pull(controller) {
+        pulled++;
+        controller.enqueue(new Uint8Array(16));
+      },
+      cancel() {
+        cancelled = true;
+      },
+    });
+    return new Response(body, { status: 200, headers: { "content-length": String(MAX_BODY_BYTES + 1) } });
+  }) as unknown as typeof fetch;
+  await assert.rejects(
+    () => send(op(), { text: "a", tweet_id: "5" }, session, { site: "cap", fetchImpl, minIntervalMs: 0 }),
+    (e) => e instanceof BodyTooLarge && e.message.includes(`${MAX_BODY_BYTES + 1} bytes`),
+  );
+  assert.equal(cancelled, true);
+  assert.ok(pulled <= 1, "nothing past the stream's own first fill was read");
+});
+
+test("send: a zstd body that decodes past the cap is refused, not inflated", {
+  skip: !zlib.zstdCompressSync,
+}, async () => {
+  // 64 MiB of zeros compress to about 2 KB
+  const bomb = zlib.zstdCompressSync(Buffer.alloc(2 * MAX_BODY_BYTES));
+  assert.ok(bomb.byteLength < 64 * 1024);
+  const fetchImpl = (async () =>
+    new Response(bomb, { status: 200, headers: { "content-encoding": "zstd" } })) as unknown as typeof fetch;
+  await assert.rejects(
+    () => send(op(), { text: "a", tweet_id: "5" }, session, { site: "cap", fetchImpl, minIntervalMs: 0 }),
+    (e) => e instanceof BodyTooLarge && /decode to over the 32 MiB cap/.test(e.message),
+  );
+  // under the cap, the body is decoded as before
+  const small = zlib.zstdCompressSync(Buffer.from('{"ok":true}'));
+  const r = await send(op(), { text: "a", tweet_id: "5" }, session, {
+    site: "cap",
+    fetchImpl: (async () =>
+      new Response(small, { status: 200, headers: { "content-encoding": "zstd" } })) as unknown as typeof fetch,
+    minIntervalMs: 0,
+  });
+  assert.equal(r.body, '{"ok":true}');
 });
 
 test("send against a local server: GET has no body, per-site pacing, timeout", async () => {
