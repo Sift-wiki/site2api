@@ -15,7 +15,7 @@ import {
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { delimiter, join } from "node:path";
 import { afterEach, beforeEach, test } from "node:test";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { promisify } from "node:util";
@@ -302,6 +302,56 @@ exit 1
   store.put(Buffer.alloc(32, 7));
   setKeyStore(store);
   assert.equal(loadSession("site").cookies[0]!.value, SECRET);
+});
+
+/* ------------------------------------------------------------ secret-tool failures */
+
+test("Secret Service: no service on the bus, or no bus to autolaunch, means no store; a bus that refuses is an error", {
+  skip: process.platform === "win32" ? "the fake secret-tool is a shell script" : false,
+}, () => {
+  const dir = mkdtempSync(join(tmpdir(), "aa-secret-tool-"));
+  const fake = (stderr: string) => {
+    writeFileSync(join(dir, "secret-tool"), `#!/bin/sh\necho '${stderr}' >&2\nexit 1\n`);
+    chmodSync(join(dir, "secret-tool"), 0o755);
+  };
+  process.env.PATH = `${dir}${delimiter}${process.env.PATH ?? ""}`;
+  try {
+    process.env.DBUS_SESSION_BUS_ADDRESS = "unix:path=/nonexistent";
+    fake("secret-tool: The name org.freedesktop.secrets was not provided by any .service files");
+    assert.throws(() => secretTool().get(), KeyUnavailable, "no keyring daemon on the bus: no store here");
+
+    // GLib could not find a bus at all, like the no-bus check before the lookup
+    process.env.DBUS_SESSION_BUS_ADDRESS = "autolaunch:";
+    fake("secret-tool: Cannot autolaunch D-Bus without X11 $DISPLAY");
+    assert.throws(() => secretTool().get(), KeyUnavailable, "no bus to autolaunch: no store here");
+
+    process.env.DBUS_SESSION_BUS_ADDRESS = "unix:path=/nonexistent";
+    fake("secret-tool: Could not connect: Connection refused");
+    assert.throws(
+      () => secretTool().get(),
+      (e: unknown) =>
+        e instanceof SealError &&
+        /could not be reached/.test(e.message) &&
+        /start the D-Bus session bus/.test(e.next) &&
+        /API_ANYTHING_KEY/.test(e.next) &&
+        !/API_ANYTHING_PLAINTEXT/.test(e.next),
+      "a bus that is set but down fails the write instead of becoming a plaintext home",
+    );
+
+    // a never-sealed home: the refused save writes nothing, plaintext or sealed
+    setKeyStore(secretTool());
+    const told: string[] = [];
+    onPlaintext((why) => told.push(why));
+    assert.throws(
+      () => saveSession("site", { cookies: jar(), values: {} }),
+      (e: unknown) => e instanceof SealError && /could not be reached/.test(e.message),
+    );
+    assert.ok(!existsSync(sessionFile("site")), "no plaintext session file");
+    assert.ok(!existsSync(join(home, "sealed.json")));
+    assert.deepEqual(told, []);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 /* ------------------------------------------------------------ review fixes */
