@@ -482,7 +482,9 @@ test("key creation: processes racing on the key lock never both run fn", async (
   await Promise.all(children.map(raceReady));
   writeFileSync(go, "");
   await Promise.all(runs);
-  assert.equal(readFileSync(log, "utf8"), "+-".repeat(6), "each entry is followed by its exit before the next");
+  const seen = readFileSync(log, "utf8");
+  assert.ok(seen.startsWith("ww"), `both were at the lock before either entered: ${seen}`);
+  assert.equal(seen.slice(2), "+-".repeat(6), "each entry is followed by its exit before the next");
 });
 
 test("key creation: a store shared by every home locks per user, not per home", () => {

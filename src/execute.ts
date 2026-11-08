@@ -239,6 +239,11 @@ export interface CallResult {
   /** what to do about a failure; follow it at most once */
   next?: string;
   /**
+   * what the caller should know whatever the outcome: the session the site set during a write's tier-3
+   * run could not be saved, so a later call may send the one it replaced
+   */
+  warning?: string;
+  /**
    * writes only, ok or not: `not_sent` nothing left; `not_applied` the site answered that it did not
    * run it; `accepted` a 2xx judged ok (proof the site took it, not that it took effect);
    * `may_have_applied` anything else that may have reached the site; `applied` the op's readback
@@ -290,8 +295,13 @@ interface Ctx {
   shared?: Site["shared"];
   /** `unconfirmed`: no browser run in the user's profile for it (tier 3, a recapture, a cookie refresh) */
   unconfirmed?: boolean;
-  /** every cookie a tier-1 redirect chain set: one sent on the next hop can be rotated out before the call ends */
+  /**
+   * every cookie a tier-1 redirect chain set (one sent on the next hop can be rotated out before the call
+   * ends) or a tier-3 run captured, saved or not
+   */
   seen?: StoredCookie[];
+  /** the session values each tier-3 run captured, saved or not */
+  seenValues?: Record<string, string>[];
   /** the seed of the op's gen slots: one per call, so the call's own retries send the same values */
   gen: string;
   /** the site's budget, held to at each send (`pace`) */
@@ -599,6 +609,13 @@ function othersNote(op: Operation, o: TriggerRun["others"]): string | undefined 
 const sentOnce = (site: string, op: Operation) =>
   `the write was sent once and may have run: check the site first. Do not retry: the site answered it with a redirect that would send it a second time, which was not followed; if the operation moved, learn it at its new address: api-anything add ${site} ${op.name} ... --write`;
 
+const unsavedNext = (site: string) =>
+  `if a later call of ${site} says auth, ask the user to run: api-anything login ${site}`;
+
+/** A write's tier-3 run captured a session it could not save: the answer stands, the session may not. */
+const unsavedWarning = (site: string, why: string) =>
+  `the session the site set during this call could not be saved (${why}): this process sends it on its next calls, but another process sends the one it replaced until a save succeeds; ${unsavedNext(site)}`;
+
 const sessionOrNone = (site: string): Session | undefined => {
   try {
     return loadSession(site);
@@ -631,8 +648,11 @@ async function attempt(ctx: Ctx, op: Operation, tier: Tier): Promise<Attempt> {
   const before = sessionOrNone(ctx.site);
   const a = await tryTier(ctx, op, tier);
   ctx.log.push(a);
-  const seen = { cookies: ctx.seen ?? [], values: {} };
-  return { ...a, reason: hide(a.reason, [before, sessionOrNone(ctx.site), seen], true) };
+  const seen = [
+    { cookies: ctx.seen ?? [], values: {} },
+    ...(ctx.seenValues ?? []).map((values) => ({ cookies: [], values })),
+  ];
+  return { ...a, reason: hide(a.reason, [before, sessionOrNone(ctx.site), ...seen], true) };
 }
 
 async function tryTier(ctx: Ctx, op: Operation, tier: Tier): Promise<Attempt> {
@@ -641,6 +661,9 @@ async function tryTier(ctx: Ctx, op: Operation, tier: Tier): Promise<Attempt> {
       // For a write this is the UI sending it: the one attempt.
       await pace(ctx.site, ctx.opts.minIntervalMs, ctx.budget);
       const run = await runOpTrigger(ctx.site, op, ctx.args);
+      // The page's answer can quote what the run captured: kept for redaction whether or not it was saved.
+      ctx.seen = [...(ctx.seen ?? []), ...run.capture.cookies];
+      if (run.values && Object.keys(run.values).length) ctx.seenValues = [...(ctx.seenValues ?? []), run.values];
       const judged = run.matched && judgeExchange(op, run.matched);
       // The page is told nothing of a redirect that was stopped, its status included: this is the answer.
       const resent: Attempt | undefined = run.resends
@@ -672,7 +695,11 @@ async function tryTier(ctx: Ctx, op: Operation, tier: Tier): Promise<Attempt> {
           `the page sent this write ${run.repeats + 1} times: ${run.repeats === 1 ? "the repeat was" : `${run.repeats} repeats were`} stopped in the browser`,
         othersNote(op, run.others),
       ].filter(Boolean);
-      return notes.length ? { ...a, note: notes.join("; ") } : a;
+      return {
+        ...a,
+        ...(notes.length ? { note: notes.join("; ") } : {}),
+        ...(run.unsaved ? { unsaved: run.unsaved } : {}),
+      };
     }
     const none = bareCall(ctx, op);
     const session = none ? NO_SESSION : loadSession(ctx.site);
@@ -1383,9 +1410,15 @@ async function run(
       f = await readBack(site, theirs, op, args, f, opts);
     if (!op.readOnly && f.nextCall?.action === "check_site")
       f.next = `${f.next ?? "check the site before any retry"}${whereToLook(op, args)}`;
+    const unsaved = log.find((a) => a.unsaved)?.unsaved;
+    if (unsaved) {
+      f.warning = unsavedWarning(siteName, unsaved);
+      f.next ??= `the write was sent: do not send it again for this. ${unsavedNext(siteName)}`;
+    }
     const sessions = [jar, sessionOrNone(siteName)];
     if (f.reason) f.reason = hide(f.reason, sessions, true);
     if (f.next) f.next = hide(f.next, sessions);
+    if (f.warning) f.warning = hide(f.warning, sessions);
     if (f.heal) f.heal = { ...f.heal, changes: f.heal.changes.map((c) => hide(c, sessions)) };
     if (ledger) settleWrite(ledger, f.write ?? "may_have_applied", f);
     // a proof's rate limit or block is the site's, as any call's; a spent budget is no answer of the site

@@ -1271,6 +1271,7 @@ async function cmdCall({ v, pos }: Parsed): Promise<number> {
   });
   out(pulled ? { ...r, pulled: site } : r);
   if (r.heal) process.stderr.write(healNote(site, name, r.heal));
+  if (r.warning) process.stderr.write(`warning: ${r.warning}\n`);
   if (!r.ok) process.stderr.write(`next: ${r.next}\n`);
   return r.ok ? 0 : 1;
 }

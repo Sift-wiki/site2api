@@ -1,11 +1,11 @@
 /**
  * Another process holding a lock, for tests. Run as a script it holds the lock beside a file until it
- * is killed (`hold <file>`), or says "ready" and, once `go` exists, takes the key lock three times,
- * logging each entry and exit (`race <file> <log> <go>`).
+ * is killed (`hold <file>`), or says "ready" and, once `go` exists and the other contender has logged
+ * its "w" beside its own, takes the key lock three times, logging each entry and exit (`race <file> <log> <go>`).
  */
 import { type ChildProcess, spawn } from "node:child_process";
 import { once } from "node:events";
-import { appendFileSync, existsSync, writeSync } from "node:fs";
+import { appendFileSync, existsSync, readFileSync, writeSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { hold } from "../../src/lock.js";
 import { keyLock } from "../../src/seal.js";
@@ -66,6 +66,12 @@ if (process.argv[1] === SELF) {
   } else if (mode === "race") {
     writeSync(1, "ready\n");
     while (!existsSync(go)) sleep(1);
+    // a "w" each, and neither goes on before both are there: the two contend at once, never one after the other
+    appendFileSync(log, "w");
+    const until = Date.now() + 10_000;
+    while ((readFileSync(log, "utf8").match(/w/g) ?? []).length < 2)
+      if (Date.now() > until) process.exit(4);
+      else sleep(1);
     for (let i = 0; i < 3; i++)
       keyLock(
         file,

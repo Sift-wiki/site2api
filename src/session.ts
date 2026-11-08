@@ -154,7 +154,40 @@ export const sessionFile = (site: string) => join(home(), "sessions", `${safeNam
 /** What a sealed session file is bound to: one site's file cannot be read as another's. */
 const sessionLabel = (site: string) => `session:${safeName(site)}`;
 
+/**
+ * Browser runs' captures a save could not write (a busy lock, a read-only home), per site, oldest
+ * first: `loadSession` lays them over the file, so this process keeps sending the session the site
+ * rotated to, and the next save of the site writes them.
+ */
+const unsaved = new Map<string, { cookies: StoredCookie[]; captured?: Captured }[]>();
+
+/** The site's session: the file, with any capture of this process's that could not be saved over it. */
 export function loadSession(site: string): Session {
+  const stored = readSession(site);
+  const kept = unsaved.get(safeName(site));
+  return kept ? kept.reduce((s, k) => merged(s, k.cookies, k.captured), stored) : stored;
+}
+
+/**
+ * Keep a capture whose save failed for this process's later calls (see `unsaved`). False when it
+ * changes nothing the file holds, so nothing was lost.
+ */
+export function keepUnsaved(site: string, cookies: StoredCookie[], captured?: Captured): boolean {
+  const s = loadSession(site);
+  const same = (a: Session, b: Session) =>
+    JSON.stringify([a.cookies, a.values, a.valueHosts]) === JSON.stringify([b.cookies, b.values, b.valueHosts]);
+  if (same(merged(s, []), merged(s, cookies, captured))) return false;
+  const name = safeName(site);
+  unsaved.set(name, [...(unsaved.get(name) ?? []), { cookies, ...(captured ? { captured } : {}) }]);
+  return true;
+}
+
+/** Drop what `keepUnsaved` kept: the file was removed (logout), so nothing laid over it survives. */
+export function forgetUnsaved(site: string): void {
+  unsaved.delete(safeName(site));
+}
+
+function readSession(site: string): Session {
   const file = sessionFile(site);
   const s = readSealed<Partial<Session>>(
     file,
@@ -187,7 +220,7 @@ export function loadSession(site: string): Session {
 function recordProtection(site: string, s: Session, urls: (string | undefined)[]): Session {
   if (!s.kinds || !Object.values(s.kinds).includes("setting")) return s; // nothing is exempt: nothing to keep
   const kinds = { ...s.kinds };
-  const stored = loadSession(site);
+  const stored = readSession(site);
   // A name this write calls a setting that the stored file left unclassified -- a file written before
   // the field, a refused add -- was scanned there like a credential, so the scan was never asked what
   // it protected; it is asked now, as the setting this write makes it, or the same write replacing the
@@ -226,10 +259,65 @@ export function saveSession(site: string, s: Session, urls: (string | undefined)
     JSON.stringify({ ...recorded, updatedAt: new Date().toISOString() }, null, 1),
     sessionLabel(site),
   );
+  // every caller saves what it loaded, unsaved captures included: they are on disk now
+  unsaved.delete(safeName(site));
   return recorded;
 }
 
 const expired = (c: StoredCookie, now: number) => c.expires > 0 && c.expires * 1000 <= now;
+
+/** A browser run's session values, and the URL of the request they were sent in, whose host each is bound to. */
+export interface Captured {
+  from: string;
+  values: Record<string, string>;
+}
+
+/** A learn's classification of captured values, and the URLs its operation sends to or opens. */
+interface Learned {
+  settings: string[];
+  urls?: (string | undefined)[];
+}
+
+/** `s` with a browser run's cookies and session values merged in, unsaved; see mergeCapture. */
+function merged(
+  s: Session,
+  cookies: StoredCookie[],
+  captured: Captured = { from: "", values: {} },
+  learned?: Learned,
+  now = Date.now(),
+): Session {
+  const { values } = captured;
+  const valueHosts = { ...s.valueHosts };
+  if (Object.keys(values).length) {
+    const host = new URL(captured.from).hostname.toLowerCase();
+    for (const name of Object.keys(values)) valueHosts[name] = host;
+  }
+  const key = (c: StoredCookie) => `${c.name}\0${c.domain.toLowerCase()}\0${c.path}`;
+  const jar = new Map(s.cookies.map((c) => [key(c), c]));
+  for (const c of cookies) jar.set(key(c), c);
+  const kinds = { ...s.kinds };
+  // This learn classifies every name it stored, and a credential stays one: a later learn reading the
+  // same name as a setting would otherwise drop the protection the first one established.
+  if (learned)
+    for (const name of Object.keys(values))
+      kinds[name] = learned.settings.includes(name) && kinds[name] !== "credential" ? "setting" : "credential";
+  // A refresh (a trigger run, a recapture) replaces values without classifying them, and the page can
+  // put anything in a name a learn once read as a setting: a changed value is unclassified again, so the
+  // scan protects it until a learn reads it. An unchanged one keeps its kind, and a credential stays one.
+  else
+    for (const [name, value] of Object.entries(values))
+      if (kinds[name] === "setting" && s.values[name] !== value) delete kinds[name];
+  return {
+    cookies: [...jar.values()].filter((c) => !expired(c, now)),
+    values: { ...s.values, ...values },
+    ...(Object.keys(valueHosts).length ? { valueHosts } : {}),
+    source: s.source,
+    ...(s.imports ? { imports: s.imports } : {}),
+    ...(Object.keys(kinds).length ? { kinds } : {}),
+    ...(s.origins ? { origins: s.origins } : {}),
+    ...(s.guestCookies ? { guestCookies: s.guestCookies } : {}),
+  };
+}
 
 /**
  * Merge a browser run's cookies and session values into the stored session and save it. `captured`:
@@ -238,49 +326,17 @@ const expired = (c: StoredCookie, now: number) => c.expires > 0 && c.expires * 1
 export function mergeCapture(
   site: string,
   cookies: StoredCookie[],
-  captured: { from: string; values: Record<string, string> } = { from: "", values: {} },
+  captured?: Captured,
   /**
    * a learn's classification of `values`, and the URLs its operation sends to or opens; without one a
    * name whose value changed is unclassified again
    */
-  learned?: { settings: string[]; urls?: (string | undefined)[] },
+  learned?: Learned,
   now = Date.now(),
 ): Session {
-  const { values } = captured;
-  return withLock(sessionFile(site), () => {
-    const s = loadSession(site);
-    const valueHosts = { ...s.valueHosts };
-    if (Object.keys(values).length) {
-      const host = new URL(captured.from).hostname.toLowerCase();
-      for (const name of Object.keys(values)) valueHosts[name] = host;
-    }
-    const key = (c: StoredCookie) => `${c.name}\0${c.domain.toLowerCase()}\0${c.path}`;
-    const jar = new Map(s.cookies.map((c) => [key(c), c]));
-    for (const c of cookies) jar.set(key(c), c);
-    const kinds = { ...s.kinds };
-    // This learn classifies every name it stored, and a credential stays one: a later learn reading the
-    // same name as a setting would otherwise drop the protection the first one established.
-    if (learned)
-      for (const name of Object.keys(values))
-        kinds[name] = learned.settings.includes(name) && kinds[name] !== "credential" ? "setting" : "credential";
-    // A refresh (a trigger run, a recapture) replaces values without classifying them, and the page can
-    // put anything in a name a learn once read as a setting: a changed value is unclassified again, so the
-    // scan protects it until a learn reads it. An unchanged one keeps its kind, and a credential stays one.
-    else
-      for (const [name, value] of Object.entries(values))
-        if (kinds[name] === "setting" && s.values[name] !== value) delete kinds[name];
-    const merged = {
-      cookies: [...jar.values()].filter((c) => !expired(c, now)),
-      values: { ...s.values, ...values },
-      ...(Object.keys(valueHosts).length ? { valueHosts } : {}),
-      source: s.source,
-      ...(s.imports ? { imports: s.imports } : {}),
-      ...(Object.keys(kinds).length ? { kinds } : {}),
-      ...(s.origins ? { origins: s.origins } : {}),
-      ...(s.guestCookies ? { guestCookies: s.guestCookies } : {}),
-    };
-    return saveSession(site, merged, learned?.urls);
-  });
+  return withLock(sessionFile(site), () =>
+    saveSession(site, merged(loadSession(site), cookies, captured, learned, now), learned?.urls),
+  );
 }
 
 /**
