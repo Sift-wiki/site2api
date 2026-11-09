@@ -447,7 +447,8 @@ maintainer sets its status (`POST /v1/admin/versions/:hash`), when it:
   reports are rate-limited each hour per key and per network (an IPv4 /24 or an IPv6 /32: one
   subscriber holds a /48 or more). A key first seen less than an hour ago uploads at most 5 versions
   (`NEW_KEY_UPLOADS`). A circuit breaker caps uploads at 300 an hour across all keys
-  (`UPLOADS_PER_HOUR_ALL`). Every limit answers 429 with Retry-After.
+  (`UPLOADS_PER_HOUR_ALL`). Searches are limited per network, since they carry no key: 120 an hour
+  (`SEARCHES_PER_HOUR`). Every limit answers 429 with Retry-After.
 - Public reads (`/v1/search`, `/v1/sites/:name`, `/v1/index`, `/v1/demand`, `/v1/stats`, `/`,
   `/sites/:name`, `/wanted/:domain`, `/sitemap.xml`) are cached for 60 s at the edge, keyed by URL. A signed read skips the cache, since it may include the
   signer's own `review` versions. Cloudflare documents the Cache API as working for a Worker on a custom

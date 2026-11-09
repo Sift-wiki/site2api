@@ -21,6 +21,8 @@ export interface Thresholds {
   recentDays: number;
   uploadsPerHour: number;
   reportsPerHour: number;
+  /** searches an hour from one network: search is unauthenticated, so it is budgeted by network */
+  searchesPerHour: number;
   /** installs, on as many distinct networks, that must claim an op learned signed in before its body is asked for */
   claimKeys: number;
   /** uploads a key first seen less than an hour ago may make */
@@ -49,6 +51,7 @@ export function thresholds(env: object): Thresholds {
     recentDays: n("RECENT_DAYS", 30),
     uploadsPerHour: n("UPLOADS_PER_HOUR", 30),
     reportsPerHour: n("REPORTS_PER_HOUR", 2000),
+    searchesPerHour: n("SEARCHES_PER_HOUR", 120),
     newKeyUploads: n("NEW_KEY_UPLOADS", 5),
     uploadsPerHourAll: n("UPLOADS_PER_HOUR_ALL", 300),
     claimKeys: n("CLAIM_KEYS", 3),
