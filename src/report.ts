@@ -92,13 +92,14 @@ export async function shutdown(): Promise<void> {
 /**
  * After a call of `op` (its spec as the call found it). A healed op is reported as a failure of the
  * version it was, whose stored request drifted, and its repair is shared back (share.ts healBack).
+ * `args`: the call's own, which a heal learned from and its heal-back must not share a copy of.
  */
 export function afterCall(
   site: string,
   op: Operation,
   source: "user" | "registry" | "bundled",
   r: CallResult,
-  o: { fetchImpl?: typeof fetch; minIntervalMs?: number } = {},
+  o: { fetchImpl?: typeof fetch; minIntervalMs?: number; args?: Record<string, unknown> } = {},
 ): void {
   try {
     if (!loadSettings().share) return;

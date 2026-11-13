@@ -139,6 +139,7 @@ class Client:
         body: Any = None,
         query: Optional[Mapping[str, Any]] = None,
         timeout: Optional[float] = None,
+        auth: bool = True,
     ) -> Tuple[int, Any]:
         url = self.base_url + path
         if query:
@@ -150,7 +151,7 @@ class Client:
         if body is not None:
             data = json.dumps(body).encode("utf-8")
             headers["Content-Type"] = "application/json"
-        token = self._auth_token()
+        token = self._auth_token() if auth else None
         if token:
             headers["Authorization"] = f"Bearer {token}"
         request = urllib.request.Request(url, data=data, method=method, headers=headers)
@@ -176,8 +177,10 @@ class Client:
         except ConnectionError as e:
             raise ServerUnavailable(f"the api-anything server at {self.base_url} dropped the connection: {e}") from None
 
-    def _json(self, method: str, path: str, body: Any = None, query: Optional[Mapping[str, Any]] = None) -> Any:
-        status, payload = self._send(method, path, body, query)
+    def _json(
+        self, method: str, path: str, body: Any = None, query: Optional[Mapping[str, Any]] = None, auth: bool = True
+    ) -> Any:
+        status, payload = self._send(method, path, body, query, auth=auth)
         if 200 <= status < 300:
             return payload
         raise _http_error(status, payload)
@@ -219,8 +222,8 @@ class Client:
     # --- the API ---------------------------------------------------------------------------------
 
     def health(self) -> Dict[str, Any]:
-        """`{ok, version}`. Needs no token."""
-        return cast(Dict[str, Any], self._json("GET", "/v1/health"))
+        """`{ok, version}`. Needs no token, and sends none: whoever answers it has shown nothing yet."""
+        return cast(Dict[str, Any], self._json("GET", "/v1/health", auth=False))
 
     def sites(self) -> List[Dict[str, Any]]:
         """The sites this server can call, as MCP `list_sites` answers."""
@@ -360,11 +363,21 @@ class Client:
 
         return build_tools(self, sites, format, writes=writes)
 
-    def run_tool(self, name: str, arguments: Union[str, Mapping[str, Any], None] = None) -> Result[Any]:
-        """Run a tool `tools()` described: `arguments` is the model's object or its JSON text."""
+    def run_tool(
+        self,
+        name: str,
+        arguments: Union[str, Mapping[str, Any], None] = None,
+        *,
+        tools: Optional[Sequence[Mapping[str, Any]]] = None,
+        unlisted: bool = False,
+    ) -> Result[Any]:
+        """Run a tool `tools()` described: `arguments` is the model's object or its JSON text. A name no
+        list of this client described raises ValueError and nothing is sent. The client remembers every
+        list it built: pass the list the model was given as `tools` to refuse a name outside it.
+        `unlisted=True` runs a `<site>__<op>` name no list described, as a read."""
         from .tools import run_tool
 
-        return run_tool(self, name, arguments)
+        return run_tool(self, name, arguments, tools=tools, unlisted=unlisted)
 
 
 def _parse(raw: bytes) -> Any:

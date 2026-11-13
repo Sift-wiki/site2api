@@ -325,6 +325,8 @@ const ACCOUNT_COOKIES = [
   cookie("session", "eyJ1c2VyIjoiYWxpY2UifQ.abc"),
   cookie("sid", "abc123"),
   cookie("logged_in", "yes"),
+  // HubSpot's member sign-in, beside its visitor cookies
+  cookie("__hsmem", "synthetic-member-value"),
   ...[
     "SID",
     "HSID",
@@ -361,6 +363,25 @@ const ANONYMOUS_COOKIES = [
   "csrftoken",
   "XSRF-TOKEN",
   "_csrf",
+  // set by analytics page script, where a cookie-less probe never sees them
+  "_gcl_au",
+  "_hjSessionUser_123456",
+  "_hjSession_123456",
+  "ajs_anonymous_id",
+  "_clck",
+  "_clsk",
+  "__hstc",
+  "__hssc",
+  "__hssrc",
+  "hubspotutk",
+  "_uetsid",
+  "_uetvid",
+  "_pin_unauth",
+  "_ttp",
+  "_tt_enable_cookie",
+  "__stripe_mid",
+  "__stripe_sid",
+  "_dd_s",
 ].map((name) => cookie(name, "anonymous-visitor-value"));
 
 test("any live jar cookie counts as signed in unless its name is known to be anonymous", async () => {
@@ -1299,7 +1320,12 @@ test("discovery includes lookup and inline readback hosts, and omits invalid or 
           trigger: {
             url: "https://pages.example.test/todos/{id}?ignored=1#fragment",
             softFrom: "https://neutral.example.test/",
-            steps: [{ action: "goto", value: "https://next.example.test/" }],
+            steps: [
+              { action: "goto", value: "https://next.example.test/" },
+              // a goto opens `value ?? selector`: an address written in the selector is one too
+              { action: "goto", selector: "https://selector.example.test/" },
+              { action: "click", selector: "https://not-opened.example.test/" },
+            ],
           },
         },
       ],
@@ -1315,6 +1341,7 @@ test("discovery includes lookup and inline readback hosts, and omits invalid or 
     "pages.example.test",
     "neutral.example.test",
     "next.example.test",
+    "selector.example.test",
   ]);
   assert.deepEqual(found.site.operations[0]?.pages, []);
   assert.deepEqual(found.site.operations[1]?.pages, []);

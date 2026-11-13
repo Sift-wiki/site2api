@@ -13,12 +13,14 @@ import { ElicitRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 import { resolver } from "../src/http.js";
 import { loadSettings, QUESTION, saveSettings } from "../src/identity.js";
 import { hooks, type LearnSiteOptions, learnSite, sameTrigger } from "../src/learnsite.js";
+import { logout } from "../src/login.js";
 import { createServer } from "../src/mcp.js";
 import { learnTool } from "../src/mcp-learn.js";
 import { settle } from "../src/report.js";
+import { loadSession, saveSession } from "../src/session.js";
 import { HOLDOUT_PURPOSE, shareOps } from "../src/share.js";
 import { type Operation, parseSite } from "../src/spec.js";
-import { loadSite } from "../src/store.js";
+import { loadSite, saveSite } from "../src/store.js";
 import { notARead } from "../src/vet.js";
 import { hashOf, served, startRegistry } from "./fixture/registry.js";
 
@@ -117,9 +119,19 @@ async function site(slow: { q: string[]; ms: number } = { q: [], ms: 0 }) {
   return { base, hits, close: () => new Promise<void>((r) => server.close(() => r())) };
 }
 
-/** Save a capture of the page `/shop?q=<q>` that made `requests`, as a browser run would have. */
-function capture(home: string, id: string, base: string, q: string, requests: Exchange[]): string {
-  const page = `${base}/shop?q=${q}`;
+/**
+ * Save a capture of the page `/shop?q=<q>` that made `requests`, as a browser run would have. `page`: the
+ * page's own origin, when the requests went to another; `cookies`: what the run's profile held.
+ */
+function capture(
+  home: string,
+  id: string,
+  base: string,
+  q: string,
+  requests: Exchange[],
+  o: { page?: string; cookies?: unknown[] } = {},
+): string {
+  const page = `${o.page ?? base}/shop?q=${q}`;
   const exchanges = [
     {
       id: 1,
@@ -152,7 +164,14 @@ function capture(home: string, id: string, base: string, q: string, requests: Ex
   mkdirSync(join(home, "captures"), { recursive: true });
   writeFileSync(
     join(home, "captures", `${id}.json`),
-    JSON.stringify({ id, at: new Date().toISOString(), url: page, finalUrl: page, cookies: [], exchanges }),
+    JSON.stringify({
+      id,
+      at: new Date().toISOString(),
+      url: page,
+      finalUrl: page,
+      cookies: o.cookies ?? [],
+      exchanges,
+    }),
   );
   return id;
 }
@@ -296,6 +315,72 @@ test("learn_site's automatic pick passes over a write for the read; the consent 
     assert.deepEqual(loadSite("shop")!.site.operations.find((o) => o.name === "search")!.checks, [
       { args: { q: "carol" }, expect: "result", purpose: HOLDOUT_PURPOSE },
     ]);
+  } finally {
+    await s.close();
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test("learn_site keeps here an op that spells the user's value another way, and its question names every value the saved op holds", async () => {
+  const home = mkdtempSync(join(tmpdir(), "aa-learn-spelled-"));
+  process.env.API_ANYTHING_HOME = home;
+  saveSettings({ share: true, askedAt: "2026-10-25T00:00:00.000Z" });
+  const s = await site();
+  const shares: unknown[] = [];
+  hooks.share = async (site, ops, o) => {
+    shares.push(o);
+    return [{ site, op: ops[0]!, shared: false, needsConsent: true, reason: "it needed a login" }];
+  };
+  const asked: string[] = [];
+  const consent = async (m: string) => {
+    asked.push(m);
+    return false;
+  };
+  const input = { site: "shop", trigger: `${s.base}/shop?q={q}`, args2: { q: "bobby" }, args3: { q: "carol" } };
+  let runs = 0;
+  const caps = (q: string, path: string) => {
+    const read = { method: "GET", path, answer: items };
+    return [capture(home, `p${++runs}a`, s.base, q, [read]), capture(home, `p${runs}b`, s.base, "bobby", [read])] as [
+      string,
+      string,
+    ];
+  };
+  try {
+    // a field both runs sent alike keeps the session's first search: no param's place, so it stays in the request
+    for (const [what, q, copy] of [
+      ["as a slug", "Alicia Keys", "first=alicia-keys"],
+      ["run together", "Alicia Keys", "tag=AliciaKeys"],
+      ["in base64", "alicia", `c=${Buffer.from("q:alicia").toString("base64url")}`],
+    ] as const) {
+      const r = await learnSite(
+        { ...input, op: "search", args: { q }, captures: caps(q, `/api/search?q={q}&${copy}`) },
+        { minIntervalMs: 0, consent },
+      );
+      assert.equal(r.ok, true, `${what}: ${JSON.stringify(r)}`);
+      assert.equal(r.shared?.shared, false, what);
+      assert.match(r.shared?.reason ?? "", /still spells the user's q/, what);
+      assert.deepEqual([shares.length, asked.length], [0, 0], `${what}: nothing was shared or asked`);
+    }
+
+    // the question names what the saved op holds, not what the call was given: a check the user recorded too
+    const first = await learnSite(
+      { ...input, op: "find", args: { q: "alice" }, captures: caps("alice", "/api/search?q={q}") },
+      { minIntervalMs: 0 },
+    );
+    assert.equal(first.ok, true, JSON.stringify(first));
+    const mine = loadSite("shop")!.site;
+    const find = mine.operations.find((x) => x.name === "find")!;
+    find.checks = [{ args: { q: "dave" }, expect: "result" }, ...(find.checks ?? [])];
+    saveSite(mine);
+    asked.length = 0;
+    const again = await learnSite(
+      { ...input, op: "find", args: { q: "alice" }, captures: caps("alice", "/api/search?q={q}") },
+      { minIntervalMs: 0, consent },
+    );
+    assert.equal(again.ok, true, JSON.stringify(again));
+    assert.equal(asked.length, 1);
+    for (const value of ["bobby", "carol", "dave"]) assert.ok(asked[0]!.includes(`{"q":"${value}"}`), asked[0]);
+    assert.ok(!asked[0]!.includes("alice"), asked[0]);
   } finally {
     await s.close();
     rmSync(home, { recursive: true, force: true });
@@ -676,7 +761,8 @@ test("learn_site asks setup's question the first time something could be shared,
   }));
 
 test("over MCP, a no to the question is kept: nothing is shared, the reason says the user said no, and it is not asked again", () =>
-  sharing(async ({ reg, input }) => {
+  // an op learned over MCP goes only to public addresses: its holdout and clean replay resolve the host
+  publicDnsFor(sharing, async ({ reg, input }) => {
     const asked: string[] = [];
     const client = new Client({ name: "probe", version: "0" }, { capabilities: { elicitation: {} } });
     client.setRequestHandler(ElicitRequestSchema, async (req) => {
@@ -704,7 +790,7 @@ test("over MCP, a no to the question is kept: nothing is shared, the reason says
   }));
 
 test("with no way to ask, learn_site's next asks the user; the setup and publish it names then share the op", () =>
-  sharing(async ({ home, reg, input }) => {
+  publicDnsFor(sharing, async ({ home, reg, input }) => {
     const client = new Client({ name: "probe", version: "0" });
     const [a, b] = InMemoryTransport.createLinkedPair();
     await createServer().connect(a);
@@ -788,6 +874,209 @@ async function publicDns(body: () => Promise<void>) {
     resolver.lookup = real;
   }
 }
+
+/** `wrap(body)` (the `sharing` setup) inside `publicDns`. */
+function publicDnsFor<T>(wrap: (body: (o: T) => Promise<void>) => Promise<void>, body: (o: T) => Promise<void>) {
+  return publicDns(() => wrap(body));
+}
+
+/* ------------------------------------------- what an agent's learn_site may reach and replace */
+
+const said = (r: unknown) => JSON.parse((r as { content: { text: string }[] }).content[0]!.text);
+
+/** An MCP client of a fresh server, for `body`. */
+async function overMcp(body: (client: Client) => Promise<void>): Promise<void> {
+  const client = new Client({ name: "probe", version: "0" });
+  const [a, b] = InMemoryTransport.createLinkedPair();
+  await createServer().connect(a);
+  await client.connect(b);
+  try {
+    await body(client);
+  } finally {
+    await client.close();
+  }
+}
+
+const three = { args: { q: "alice" }, args2: { q: "bobby" }, args3: { q: "carol" } };
+
+test("MCP learn_site learns nothing from a request to this machine: not listed, not picked, nothing saved or sent", async () => {
+  const home = mkdtempSync(join(tmpdir(), "aa-learn-local-"));
+  process.env.API_ANYTHING_HOME = home;
+  const s = await site();
+  hooks.share = async () => [];
+  // a public page whose data request went to a service on this machine
+  const local = { method: "GET", path: "/api/search?q={q}", answer: items };
+  const input = {
+    site: "pages",
+    op: "search",
+    trigger: `${EX}/shop?q={q}`,
+    ...three,
+    captures: [
+      capture(home, "la", s.base, "alice", [local], { page: EX }),
+      capture(home, "lb", s.base, "bobby", [local], { page: EX }),
+    ] as [string, string],
+  };
+  try {
+    await overMcp(async (client) => {
+      const auto = said(await client.callTool({ name: "learn_site", arguments: input }));
+      assert.equal(auto.ok, false, JSON.stringify(auto));
+      assert.ok(!JSON.stringify(auto).includes("127.0.0.1"), "the request is in no list the agent reads");
+      const picked = said(
+        await client.callTool({ name: "learn_site", arguments: { ...input, pickRequest: 2, extract: "items" } }),
+      );
+      assert.deepEqual([picked.ok, picked.class], [false, "refused"], JSON.stringify(picked));
+      assert.match(picked.error, /request 2 is not https on a public host/);
+      assert.ok(!JSON.stringify(picked).includes("127.0.0.1"));
+    });
+    assert.equal(loadSite("pages"), undefined, "nothing saved");
+    assert.deepEqual(s.hits, [], "no holdout call, no clean replay");
+    // the CLI's learn, which the user typed, learns the same captures
+    const mine = await learnSite({ ...input, pickRequest: 2, extract: "items" }, { minIntervalMs: 0 });
+    assert.equal(mine.ok, true, JSON.stringify(mine));
+    assert.equal(loadSite("pages")!.site.operations[0]!.publicOnly, undefined);
+  } finally {
+    await s.close();
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test("an operation learn_site saved over MCP follows no redirect into this machine, when it is learned or called later", () =>
+  publicDns(async () => {
+    const home = mkdtempSync(join(tmpdir(), "aa-learn-hop-"));
+    process.env.API_ANYTHING_HOME = home;
+    const s = await site();
+    hooks.share = async () => [];
+    // the public server answers the data request with a redirect to a service on this machine
+    const real = globalThis.fetch;
+    globalThis.fetch = ((input: string | URL | Request, init?: RequestInit) => {
+      const url = input instanceof Request ? input.url : String(input);
+      return url.startsWith(`${EX}/api/`)
+        ? Promise.resolve(
+            new Response(null, { status: 302, headers: { location: `${s.base}${url.slice(EX.length)}` } }),
+          )
+        : real(input, init);
+    }) as typeof fetch;
+    const read = { method: "GET", path: "/api/search?q={q}", answer: items };
+    try {
+      await overMcp(async (client) => {
+        const out = said(
+          await client.callTool({
+            name: "learn_site",
+            arguments: {
+              site: "shopr",
+              op: "find",
+              trigger: `${EX}/shop?q={q}`,
+              ...three,
+              captures: [capture(home, "ha", EX, "alice", [read]), capture(home, "hb", EX, "bobby", [read])],
+            },
+          }),
+        );
+        assert.equal(out.proof?.holdout.ok, false, JSON.stringify(out));
+        assert.notEqual(out.proof.cleanReplay, "ok");
+        assert.equal(loadSite("shopr")!.site.operations[0]!.publicOnly, true, "the saved op keeps the rule");
+        const later = said(
+          await client.callTool({
+            name: "call_operation",
+            arguments: { site: "shopr", op: "find", args: { q: "dave" } },
+          }),
+        );
+        assert.equal(later.ok, false, JSON.stringify(later));
+      });
+      assert.deepEqual(s.hits, [], "no request reached the service on this machine");
+    } finally {
+      globalThis.fetch = real;
+      await s.close();
+      rmSync(home, { recursive: true, force: true });
+    }
+  }));
+
+test("learn_site from captures made before a logout learns nothing and leaves the jar empty", async () => {
+  const home = mkdtempSync(join(tmpdir(), "aa-learn-logout-"));
+  process.env.API_ANYTHING_HOME = home;
+  const s = await site();
+  hooks.share = async () => [];
+  learnTool.publicOnly = false;
+  const sid = {
+    name: "sid",
+    value: "dummy-sid-7f3a9c",
+    domain: "127.0.0.1",
+    path: "/",
+    expires: -1,
+    httpOnly: true,
+    secure: false,
+  };
+  const read = { method: "GET", path: "/api/search?q={q}", answer: items };
+  try {
+    saveSession("shop", { cookies: [sid], values: {} });
+    const captures = [
+      capture(home, "oa", s.base, "alice", [read], { cookies: [sid] }),
+      capture(home, "ob", s.base, "bobby", [read], { cookies: [sid] }),
+    ];
+    await logout("shop");
+    await overMcp(async (client) => {
+      const r = await client.callTool({
+        name: "learn_site",
+        arguments: { site: "shop", op: "search", trigger: `${s.base}/shop?q={q}`, ...three, captures },
+      });
+      assert.equal(r.isError, true);
+      assert.match(said(r).error, /no capture "oa"/);
+    });
+    assert.deepEqual(loadSession("shop").cookies, [], "the logged-out cookie is not back in the jar");
+    assert.deepEqual(s.hits, [], "and was sent nowhere");
+  } finally {
+    learnTool.publicOnly = true;
+    await s.close();
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test("learn_site refuses a site name another site holds, and an op name another page holds", async () => {
+  const home = mkdtempSync(join(tmpdir(), "aa-learn-name-held-"));
+  process.env.API_ANYTHING_HOME = home;
+  const balance = {
+    name: "balance",
+    readOnly: true,
+    request: { method: "GET", url: "https://api.bank.example.com/v1/balance?id=alice", headers: {} },
+    slots: [{ param: "id", at: ["query:id"] }],
+    params: [{ name: "id", example: "alice" }],
+    trigger: { url: "https://bank.example.com/acct?id={id}" },
+  };
+  saveSite(parseSite({ name: "bank", baseUrl: "https://bank.example.com", operations: [balance] }));
+  const stored = () => loadSite("bank")!.site.operations.map((o) => [o.name, o.request.url, o.trigger.url]);
+  const before = stored();
+  const learn = (trigger: string, op?: string) =>
+    learnSite({
+      site: "bank",
+      ...(op ? { op } : {}),
+      trigger,
+      args: { id: "alice" },
+      args2: { id: "bobby" },
+      args3: { id: "carol" },
+      captures: ["none-1", "none-2"],
+    });
+  try {
+    // another registrable domain under the bank's name
+    const other = await learn("https://shop.example.net/go?id={id}", "balance");
+    assert.deepEqual([other.ok, other.class], [false, "refused"], JSON.stringify(other));
+    assert.match(other.error ?? "", /site "bank" is https:\/\/bank\.example\.com, another site than the trigger's/);
+    // the same registrable domain, another page, the op's name
+    const page = await learn("https://shop.example.com/go?id={id}", "balance");
+    assert.deepEqual([page.ok, page.class], [false, "refused"], JSON.stringify(page));
+    assert.match(page.error ?? "", /bank already has an operation balance for another page/);
+    assert.deepEqual(stored(), before, "the stored operation is as it was");
+    // its own page again, and another page under a name of its own, go on: here to the missing captures
+    for (const r of [
+      await learn("https://bank.example.com/acct?id={id}", "balance"),
+      await learn("https://shop.example.com/go?id={id}", "shopGo"),
+      await learn("https://shop.example.com/go?id={id}"),
+    ]) {
+      assert.equal(r.class, undefined, JSON.stringify(r));
+      assert.match(r.error ?? "", /no capture "none-1"/);
+    }
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+});
 
 test("learn_site calls an op someone shared for the same page: the data, no browser, nothing learned or uploaded, and the call reported", () =>
   publicDns(() =>

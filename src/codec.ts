@@ -252,7 +252,11 @@ function rootLayer(req: Request, step: Step): { value: string | undefined; put: 
         value: raw === undefined ? undefined : decode(raw, false),
         put: (v) => {
           if (raw === undefined) throw new Error(`no path segment ${i} in ${req.url}`);
-          u.segments[i] = encodeLike(v, raw, false);
+          const seg = encodeLike(v, raw, false);
+          // "." and ".." name no segment: a URL parser drops them, ".." with the segment before it
+          if (/^(?:\.|%2e){1,2}$/i.test(seg))
+            throw new Error(`path segment ${i} cannot be ${JSON.stringify(v)}: a URL reads it as another address`);
+          u.segments[i] = seg;
           return { ...req, url: joinUrl(u) };
         },
       };

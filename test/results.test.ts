@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, before, beforeEach, test } from "node:test";
@@ -18,12 +18,15 @@ import {
   type ResultCursor,
   resultView,
 } from "../src/results.js";
+import { isSealedText, type KeyStore, onPlaintext, setKeyStore } from "../src/seal.js";
 import { parseSite } from "../src/spec.js";
 import { saveSite } from "../src/store.js";
 import { type Fixture, startFixture } from "./fixture/server.js";
 
 const HOME = mkdtempSync(join(tmpdir(), "aa-results-"));
 process.env.API_ANYTHING_HOME = HOME;
+// these tests read the store as the home with no key writes it, and set a key where they seal
+delete process.env.API_ANYTHING_KEY;
 let fx: Fixture;
 const opts = { maxTier: 1 as const, minIntervalMs: 0 };
 before(async () => {
@@ -198,13 +201,24 @@ test("views cannot turn a classified failure into success, and a broken result s
   assert.equal(failed.resultId, undefined);
   assert.equal(failed.more, undefined);
   assert.equal(existsSync(join(HOME, "results.json")), false);
+  // a store that is not a file cannot be read or replaced: the call still answers, and says what it lost
+  mkdirSync(join(HOME, "results.json"));
+  try {
+    const r = await call("result-fixture", "list", {}, opts);
+    assert.equal(r.ok, true);
+    assert.equal(r.resultId, undefined);
+    assert.equal(r.more, undefined);
+    assert.match(r.truncated!, /local retention failed/);
+  } finally {
+    rmSync(join(HOME, "results.json"), { recursive: true, force: true });
+  }
+  // a damaged store is an empty one: the answer is kept over it, and none of its text is repeated
   writeFileSync(join(HOME, "results.json"), "corrupt private store", { mode: 0o600 });
-  const r = await call("result-fixture", "list", {}, opts);
-  assert.equal(r.ok, true);
-  assert.equal(r.resultId, undefined);
-  assert.equal(r.more, undefined);
-  assert.match(r.truncated!, /local retention failed/);
-  assert.doesNotMatch(r.truncated!, /corrupt private store/);
+  const kept = await call("result-fixture", "list", {}, opts);
+  assert.equal(kept.ok, true);
+  assert.ok(kept.resultId);
+  assert.doesNotMatch(kept.truncated!, /local retention failed|corrupt private store/);
+  assert.equal(getResult(kept.resultId).ok, true);
 });
 
 test("retained answers can be reprojected, including fields omitted by the initial view", async () => {
@@ -255,6 +269,178 @@ test("private retained answers expire without extending their TTL, and the oldes
   assert.equal(getResult(ids[1]!, { offset: 0.5 }).ok, false);
 });
 
+test("a home that seals keeps cut answers sealed: an older plaintext store is sealed on first access, and a key error keeps none", () => {
+  const sealed = mkdtempSync(join(tmpdir(), "aa-results-sealed-"));
+  const store = join(sealed, "results.json");
+  const SECRET = "signed-in-answer-row-0123456789";
+  const value = Array.from({ length: 20 }, (_, id) => ({ id, body: `${SECRET} `.repeat(30) }));
+  const key: { held?: Buffer } = {};
+  const memory: KeyStore = {
+    name: "memory",
+    get: () => key.held,
+    put: (k) => {
+      key.held ??= k;
+    },
+  };
+  const told: string[] = [];
+  process.env.API_ANYTHING_HOME = sealed;
+  try {
+    // an older version's store, written before answers were sealed
+    const t = Date.now();
+    const old = { id: "0f0e0d0c-0b0a-4908-8706-050403020100", expiresAt: t + RESULT_TTL_MS, data: value };
+    writeFileSync(store, JSON.stringify([old]), { mode: 0o600 });
+    setKeyStore(memory);
+    // a call whose answer is not cut still reads the store: that access seals it
+    assert.deepEqual(resultView([1], {}, t), { data: [1] });
+    assert.ok(isSealedText(readFileSync(store, "utf8")), "the plaintext store is sealed on first access");
+    assert.equal(getResult(old.id, {}, t).ok, true, "and its answers are still read");
+    const first = resultView(value, { maxChars: 256 }, t);
+    assert.ok(first.resultId);
+    const raw = readFileSync(store, "utf8");
+    assert.ok(isSealedText(raw) && !raw.includes(SECRET));
+    assert.equal(statSync(store).mode & 0o777, 0o600);
+    const back = getResult(first.resultId, { maxChars: 256 }, t);
+    assert.equal(back.ok, true);
+    // an expired record is dropped by a sealed rewrite too
+    assert.equal(getResult(first.resultId, {}, t + RESULT_TTL_MS).ok, false);
+    assert.ok(isSealedText(readFileSync(store, "utf8")));
+
+    // the key store fails: the answer is not kept, in plaintext or otherwise, and the call says so
+    const kept = resultView(value, { maxChars: 256 }, t);
+    assert.ok(kept.resultId);
+    const before = readFileSync(store, "utf8");
+    setKeyStore({
+      name: "flaky",
+      get() {
+        throw new Error("locked keychain");
+      },
+      put() {},
+    });
+    const lost = resultView(value, { maxChars: 256 }, t);
+    assert.equal(lost.resultId, undefined);
+    assert.match(lost.truncated ?? "", /local retention failed; the full answer is not available/);
+    assert.equal(readFileSync(store, "utf8"), before);
+    assert.deepEqual(getResult(kept.resultId, {}, t), {
+      ok: false,
+      class: "error",
+      reason: "could not read the local result store",
+    });
+
+    // a home with no key store that never sealed: 0600 plaintext, as its sessions are, and no warning for it
+    const plain = mkdtempSync(join(tmpdir(), "aa-results-plain-"));
+    process.env.API_ANYTHING_HOME = plain;
+    setKeyStore(null);
+    onPlaintext((why) => told.push(why));
+    try {
+      const r = resultView(value, { maxChars: 256 }, t);
+      assert.ok(r.resultId);
+      assert.equal(JSON.parse(readFileSync(join(plain, "results.json"), "utf8")).length, 1);
+      assert.equal(statSync(join(plain, "results.json")).mode & 0o777, 0o600);
+      assert.deepEqual(told, []);
+    } finally {
+      rmSync(plain, { recursive: true, force: true });
+    }
+  } finally {
+    process.env.API_ANYTHING_HOME = HOME;
+    setKeyStore(undefined);
+    onPlaintext(() => {});
+    rmSync(sealed, { recursive: true, force: true });
+  }
+});
+
+test("a store that cannot be opened is an empty one and is written over: another key's, a damaged one, one that is no list", () => {
+  const home = mkdtempSync(join(tmpdir(), "aa-results-rekey-"));
+  const store = join(home, "results.json");
+  const SECRET = "signed-in-answer-row-0123456789";
+  const value = Array.from({ length: 20 }, (_, id) => ({ id, body: `${SECRET} `.repeat(30) }));
+  const memory = (): KeyStore => {
+    let held: Buffer | undefined;
+    return {
+      name: "memory",
+      get: () => held,
+      put: (k) => {
+        held ??= k;
+      },
+    };
+  };
+  const gone = { ok: false, class: "input", reason: "result not found, expired, or evicted" };
+  const sealedOnly = () => {
+    const raw = readFileSync(store, "utf8");
+    assert.ok(isSealedText(raw) && !raw.includes(SECRET), "the store is sealed, never plaintext");
+  };
+  const passphrase = process.env.API_ANYTHING_KEY;
+  process.env.API_ANYTHING_HOME = home;
+  try {
+    const t = Date.now();
+    // sealed with a passphrase, which is then unset: the OS store's key is the one in use
+    process.env.API_ANYTHING_KEY = "the first passphrase";
+    setKeyStore(null);
+    const first = resultView(value, { maxChars: 256 }, t);
+    assert.ok(first.resultId);
+    delete process.env.API_ANYTHING_KEY;
+    setKeyStore(memory());
+    // 30 days on, long past the 15 minutes of what the store held
+    const later = t + 30 * 24 * 60 * 60_000;
+    const second = resultView(value, { maxChars: 256 }, later);
+    assert.ok(second.resultId, "a cut answer is kept under the key in use");
+    assert.doesNotMatch(second.truncated ?? "", /local retention failed/);
+    sealedOnly();
+    assert.equal(getResult(second.resultId, {}, later).ok, true);
+    assert.deepEqual(getResult(first.resultId, {}, t), gone);
+
+    // another key of the same store (a new Keychain item): a lookup finds nothing, and leaves an empty sealed store
+    setKeyStore(memory());
+    assert.deepEqual(getResult(second.resultId, {}, later), gone);
+    sealedOnly();
+    assert.ok(resultView(value, { maxChars: 256 }, later).resultId);
+
+    // a damaged sealed file, damaged plaintext, and JSON that is no list of kept answers
+    for (const broken of [
+      readFileSync(store, "utf8").slice(0, -24),
+      "corrupt private store",
+      '{"id":"x"}',
+      "[null]",
+      '[{"id":7,"expiresAt":"never","data":1}]',
+    ]) {
+      writeFileSync(store, broken, { mode: 0o600 });
+      // a call whose answer is not cut reads the store too
+      assert.deepEqual(resultView([1], {}, later), { data: [1] });
+      sealedOnly();
+      writeFileSync(store, broken, { mode: 0o600 });
+      const again = resultView(value, { maxChars: 256 }, later);
+      assert.ok(again.resultId, `kept over ${JSON.stringify(broken.slice(0, 24))}`);
+      sealedOnly();
+      assert.equal(getResult(again.resultId, {}, later).ok, true);
+    }
+
+    // starting over with a new passphrase (the old salt deleted) recovers too
+    process.env.API_ANYTHING_KEY = "the first passphrase";
+    setKeyStore(null);
+    rmSync(store);
+    assert.ok(resultView(value, { maxChars: 256 }, later).resultId);
+    rmSync(join(home, "key-salt.json"));
+    process.env.API_ANYTHING_KEY = "another passphrase";
+    setKeyStore(null);
+    assert.ok(resultView(value, { maxChars: 256 }, later).resultId);
+    sealedOnly();
+
+    // a key that cannot be had is still an answer not kept, and the store is left as it is
+    const before = readFileSync(store, "utf8");
+    process.env.API_ANYTHING_KEY = "not the passphrase";
+    setKeyStore(null);
+    const lost = resultView(value, { maxChars: 256 }, later);
+    assert.equal(lost.resultId, undefined);
+    assert.match(lost.truncated ?? "", /local retention failed; the full answer is not available/);
+    assert.equal(readFileSync(store, "utf8"), before);
+  } finally {
+    if (passphrase === undefined) delete process.env.API_ANYTHING_KEY;
+    else process.env.API_ANYTHING_KEY = passphrase;
+    process.env.API_ANYTHING_HOME = HOME;
+    setKeyStore(undefined);
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
 test("kept answers fit a byte budget: big ones evict the oldest, and one over it alone is not kept", () => {
   const t = Date.now();
   const big = (n: number) => [{ body: "x".repeat(n) }, { body: "y" }];
@@ -268,6 +454,31 @@ test("kept answers fit a byte budget: big ones evict the oldest, and one over it
   assert.equal(over.resultId, undefined);
   assert.match(over.truncated ?? "", /full answer is not available/);
   assert.equal(getResult(ids[4]!, {}, t).ok, true, "an answer that is not kept evicts nothing");
+});
+
+test("in a home that seals, the sealed store on disk fits the byte budget too", () => {
+  const home = mkdtempSync(join(tmpdir(), "aa-results-sealed-budget-"));
+  const passphrase = process.env.API_ANYTHING_KEY;
+  process.env.API_ANYTHING_HOME = home;
+  process.env.API_ANYTHING_KEY = "a budget passphrase";
+  setKeyStore(null);
+  try {
+    const t = Date.now();
+    const big = (n: number) => [{ body: "x".repeat(n) }, { body: "y" }];
+    const quarter = Math.floor(RESULT_BYTES / 4);
+    const ids = Array.from({ length: 4 }, () => resultView(big(quarter), { maxChars: 256 }, t).resultId!);
+    assert.ok(ids.every(Boolean));
+    const store = join(home, "results.json");
+    assert.ok(isSealedText(readFileSync(store, "utf8").slice(0, 64)));
+    assert.ok(statSync(store).size <= RESULT_BYTES, `${statSync(store).size} bytes`);
+    assert.equal(getResult(ids[3]!, {}, t).ok, true);
+  } finally {
+    if (passphrase === undefined) delete process.env.API_ANYTHING_KEY;
+    else process.env.API_ANYTHING_KEY = passphrase;
+    process.env.API_ANYTHING_HOME = HOME;
+    setKeyStore(undefined);
+    rmSync(home, { recursive: true, force: true });
+  }
 });
 
 test("JSON fragments recover oversized single items, objects, and strings without losing shortened tails", () => {

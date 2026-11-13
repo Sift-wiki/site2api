@@ -17,6 +17,7 @@ holds the evidence behind it, including the api-anything bugs that must not come
 | `src/outline.ts` | a compact summary of a captured response, for choosing a request and a recipe |
 | `src/classify.ts` | response -> ok/drift/auth/rate/blocked/input/error; `judge` also extracts |
 | `src/extract.ts` | parse, extract, pick, cap |
+| `src/deadline.ts` | the time limit on reading an answer and on testing a call's args: synchronous work stopped from outside (Node's `vm` timeout); Node only, so no module the registry Worker bundles imports it |
 | `src/http.ts` | tier 1: fill the template, send with Node fetch |
 | `src/browser.ts` | Chrome via playwright-core: trigger capture, tier 2 page fetch, login |
 | `src/heal.ts` | add, rescan, recapture, tier-3 trigger runs, captures |

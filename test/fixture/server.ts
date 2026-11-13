@@ -248,6 +248,13 @@ export async function startFixture(): Promise<Fixture> {
     if (p === "/") return html(200, page(state.build, LIST_USERS.map((n) => `<a href="/u/${n}">${n}</a>`).join(" ")));
     if (/^\/u\/[^/]+$/.test(p)) return html(200, page(state.build));
     if (p === "/search" || p === "/cal") return html(200, page(state.build));
+    // A sign-in kept in localStorage, as a single-page app keeps its token: the page says what it found, then stores one.
+    if (p === "/keeps-token")
+      return html(
+        200,
+        `<html><body><script>const had = localStorage.getItem("token") ?? ""; localStorage.setItem("token", "synthetic-stored-token"); fetch("/api/kept?had=" + encodeURIComponent(had));</script></body></html>`,
+      );
+    if (p === "/api/kept") return json(res, 200, { ok: true });
     if (p === "/compose")
       return html(200, page(state.build, '<textarea id="text"></textarea><button id="post">Post</button>'));
     if (
@@ -315,6 +322,25 @@ export async function startFixture(): Promise<Fixture> {
       return html(
         200,
         `<!doctype html><html><body><button id="buy">${u.searchParams.get("redesign") ? "Delete account" : "Buy"}</button><script>const item=${JSON.stringify(item)};fetch("/api/item?id="+encodeURIComponent(item));document.getElementById("buy").onclick=()=>{${click}}</script></body></html>`,
+      );
+    }
+    // A finder that asks as soon as its head is parsed, as POST, while the rest of the document is
+    // still on its way: the request leaves well before the page has loaded.
+    if (p === "/early") {
+      res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+      res.write(
+        `<!doctype html><html><head><script>fetch("/api/find",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({q:new URLSearchParams(location.search).get("q")})})</script></head><body>`,
+      );
+      setTimeout(() => res.end('<div id="app"></div></body></html>'), 600);
+      return;
+    }
+    // A mailbox: the messages load on their own, and "Mark all read" POSTs to the address they were read from,
+    // as REST does (one path, the method says what happens).
+    if (/^\/inbox\/[^/]+$/.test(p)) {
+      const box = JSON.stringify(decodeURIComponent(p.slice("/inbox/".length)));
+      return html(
+        200,
+        `<!doctype html><html><body><button id="mark">Mark all read</button><script>const at="/api/inbox?box="+encodeURIComponent(${box});fetch(at).then(r=>r.json()).then(v=>{document.title=JSON.stringify(v)});document.getElementById("mark").onclick=()=>fetch(at,{method:"POST"}).catch(()=>{})</script></body></html>`,
       );
     }
     // A finder whose reads go out as POSTs on a click: a search, a GraphQL query, and a click beacon beside each.
@@ -678,6 +704,14 @@ document.getElementById("gql").onclick=()=>fetch("/api/gql",{method:"POST",heade
       });
     if (p === "/api/account" && req.method === "DELETE") return json(res, 200, { deleted: true });
     if (p === "/api/track") return json(res, 200, { ok: true });
+    if (p === "/api/inbox") {
+      const box = u.searchParams.get("box");
+      return json(
+        res,
+        200,
+        req.method === "POST" ? { marked: box } : { messages: [{ subject: `${box} one` }, { subject: `${box} two` }] },
+      );
+    }
     if (p === "/api/find" && req.method === "POST") {
       const q = String((JSON.parse(body || "{}") as { q?: unknown }).q ?? "");
       return json(res, 200, { results: [`${q} one`, `${q} two`] });

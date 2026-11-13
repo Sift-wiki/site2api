@@ -7,6 +7,7 @@
 import { createHash } from "node:crypto";
 import { join } from "node:path";
 import { asText, templateRefs } from "./codec.js";
+import { DEADLINE, DeadlineExceeded, within } from "./deadline.js";
 import { type CallOptions, type CallResult, call } from "./execute.js";
 import { buildRequest } from "./http.js";
 import type { Evidence } from "./registry-api.js";
@@ -343,10 +344,14 @@ function preflight(site: Site, op: Operation, s: Session | undefined, readback: 
     problems.push(`no example for ${missing.map((p) => p.name).join(", ")}`);
   } else {
     try {
-      buildRequest(op, example, session);
+      within(() => buildRequest(op, example, session), DEADLINE.args);
       builds = true;
     } catch (e) {
-      problems.push((e as Error).message);
+      problems.push(
+        e instanceof DeadlineExceeded
+          ? `the example args were not tested against the patterns: ${e.message}`
+          : (e as Error).message,
+      );
     }
   }
   const signedIn = loggedIn(session.cookies, site.loginCookies);

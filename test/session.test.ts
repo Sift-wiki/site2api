@@ -8,10 +8,12 @@ import {
   cookieHeaderFor,
   cookieValue,
   home,
+  insecureSet,
   loadSession,
   loggedIn,
   mergeCapture,
   parseCookieHeader,
+  parseSetCookie,
   renewedSignIn,
   safeName,
   saveSession,
@@ -215,6 +217,37 @@ test("session store: API_ANYTHING_HOME override, 0700 dirs, 0600 files, merge by
   assert.equal(statSync(join(home(), "sessions")).mode & 0o777, 0o700);
   assert.throws(() => loadSession("../etc"), /invalid site name/);
   assert.throws(() => safeName("a/b"));
+});
+
+test("a plain-http answer sets nothing over a Secure cookie; https and loopback do", () => {
+  const set = (line: string, url: string) => parseSetCookie(line, url)!;
+  const jar = [c("sid", "USER", ".shop.example", { secure: true }), c("theme", "dark", ".shop.example")];
+  const http = "http://old.shop.example/landing";
+  // the same name as a Secure cookie, for a domain above, below or equal to its own, whatever the path
+  assert.equal(insecureSet(jar, set("sid=P; Domain=shop.example", http), http), true);
+  assert.equal(insecureSet(jar, set("sid=P", http), http), true);
+  assert.equal(insecureSet(jar, set("sid=P; Path=/api/deep", http), http), true);
+  assert.equal(insecureSet(jar, set("sid=; Domain=shop.example; Max-Age=0", http), http), true);
+  const hostOnly = [c("sid", "USER", "www.shop.example", { secure: true })];
+  assert.equal(insecureSet(hostOnly, set("sid=P; Domain=shop.example", http), http), true);
+  // a Secure attribute, or a name that promises one
+  assert.equal(insecureSet([], set("tok=P; Secure", http), http), true);
+  assert.equal(insecureSet([], set("__Secure-tok=P", http), http), true);
+  assert.equal(insecureSet([], set("__Host-tok=P", http), http), true);
+  // not: another name, a cookie that is not Secure, a Secure one that expired, another branch of the site
+  assert.equal(insecureSet(jar, set("step=1", http), http), false);
+  assert.equal(insecureSet(jar, set("theme=light; Domain=shop.example", http), http), false);
+  const gone = [c("sid", "USER", ".shop.example", { secure: true, expires: 1 })];
+  assert.equal(insecureSet(gone, set("sid=P; Domain=shop.example", http), http), false);
+  const sibling = [c("sid", "USER", "www.shop.example", { secure: true })];
+  assert.equal(insecureSet(sibling, set("sid=P", http), http), false);
+  // https, and loopback as `cookiesFor` counts it
+  const https = "https://old.shop.example/landing";
+  assert.equal(insecureSet(jar, set("sid=P; Domain=shop.example", https), https), false);
+  for (const local of ["http://localhost:8080/a", "http://127.0.0.1:8080/a"]) {
+    const mine = [c("sid", "USER", new URL(local).hostname, { secure: true })];
+    assert.equal(insecureSet(mine, set("sid=ROTATED; Secure", local), local), false, local);
+  }
 });
 
 test("cookieValue never hands a cookie to another site, nor a Secure one over http", () => {

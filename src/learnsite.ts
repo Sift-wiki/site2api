@@ -10,6 +10,7 @@ import { type Proof, recordCases } from "./checks.js";
 import { botWall, judge } from "./classify.js";
 import { cleanCall } from "./clean.js";
 import { asText } from "./codec.js";
+import { DEADLINE, DeadlineExceeded, within } from "./deadline.js";
 import { siteOf, slugOf } from "./domain.js";
 import { call, type NextCall } from "./execute.js";
 import { capOutput, extract } from "./extract.js";
@@ -32,6 +33,7 @@ import { resolveLoginTarget } from "./login.js";
 import { lookupOp } from "./lookup.js";
 import { outline } from "./outline.js";
 import { pagingHints } from "./paging.js";
+import { spelled } from "./publish.js";
 import { pull, registryRequest, sharedName } from "./registry.js";
 import type { Evidence, ServedSite } from "./registry-api.js";
 import { summarize } from "./search.js";
@@ -88,6 +90,11 @@ export interface LearnSiteOptions {
   /** asks the user whether to share an op that needs their yes; undefined: they could not be asked */
   consent?: (message: string) => Promise<boolean | undefined>;
   minIntervalMs?: number;
+  /**
+   * MCP's address rule (`learnTool.publicOnly`): what is ranked, shown, learned, replayed and saved is
+   * https on a public host, as the trigger is, and the saved op keeps the rule (`Operation.publicOnly`)
+   */
+  publicOnly?: boolean;
 }
 
 interface Choice {
@@ -199,6 +206,15 @@ async function reuse(
 export const hooks = { share: shareOps };
 
 const clip = (u: string) => (u.length > 160 ? `${u.slice(0, 157)}...` : u);
+
+/** The registrable domain of a URL, or undefined when it is none. */
+const domainOf = (url: string) => {
+  try {
+    return siteOf(new URL(url).hostname.toLowerCase());
+  } catch {
+    return undefined;
+  }
+};
 const empty = (d: unknown) =>
   d === undefined || d === null || (Array.isArray(d) && !d.length) || (typeof d === "object" && !Object.keys(d).length);
 
@@ -247,7 +263,10 @@ function lookedUpData(run: CaptureFile, args: Args): { id: number; why: string }
 function resolves(r: Recipe, body: string | undefined): boolean {
   if (!body) return false;
   try {
-    const d = extract({ format: r.html ? "html" : r.embedded ? "embedded" : "json", ...r }, body);
+    const d = within(
+      () => extract({ format: r.html ? "html" : r.embedded ? "embedded" : "json", ...r }, body),
+      DEADLINE.read,
+    );
     return !empty(d);
   } catch {
     return false;
@@ -278,26 +297,27 @@ function asExample(op: Operation, args: Args): Operation {
   const params = { ...op, slots: op.slots.filter((s) => s.param !== undefined) };
   return {
     ...op,
-    request: buildRequest(params, args, none),
+    request: within(() => buildRequest(params, args, none), DEADLINE.args),
     // a lookup carries the args too: run 1's would say what the user asked
     slots: op.slots.map((s) =>
-      s.from ? { ...s, from: { ...s.from, request: buildRequest(lookupOp(op, s.from), args, none) } } : s,
+      s.from
+        ? {
+            ...s,
+            from: { ...s.from, request: within(() => buildRequest(lookupOp(op, s.from!), args, none), DEADLINE.args) },
+          }
+        : s,
     ),
     params: op.params.map((p) => ({ ...p, example: args[p.name] ?? p.example })),
   };
 }
 
-/** The user's values (3+ characters) still in the op, in any common encoding: shared, they say what the user asked. */
+/**
+ * The user's params whose values the op still spells, read as a heal-back's request is (`spelled`: as
+ * they are, encoded, in base64, or as a slug): shared, they say what the user asked.
+ */
 function revealed(op: Operation, args: Args): string[] {
   const { learnedAt: _, ...rest } = op;
-  const text = JSON.stringify(rest).toLowerCase();
-  return Object.entries(args)
-    .filter(([, v]) => {
-      const s = asText(v).toLowerCase();
-      const forms = [s, encodeURIComponent(s).toLowerCase(), encodeURIComponent(s).replace(/%20/g, "+").toLowerCase()];
-      return s.length >= 3 && forms.some((f) => text.includes(f));
-    })
-    .map(([k]) => k);
+  return spelled(rest, args);
 }
 
 /**
@@ -514,10 +534,31 @@ export async function learnSite(input: LearnSiteInput, o: LearnSiteOptions = {})
     return { ok: false, error: (e as Error).message, next: "pass site: a short name (letters, digits, . _ -)" };
   }
   const existing = loadSite(site)?.site;
+  // One name is one site, as pull holds it (registry.ts) and the default name does (`defaultSiteName`):
+  // an operation saved under a site on another registrable domain would be called as that site's.
+  if (existing && domainOf(existing.baseUrl) !== domainOf(input.trigger))
+    return {
+      ok: false,
+      class: "refused",
+      site,
+      error: `site "${site}" is ${clip(existing.baseUrl)}, another site than the trigger's: a name holds one site`,
+      next: "leave site out (it is named from the trigger), or pass a name no site has",
+      nextCall: { action: "fix_args" },
+    };
   let op = input.op ?? opName(input.trigger, input.args);
-  if (!input.op)
-    for (let n = 2; existing?.operations.some((x) => x.name === op && x.trigger.url !== input.trigger); n++)
-      op = `${opName(input.trigger, input.args)}${n}`;
+  const taken = (name: string) => existing?.operations.find((x) => x.name === name && x.trigger.url !== input.trigger);
+  if (!input.op) for (let n = 2; taken(op); n++) op = `${opName(input.trigger, input.args)}${n}`;
+  // a name the caller gave is not renamed: another page's operation under it is not replaced
+  else if (taken(op))
+    return {
+      ok: false,
+      class: "refused",
+      site,
+      op,
+      error: `${site} already has an operation ${op} for another page (${clip(taken(op)!.trigger.url)}): learn_site replaces an operation only by learning its own page again`,
+      next: "pass another op name, or leave op out",
+      nextCall: { action: "fix_args" },
+    };
   const fail = (error: string, next: string, extra: Partial<LearnSiteResult> = {}): LearnSiteResult => ({
     ok: false,
     site,
@@ -563,6 +604,16 @@ export async function learnSite(input: LearnSiteInput, o: LearnSiteOptions = {})
     return fail((e as Error).message.split("\n")[0]!, "check the trigger URL, then learn again");
   }
   const captures = [c1.id, c2.id];
+  // The rule holds for what the page requested, not only for the trigger typed: a request to this
+  // machine or the local network (the page's redirect, a request its script sent, a capture of another
+  // page) is no part of the run. Never ranked, shown in alternatives, picked, learned or replayed.
+  const hidden = new Set<number>();
+  if (o.publicOnly) {
+    const open = (c: CaptureFile) => ({ ...c, exchanges: c.exchanges.filter((e) => !badAddress(e.request.url)) });
+    for (const e of c1.exchanges) if (badAddress(e.request.url)) hidden.add(e.id);
+    c1 = open(c1);
+    c2 = open(c2);
+  }
 
   // the request and the recipe: the agent's, else the outline's
   const values = Object.values(input.args).map(asText);
@@ -589,6 +640,12 @@ export async function learnSite(input: LearnSiteInput, o: LearnSiteOptions = {})
   const told = Object.keys(given).length > 0;
   let chosen: Choice | undefined;
   if (input.pickRequest !== undefined) {
+    if (hidden.has(input.pickRequest))
+      return fail(
+        `request ${input.pickRequest} is not https on a public host: learn_site learns only requests to public hosts, and sent nothing`,
+        "pick a request from alternatives; a page on this machine or the local network is learned with the CLI, by the user",
+        { class: "refused", alternatives: options, captures, nextCall: { action: "relearn", site, op } },
+      );
     const e = exchange(input.pickRequest);
     if (!e)
       return fail(`no request ${input.pickRequest} in run 1 (capture ${c1.id})`, "pick one of alternatives[].request", {
@@ -696,6 +753,7 @@ export async function learnSite(input: LearnSiteInput, o: LearnSiteOptions = {})
       from2: c2,
       ...(paged ? { paging: paged.paging } : {}),
       readsOnly: true,
+      ...(o.publicOnly ? { publicOnly: true } : {}),
     });
   } catch (e) {
     const m = (e as Error).message.split("\n")[0]!;
@@ -719,12 +777,22 @@ export async function learnSite(input: LearnSiteInput, o: LearnSiteOptions = {})
   // the user's answer, from run 1: page 1 of a list that pages
   const answered = exchange(paged?.page1 ?? chosen.request)!;
   const res = answered.response!;
-  const j = judge(added.operation, {
-    status: res.status,
-    headers: res.headers,
-    body: res.body ?? "",
-    url: answered.request.url,
-  });
+  let j: ReturnType<typeof judge>;
+  try {
+    j = within(
+      () =>
+        judge(added.operation, {
+          status: res.status,
+          headers: res.headers,
+          body: res.body ?? "",
+          url: answered.request.url,
+        }),
+      DEADLINE.read,
+    );
+  } catch (e) {
+    if (!(e instanceof DeadlineExceeded)) throw e;
+    j = { class: "error", reason: `the answer was not read: ${e.message}` };
+  }
   if (j.class !== "ok" || empty(j.data))
     return fail(
       `the op was saved, but on run 1's answer it reads ${j.class === "ok" ? "no data" : `${j.class}: ${j.reason}`}`,
@@ -734,6 +802,7 @@ export async function learnSite(input: LearnSiteInput, o: LearnSiteOptions = {})
   const answer = capOutput(j.data);
 
   // the shared example is args2, never the user's own request
+  let own = false;
   const saved = updateSite(site, (cur) => ({
     ...cur!,
     operations: cur!.operations.map((x) => {
@@ -741,7 +810,8 @@ export async function learnSite(input: LearnSiteInput, o: LearnSiteOptions = {})
       try {
         return asExample(x, input.args2);
       } catch {
-        return x; // the user's values stay, and `revealed` keeps it from being shared
+        own = true; // the user's values stay, which keeps it from being shared
+        return x;
       }
     }),
   }));
@@ -772,7 +842,9 @@ export async function learnSite(input: LearnSiteInput, o: LearnSiteOptions = {})
   const now = loadSite(site)!.site.operations.find((x) => x.name === op)!;
   // a minTier 3 op needs the page for every call: plain HTTP says nothing about whether it is public
   const clean =
-    now.minTier > 1 ? undefined : await cleanCall(now, input.args2, { site, minIntervalMs: o.minIntervalMs });
+    now.minTier > 1
+      ? undefined
+      : await cleanCall(now, input.args2, { site, minIntervalMs: o.minIntervalMs, publicOnly: o.publicOnly });
   const cleanReplay: Evidence["cleanReplay"] = !clean
     ? "skipped"
     : clean.class === "ok" || clean.class === "blocked"
@@ -821,8 +893,10 @@ export async function learnSite(input: LearnSiteInput, o: LearnSiteOptions = {})
 
   let shared: ShareOutcome;
   let next: string | undefined;
-  // run 1's cursor too: it can carry what the user asked (a cursor that encodes the query)
-  const reveals = revealed(now, paged ? paged.examples[0] : input.args);
+  // run 1's cursor too: it can carry what the user asked (a cursor that encodes the query). Where the
+  // op could not be given args2, every one of the user's values is in it, one too short to read for too.
+  const run1 = paged ? paged.examples[0] : input.args;
+  const reveals = own ? Object.keys(run1) : revealed(now, run1);
   if (!held) {
     shared = { site, op, shared: false, reason: "the holdout call did not answer with data" };
     next = `it answered the user's request, but not args3: if args3 has results on the site, the op may be wrong; learn again with captures ${captures.join(" ")} and another pickRequest or recipe`;
@@ -831,7 +905,7 @@ export async function learnSite(input: LearnSiteInput, o: LearnSiteOptions = {})
       site,
       op,
       shared: false,
-      reason: `the learned request keeps the user's ${reveals.join(", ")} literally, so sharing it would say what they asked`,
+      reason: `the learned request still spells the user's ${reveals.join(", ")} (as it is, encoded or as a slug), so sharing it would say what they asked`,
     };
   } else {
     const evidence: Partial<Evidence> = { clientVersion: VERSION, ...proven };
@@ -850,9 +924,16 @@ export async function learnSite(input: LearnSiteInput, o: LearnSiteOptions = {})
     const publish = `api-anything publish ${site} ${op} --yes`;
     if (shared.needsConsent) {
       const found = shared.personal?.length ? shared.personal : undefined;
+      // The values a yes makes public, read from the saved op and not from this call's input: its
+      // params' examples and every check's args (one the user recorded before is still there), and the
+      // holdout's, which go as evidence.
+      const examples = Object.fromEntries(
+        now.params.flatMap((p) => (p.example === undefined ? [] : [[p.name, p.example]])),
+      );
+      const sets = [examples, ...(now.checks ?? []).map((c) => c.args), input.args3].map((a) => JSON.stringify(a));
       const yes = await o
         .consent?.(
-          `${site} ${op} ${shared.reason ? `(${shared.reason}) ` : ""}works. Share it with the api-anything catalog? Anyone can then fetch the request's shape and the example values ${JSON.stringify(input.args2)} and ${JSON.stringify(input.args3)}; your cookies and session values are never sent.${found ? ` Check first, it may hold something of yours: ${found.join("; ")}.` : ""}`,
+          `${site} ${op} ${shared.reason ? `(${shared.reason}) ` : ""}works. Share it with the api-anything catalog? Anyone can then fetch the request's shape and the example values ${[...new Set(sets)].join(" and ")}; your cookies and session values are never sent.${found ? ` Check first, it may hold something of yours: ${found.join("; ")}.` : ""}`,
         )
         .catch(() => undefined);
       if (yes) shared = await share(true);

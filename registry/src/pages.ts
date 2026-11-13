@@ -99,8 +99,21 @@ function summary(s: ServedSite): { label: string; tone: string } {
 
 /* ------------------------------------------------------------------ sample call */
 
+// for the try form's curl line alone: the URL of a bundled op, its query percent-encoded
 const shellArg = (s: string) => (/^[\w.,:/@%+=-]+$/.test(s) ? s : `'${s.replace(/'/g, `'\\''`)}'`);
 const argText = (v: unknown) => (typeof v === "string" ? v : typeof v === "object" ? JSON.stringify(v) : String(v));
+
+/**
+ * `name=value` as one argument of a command a visitor copies into whatever shell they have. The value is
+ * someone else's text, and no quoting holds everywhere: '...' is no quoting in cmd.exe, and '\'' ends a
+ * PowerShell string. So it is spelled only when sh, cmd.exe and PowerShell read it alike: bare, or in
+ * double quotes with a space or a comma (no $ ` \ ! % ^ & or quote). Anything else is a placeholder.
+ */
+export function callArg(name: string, value: unknown): string {
+  const arg = `${name}=${argText(value)}`;
+  if (/^[\w.:/@+=-]+$/.test(arg)) return arg;
+  return /^[\w .,:/@+=-]+$/.test(arg) ? `"${arg}"` : `${name}=<${name}>`;
+}
 
 /** The op a visitor should try first: a read that runs logged out and has examples, preferring a live one. */
 function sampleOp(s: ServedSite): Operation | undefined {
@@ -121,11 +134,7 @@ function sampleCommands(name: string, op: Operation | undefined): string {
   if (op?.learnedLoggedIn) lines.push(`api-anything login ${name}    # signs in with your browser's cookies`);
   if (op) {
     const args = op.params.flatMap((p) =>
-      p.example !== undefined
-        ? [shellArg(`${p.name}=${argText(p.example)}`)]
-        : p.required
-          ? [`${p.name}=<${p.name}>`]
-          : [],
+      p.example !== undefined ? [callArg(p.name, p.example)] : p.required ? [`${p.name}=<${p.name}>`] : [],
     );
     lines.push(["api-anything call", name, op.name, ...args].join(" "));
   }

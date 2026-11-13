@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { fillTemplate, getAt, parseJson, setAt, walk } from "../src/codec.js";
-import type { Request } from "../src/spec.js";
+import { buildRequest } from "../src/http.js";
+import { OperationSchema, type Request } from "../src/spec.js";
 
 const get = (url: string, headers: Record<string, string> = {}): Request => ({ method: "GET", url, headers });
 
@@ -17,6 +18,40 @@ test("path segments: get decodes, set encodes only that segment", () => {
     "https://x.com/i/api/graphql/Gb-d6r0vxPOADdG62OEBpQ/UserByScreenName?x=1#frag",
     "input not mutated",
   );
+});
+
+test("path segments: a dot segment is refused", () => {
+  const r = get("https://a.com/api/projects/p1/tokens/t1");
+  for (const v of ["..", "."])
+    assert.throws(() => setAt(r, ["path:4"], v), /path segment 4 cannot be "\.\.?": a URL reads it as another address/);
+  // what stays inside its segment is written as before, the empty value learning and paging blank a leaf with too
+  for (const [v, seg] of [
+    ["..a", "..a"],
+    ["...", "..."],
+    ["", ""],
+    ["a/../b", "a%2F..%2Fb"],
+    ["../x", "..%2Fx"],
+    ["%2e%2e", "%252e%252e"],
+  ] as const) {
+    const url = setAt(r, ["path:4"], v).url;
+    assert.equal(url, `https://a.com/api/projects/p1/tokens/${seg}`);
+    assert.equal(new URL(url).pathname.split("/").length, 6, "still its own segment to a URL parser");
+  }
+});
+
+test("buildRequest: a path arg that is a dot segment is refused, so nothing is built to send", () => {
+  const op = OperationSchema.parse({
+    name: "deleteToken",
+    readOnly: false,
+    request: { method: "DELETE", url: "https://a.com/api/projects/p1/tokens/t1", headers: {} },
+    slots: [{ param: "id", at: ["path:4"] }],
+    trigger: { url: "https://a.com/projects/p1" },
+    params: [{ name: "id" }],
+  });
+  const session = { cookies: [], values: {} };
+  assert.equal(buildRequest(op, { id: "t2" }, session).url, "https://a.com/api/projects/p1/tokens/t2");
+  for (const id of ["..", "."])
+    assert.throws(() => buildRequest(op, { id }, session), /cannot be "\.\.?": a URL reads it as another address/);
 });
 
 test("query: raw pairs kept byte-identical, empty values preserved, missing key appended", () => {

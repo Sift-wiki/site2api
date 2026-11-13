@@ -5,7 +5,7 @@
  * assignments), and repeated HTML items that carry an example value.
  */
 import type { HTMLElement } from "node-html-parser";
-import { extractEmbedded, getPath, innerJson, parseBody, parseShown } from "./extract.js";
+import { extractEmbedded, getPath, innerJson, parseBody, parseShown, tagsOf } from "./extract.js";
 import { suggestExtract } from "./learn.js";
 
 export type JsonOutline = {
@@ -119,11 +119,17 @@ const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 /** Regexes (for --embedded, group 1 at the JSON's start) for JSON blocks a page embeds. */
 export function embeddedBlocks(body: string): string[] {
   const out: string[] = [];
-  for (const m of body.matchAll(/<script\b([^>]*)>\s*([[{])/g)) {
-    const attrs = m[1]!;
+  // one script tag at a time (`tagsOf`): its attributes, then what follows its `>`
+  for (const { at, text } of tagsOf(body, "script")) {
+    const attrs = text.slice("<script".length);
+    let after = at + text.length;
+    if (!text.startsWith("<script") || /^\w/.test(attrs) || body[after] !== ">") continue;
+    do after++;
+    while (/\s/.test(body[after] ?? ""));
+    if (body[after] !== "[" && body[after] !== "{") continue;
     const id = /\bid="([^"]+)"/.exec(attrs)?.[1];
     if (/application\/ld\+json/i.test(attrs)) {
-      const type = /"@type"\s*:\s*"([^"]+)"/.exec(body.slice(m.index!, m.index! + 400))?.[1];
+      const type = /"@type"\s*:\s*"([^"]+)"/.exec(body.slice(at, at + 400))?.[1];
       out.push(`application/ld\\+json[^>]*>\\s*(\\{)${type ? `(?=[^<]*?"@type"\\s*:\\s*"${escapeRe(type)}")` : ""}`);
     } else if (id && /application\/json/i.test(attrs)) out.push(`id="${escapeRe(id)}"[^>]*>\\s*([[{])`);
   }

@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { parse } from "node-html-parser";
 import { extractEmbedded, extractHtml } from "../src/extract.js";
-import { outline, outlineJson, sig } from "../src/outline.js";
+import { embeddedBlocks, outline, outlineJson, sig } from "../src/outline.js";
 
 const row = (id: string, title: string, rating: string, badge = "") =>
   `<li><div class="Book" data-testid="book-item-kca://book/${id}"><a class="BookCard__link" href="/book/show/${id}">cover</a>` +
@@ -132,4 +132,24 @@ test("scout: a link classed as the link names its text title and its href url, w
   assert.ok(names.includes("title") && names.includes("url"), names.join(", "));
   assert.ok(names.includes("author") && names.includes("published"), names.join(", "));
   assert.ok(!names.some((n) => /UrlUrl|^u[A-Z]/.test(n)), names.join(", "));
+});
+
+test("scout: a page's script tags are read one at a time, so tags that never close cost no more than their size", () => {
+  // one pattern across the page rescans it from every unclosed <script: seconds here, and four times that for twice the page
+  const unclosed = `<html><body>${"<script ".repeat(50_000)}`;
+  const t0 = performance.now();
+  assert.deepEqual(embeddedBlocks(unclosed), []);
+  const ms = performance.now() - t0;
+  assert.ok(ms < 1000, `${Math.round(ms)} ms`);
+  const page =
+    '<script type="application/ld+json">\n {"@type":"Book","name":"x"}</script>' +
+    '<script id="__DATA__" type="application/json">[1]</script>' +
+    '<script type="application/json">{"no":"id"}</script><script id="code">var a = {};</script>' +
+    '<scripted id="x" type="application/json">{}</scripted><script src="/a.js"></script>' +
+    '<script>window.__STATE__ = {"a":1};</script>';
+  assert.deepEqual(embeddedBlocks(page), [
+    'application/ld\\+json[^>]*>\\s*(\\{)(?=[^<]*?"@type"\\s*:\\s*"Book")',
+    'id="__DATA__"[^>]*>\\s*([[{])',
+    "window\\.__STATE__\\s*=\\s*([[{])",
+  ]);
 });

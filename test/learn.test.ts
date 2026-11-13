@@ -3,6 +3,7 @@ import { test } from "node:test";
 import { getAt, walk } from "../src/codec.js";
 import { buildRequest } from "../src/http.js";
 import { arrayAround, learnOperation, matches, rankCandidates } from "../src/learn.js";
+import { scanSecrets } from "../src/secrets.js";
 import type { Exchange, StoredCookie } from "../src/types.js";
 
 const cookie = (name: string, value: string, domain = ".x.com"): StoredCookie => ({
@@ -1054,4 +1055,175 @@ test("a UUID the page makes for each request is a gen slot: no session ref, no n
   // one the site handed the page (in the document before the request) is the site's: no gen slot
   const issued = learnOperation(input(`<h1>fridge</h1><script>window.key="${K1}"</script>`)).operation;
   assert.ok(!issued.slots.some((s) => s.gen && s.at[0] === "header:idempotency-key"), JSON.stringify(issued.slots));
+});
+
+test("a token the page takes out of a structured cookie becomes a session ref: no credential in the serialized spec", () => {
+  const TICKET = "vRf7Qm2ZkL9xT4cN8bW1yH6pD3sJ5gUa";
+  const learnWith = (value: string, headers: Record<string, string>, query = "") =>
+    learnOperation({
+      exchanges: [
+        {
+          id: 1,
+          resourceType: "fetch",
+          request: {
+            method: "GET",
+            url: `https://www.shop.test/api/search?q=lanterns${query}`,
+            headers: { ...headers, cookie: `userinfo=${value}` },
+          },
+          response: {
+            status: 200,
+            headers: {},
+            contentType: "application/json",
+            body: '{"items":[{"title":"lantern one","price":12},{"title":"lantern two","price":14}]}',
+          },
+        },
+      ],
+      examples: [{ q: "lanterns" }],
+      cookies: [cookie("userinfo", value, "www.shop.test")],
+      name: "search",
+      trigger: { url: "https://www.shop.test/search?q={q}" },
+      readOnly: true,
+    });
+  for (const [what, value] of [
+    ["URL-encoded JSON", encodeURIComponent(JSON.stringify({ id: 42, name: "Jane Dummy", ticket: TICKET }))],
+    ["k=v text", encodeURIComponent(`uid=42&name=Jane Dummy&ticket=${TICKET}`)],
+    ["a|b", `42|${TICKET}`],
+    ["base64 of JSON", Buffer.from(JSON.stringify({ id: 42, ticket: TICKET })).toString("base64")],
+  ] as const) {
+    // a header named like no credential, and the same token inside a longer field
+    const learned = learnWith(value, { "x-member-ticket": TICKET }, `&ctx=member:${TICKET}`);
+    const op = learned.operation;
+    assert.ok(!JSON.stringify(op).includes(TICKET), `${what}: the token stayed in the spec`);
+    assert.deepEqual(
+      op.slots.filter((s) => s.ref),
+      [
+        { ref: "session:search/userinfo", at: ["header:x-member-ticket"] },
+        { ref: "session:search/userinfo", at: ["query:ctx"], template: "member:{session:search/userinfo}" },
+      ],
+      what,
+    );
+    assert.deepEqual(learned.sessionValues, { "search/userinfo": TICKET }, what);
+    assert.deepEqual(learned.settings, [], `${what}: kept as a credential`);
+    const req = buildRequest(op, { q: "teapots" }, { cookies: [], values: learned.sessionValues });
+    assert.equal(req.headers["x-member-ticket"], TICKET);
+    assert.equal(new URL(req.url).searchParams.get("ctx"), `member:${TICKET}`);
+  }
+  // sent whole, the cookie keeps its cookie: ref
+  const whole = learnWith(TICKET, { "x-member-ticket": TICKET }).operation;
+  assert.deepEqual(
+    whole.slots.filter((s) => s.ref),
+    [{ ref: "cookie:userinfo", at: ["header:x-member-ticket"] }],
+  );
+  // where no pass can make a ref of it (base64 of the token in a field), the learn is refused
+  assert.throws(
+    () => learnWith(`42|${TICKET}`, {}, `&ctx=${Buffer.from(`member:${TICKET}`).toString("base64url")}`),
+    /would keep a credential in the spec: query:ctx holds the live cookie userinfo/,
+  );
+});
+
+/** One search request of www.shop.test, learned with the cookies the request sent. */
+const learnSearch = (
+  cookies: StoredCookie[],
+  o: { q?: string; host?: string; headers?: Record<string, string>; page?: string; api?: string } = {},
+) => {
+  const { q = "lanterns", host = "www.shop.test" } = o;
+  return learnOperation({
+    exchanges: [
+      {
+        id: 1,
+        resourceType: "fetch",
+        request: {
+          method: "GET",
+          url: `https://${host}${o.api ?? "/api/search"}?q=${encodeURIComponent(q)}`,
+          headers: { ...o.headers, cookie: cookies.map((c) => `${c.name}=${c.value}`).join("; ") },
+        },
+        response: {
+          status: 200,
+          headers: {},
+          contentType: "application/json",
+          body: '{"items":[{"title":"lantern one","price":12},{"title":"lantern two","price":14}]}',
+        },
+      },
+    ],
+    examples: [{ q }],
+    cookies,
+    name: "search",
+    trigger: { url: o.page ?? `https://${host}/search?q={q}` },
+    readOnly: true,
+  });
+};
+
+test("a token a cookie holds beside other text is a session ref, however the cookie joins them: no credential in the serialized spec", () => {
+  const TICKET = "vRf7Qm2ZkL9xT4cN8bW1yH6pD3sJ5gUa";
+  const json = (ticket: string) => encodeURIComponent(JSON.stringify({ id: 42, ticket }));
+  for (const [what, value, sent] of [
+    ["token.signature", `${TICKET}.Zx81kkQpLm20asDFgh77qwErTy`, TICKET],
+    ["id-token", `42-${TICKET}`, TICKET],
+    ["v1_token", `v1_${TICKET}`, TICKET],
+    ["id!token", `42!${TICKET}`, TICKET],
+    ["id~token", `42~${TICKET}`, TICKET],
+    ["24 digits", json("839201746501928374650192"), "839201746501928374650192"],
+    ["lowercase letters", json("qwertyuiopasdfghjklzxcvbnm"), "qwertyuiopasdfghjklzxcvbnm"],
+    ["15 characters", json("aB3dE5fG7hJ9kL2"), "aB3dE5fG7hJ9kL2"],
+    ["base64 with short pieces", json("aB3d/E5fG7hJ9+k/L2mN4pQ6rS8tU0"), "aB3d/E5fG7hJ9+k/L2mN4pQ6rS8tU0"],
+    ["a \\u escape in the cookie's JSON", `{"t":"vRf\\u0037${TICKET.slice(4)}"}`, TICKET],
+    [
+      "base64 of base64",
+      Buffer.from(Buffer.from(JSON.stringify({ t: TICKET })).toString("base64")).toString("base64"),
+      TICKET,
+    ],
+  ] as const) {
+    const cookies = [cookie("userinfo", value, "www.shop.test")];
+    const learned = learnSearch(cookies, { headers: { "x-member-ticket": sent } });
+    assert.ok(!JSON.stringify(learned.operation).includes(sent), `${what}: the token stayed in the spec`);
+    assert.deepEqual(
+      learned.operation.slots.filter((s) => s.ref),
+      [{ ref: "session:search/userinfo", at: ["header:x-member-ticket"] }],
+      what,
+    );
+    assert.deepEqual(learned.sessionValues, { "search/userinfo": sent }, what);
+    assert.deepEqual(scanSecrets(learned.operation, { cookies, values: learned.sessionValues }).secrets, [], what);
+  }
+});
+
+test("a cookie that keeps the page's address or what the caller asked for refuses no learn", () => {
+  const consent = (landing: string) =>
+    `isGpcEnabled=0&datestamp=Thu+Nov+12+2026+10%3A00%3A00+GMT-0800&version=202403.1.0&hosts=&landingPath=${encodeURIComponent(landing)}&groups=C0001%3A1%2CC0002%3A1`;
+  const uuid = "3f2b8c1e-9d4a-4e7b-8a6f-1c2d3e4f5a6b";
+  const id = "4Z8W4fKeB5YxbusRsdQVPb";
+  const cases: [string, StoredCookie, Parameters<typeof learnSearch>[1]][] = [
+    [
+      "a host with a digit in a consent cookie's landing page",
+      cookie("OptanonConsent", consent("https://www.forever21.com/us/shop"), "www.forever21.com"),
+      { host: "www.forever21.com" },
+    ],
+    [
+      "the example in the landing page's address",
+      cookie("OptanonConsent", consent("https://www.shop.test/search?q=garden-lanterns-2026"), "www.shop.test"),
+      { q: "garden-lanterns-2026" },
+    ],
+    [
+      "a slug in a landing-page cookie",
+      cookie("_landing_page", encodeURIComponent("/products/apple-iphone-15-pro-max-256gb?ref=home"), "www.shop.test"),
+      { q: "apple-iphone-15-pro-max-256gb" },
+    ],
+    [
+      "a UUID the caller asked for, kept as the last one viewed",
+      cookie("ws", encodeURIComponent(JSON.stringify({ last: uuid, theme: "dark" })), "www.shop.test"),
+      { q: uuid },
+    ],
+    [
+      "an id in the page address the caller gave",
+      cookie("OptanonConsent", consent(`https://www.shop.test/artist/${id}/albums?q=lanterns`), "www.shop.test"),
+      { page: `https://www.shop.test/artist/${id}/albums?q={q}`, api: `/api/artist/${id}/albums` },
+    ],
+  ];
+  for (const [what, c, o] of cases) {
+    const learned = learnSearch([c], o);
+    const op = learned.operation;
+    assert.deepEqual(op.slots, [{ param: "q", at: ["query:q"] }], what);
+    assert.deepEqual(learned.sessionValues, {}, what);
+    // and the saved op passes the scan a save, a heal, an export and an upload run
+    assert.deepEqual(scanSecrets(op, { cookies: [c], values: {} }).secrets, [], what);
+  }
 });

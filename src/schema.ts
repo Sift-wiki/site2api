@@ -283,6 +283,7 @@ export function findSitesSchema(): JsonSchema {
     matches: { type: "array", items: match },
     registryError: str,
     localOnly: str,
+    notSent: str,
     shared: str,
     next: str,
     nextCall: NEXT_CALL_SCHEMA,

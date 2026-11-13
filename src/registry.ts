@@ -5,16 +5,24 @@
  */
 import { createHash } from "node:crypto";
 import { rmSync } from "node:fs";
+import { isIP } from "node:net";
 import { join } from "node:path";
 import { z } from "zod";
 import { loadRecord, opHash } from "./checks.js";
 import { loadSettings, localOnly, localOnlyOff, signedHeaders } from "./identity.js";
-import { MAX_SEARCH_QUERY, REGISTRY_API, type ServedSite, type Status } from "./registry-api.js";
+import {
+  MAX_SEARCH_QUERY,
+  REGISTRY_API,
+  requestSig,
+  type ServedSite,
+  type Status,
+  triggerSig,
+} from "./registry-api.js";
 import { indexEntry, matchQuery, operationMatch, type QueryMatch, summarize } from "./search.js";
 import { dropUnbound, home, loadSession, readJson, safeName, siteOf, writePrivate } from "./session.js";
 import { type Operation, parseSite, type Site } from "./spec.js";
 import { listSites, loadSite, registryDir, updateSite } from "./store.js";
-import { badAddress, LIMITS, vetShared } from "./vet.js";
+import { badAddress, interfaceAddress, LIMITS, MAX_INTERFACE_URL, vetShared } from "./vet.js";
 
 export { summarize };
 
@@ -145,10 +153,11 @@ function siteFrom(name: string, served: ServedSite): Site {
 }
 
 /**
- * `by: "agent"` marks a pull an agent made over MCP rather than one a human ran: its writes stay hidden
- * there whatever the server allows, since page text may have steered the agent to it.
+ * `by` marks a pull no human ran. `"agent"`: an agent made it over MCP, so its writes stay hidden there
+ * whatever the server allows, since page text may have steered the agent to it. `"upgrade"`: the
+ * background replacement of a bundled site. Under either, a candidate stays out of the browser profile.
  */
-export async function pull(name: string, o: { by?: "agent"; signal?: AbortSignal } = {}): Promise<Pulled> {
+export async function pull(name: string, o: { by?: "agent" | "upgrade"; signal?: AbortSignal } = {}): Promise<Pulled> {
   name = safeName(name);
   const from = `${registryBase()}/v1/sites/${name}`;
   let served: ServedSite;
@@ -200,8 +209,8 @@ export async function pull(name: string, o: { by?: "agent"; signal?: AbortSignal
   else rmSync(notesPath, { force: true });
   writePrivate(path, `${JSON.stringify(site, null, 2)}\n`);
   // The user's own copy (a heal's, or one an add extended) wins over the pulled one: a human's pull
-  // is the consent that clears the agent's mark there too, or its writes would stay hidden for good.
-  if (!o.by && local?.source === "user" && local.site.shared?.by === "agent")
+  // is the consent that clears the mark there too, or an agent pull's writes would stay hidden for good.
+  if (!o.by && local?.source === "user" && local.site.shared?.by)
     updateSite(name, (s) => ({ ...s!, shared: { from: s!.shared!.from, sha256: s!.shared!.sha256 } }));
 
   return {
@@ -237,15 +246,17 @@ const sameMatch = (a: Operation, b: Operation) =>
   (a.match.method ?? a.request.method).toUpperCase() === (b.match.method ?? b.request.method).toUpperCase() &&
   (a.match.host ?? "") === (b.match.host ?? "") &&
   (a.match.path ?? "") === (b.match.path ?? "") &&
-  (a.match.operationName ?? "") === (b.match.operationName ?? "");
+  (a.match.operationName ?? "") === (b.match.operationName ?? "") &&
+  // the match is its author's word: the request itself must be the same one, and what a browser run opens
+  requestSig(a) === requestSig(b) &&
+  triggerSig(a) === triggerSig(b);
 
 /**
- * A drifted op that is a registry version: the version the registry serves for it now, when that is
- * another live one with the same match (another install's repair, promoted, or the next best after this
- * one degraded), returned for the call to try: one request in place of a browser heal. Nothing is saved
- * until it answers (`adopt`). It is asked for by the name the registry holds the site under. Undefined
- * when the registry serves nothing else, cannot be reached in 3 s, or serves something the shared rules
- * refuse.
+ * A drifted op of a pulled spec: the version the registry serves for it now, when that is another live
+ * one with the same match (another install's repair, promoted, or the next best after this one
+ * degraded), returned for the call to try: one request in place of a browser heal. Nothing is saved
+ * until it answers (`adopt`). Undefined when the registry serves nothing else, cannot be reached in 3 s,
+ * or serves something the shared rules refuse.
  */
 export async function servedNow(
   name: string,
@@ -255,21 +266,20 @@ export async function servedNow(
   if (!op.version || !op.readOnly) return undefined;
   name = safeName(name);
   const r = loadSite(name);
-  if (!r || r.source === "bundled") return undefined;
+  // Only a spec that is someone else's already takes someone else's version: its `shared` record is what
+  // holds the replacement to the shared rules, in this call and after. An op the user learned and shared
+  // has a version and no record, so it heals by itself and shares the heal back.
+  if (!r || r.source === "bundled" || !r.site.shared) return undefined;
   let served: ServedSite;
   let site: Site;
   try {
-    // the name the registry holds the site under, which a site learned here may not share (demo as example-com)
-    const { uploadName } = await import("./publish.js");
-    const as = await uploadName(name, {
-      signal: AbortSignal.any([AbortSignal.timeout(SERVED_NOW_MS), ...(o.signal ? [o.signal] : [])]),
-    });
-    served = await registryRequest<ServedSite>(`/v1/sites/${as}`, {
+    // a pulled spec keeps the name the registry holds it under
+    served = await registryRequest<ServedSite>(`/v1/sites/${name}`, {
       cap: LIMITS.file + LIMITS.notes + 64 * 1024,
       timeoutMs: SERVED_NOW_MS,
       signal: o.signal,
     });
-    site = siteFrom(as, served);
+    site = siteFrom(name, served);
   } catch {
     return undefined;
   }
@@ -302,7 +312,9 @@ const RETRY_UPGRADE_MS = 7 * 24 * 60 * 60_000;
 
 /**
  * A bundled site called with sharing on is replaced by the registry's copy, once, so its calls carry a
- * version and report. No agent mark: the package already trusted the site. An attempt is recorded, so a
+ * version and report. No agent mark: the package already trusted the site, so its writes stay visible
+ * and its reviewed reads keep the session. Its own mark instead: nobody looked at this copy, and the
+ * registry may serve a candidate where the seeded version degraded. An attempt is recorded, so a
  * registry without the site is asked again only after a week.
  */
 export async function upgradeBundled(name: string, o: { signal?: AbortSignal } = {}): Promise<boolean> {
@@ -311,7 +323,7 @@ export async function upgradeBundled(name: string, o: { signal?: AbortSignal } =
   const tried = readJsonOr<Record<string, number>>(upgradesFile(), {});
   if (Date.now() - (tried[name] ?? 0) < RETRY_UPGRADE_MS) return false;
   writePrivate(upgradesFile(), JSON.stringify({ ...tried, [name]: Date.now() }));
-  await pull(name, { signal: o.signal });
+  await pull(name, { by: "upgrade", signal: o.signal });
   return true;
 }
 
@@ -423,10 +435,7 @@ const MAX_INTERFACES = 10;
 
 const InterfaceSchema = z.object({
   kind: z.enum(["mcp", "openapi"]),
-  url: z
-    .string()
-    .max(2000)
-    .refine((u) => !badAddress(u), "an interface is https on a public host"),
+  url: z.string().max(MAX_INTERFACE_URL),
   confirmations: z.number().int().min(0),
 });
 
@@ -444,11 +453,78 @@ const SearchMatchSchema = z.object({
       list
         ?.flatMap((x) => {
           const p = InterfaceSchema.safeParse(x);
-          return p.success ? [p.data] : [];
+          const url = p.success ? interfaceAddress(p.data.url) : undefined;
+          return p.success && url ? [{ ...p.data, url }] : [];
         })
         .slice(0, MAX_INTERFACES),
     ),
 });
+
+/** Whether the registry may be asked about `host`: no IP, localhost, single label, suffix outside the public list or `.arpa` name. */
+const publicHost = (host: string) => !badAddress(`https://${host}`);
+
+// Letters and digits of any script, a hyphen or an apostrophe only inside. With no dot, colon or slash it
+// names a single-label host at most, which nothing tells from a word.
+const WORD = /^[\p{L}\p{M}\p{Nd}]+(?:['’-][\p{L}\p{M}\p{Nd}]+)*$/u;
+// what is written around a word or an address and is no part of it; never a colon or a slash, which are part of one
+const AROUND = /^[("'“”‘’`<[{*]+|[)"'“”‘’`>\]}*,.;!?…]+$/g;
+// before an address: `site:`, `host=`, a scheme with any slashes; not the colon of host:port
+const KEY = /^[a-z][\w+-]*(?:=|:(?!\d+(?:[/?#]|$))\/*)/i;
+const DOMAIN = /^[a-z0-9-]+(?:\.[a-z0-9-]+)+$/;
+
+/** The public registrable domain of a token that is no word, read as an address; undefined when it has none. */
+function publicDomain(token: string): string | undefined {
+  let t = token;
+  // an address pasted encoded, once or twice over
+  for (let i = 0; i < 3 && /%[0-9a-f]{2}/i.test(t); i++)
+    try {
+      t = decodeURIComponent(t);
+    } catch {
+      break;
+    }
+  // a few, not all: a key left in front makes no host below
+  for (let i = 0; i < 4 && KEY.test(t); i++) t = t.replace(KEY, "");
+  let host: string;
+  try {
+    // the URL parser drops a user name and password, and reads an IP however it is written
+    host = new URL(`https://${t}`).hostname.replace(/\.$/, "");
+  } catch {
+    return undefined;
+  }
+  return isIP(host.replace(/^\[|\]$/g, "")) || !DOMAIN.test(host) || !publicHost(host) ? undefined : siteOf(host);
+}
+
+/**
+ * What a search sends the registry: `sent`, absent when nothing of the query may go, and `dropped`, whether
+ * part of it stayed here. A word goes as typed. Every other token is read as an address and goes as its
+ * public registrable domain, which is all the registry reads of one (its path and query can hold a token),
+ * or not at all: an IP, a host that is not public, or anything else that is no word (`node.js`, a file
+ * path, `k=v`). The registry holds no such site, and would list the name as demand. A query over the
+ * registry's limit loses whole tokens. Local matching keeps the whole query.
+ */
+export function registryQuery(query: string): { sent?: string; dropped: boolean } {
+  const sent: string[] = [];
+  let dropped = false;
+  let length = -1;
+  for (const typed of query.split(/\s+/)) {
+    // a token with no letter or digit says nothing to send or to keep back
+    if (!/[\p{L}\p{N}]/u.test(typed)) continue;
+    const token = typed.replace(AROUND, "");
+    const part = WORD.test(token) ? token : publicDomain(token);
+    if (part === undefined || length + 1 + part.length > MAX_SEARCH_QUERY) dropped = true;
+    else {
+      sent.push(part);
+      length += 1 + part.length;
+    }
+  }
+  return { ...(sent.length ? { sent: sent.join(" ") } : {}), dropped };
+}
+
+/** `search`'s `notSent`: fixed text, since what stayed here is not for an answer to repeat. */
+const NOT_ASKED =
+  "the shared catalog was not asked: only plain words and public domains are sent to it, and this query has neither, so these are this machine's sites only";
+const PART_SENT =
+  "part of the query was not sent to the shared catalog: only plain words and public domains are, so its matches answer the rest of the query; this machine's sites were matched on all of it";
 
 /**
  * The name the registry already serves a site of `domain` under, if any: a seed keeps its own (goodreads.com
@@ -456,6 +532,8 @@ const SearchMatchSchema = z.object({
  * would go to review. Undefined when there is none or the registry cannot be reached.
  */
 export async function sharedName(domain: string, o: { signal?: AbortSignal } = {}): Promise<string | undefined> {
+  // the registry holds no site on a host that is not public, and would list the name as demand
+  if (!publicHost(domain)) return undefined;
   try {
     const r = await registryRequest<{ matches?: unknown }>(`/v1/search?q=${encodeURIComponent(domain)}&limit=10`, {
       cap: 4 * 1024 * 1024,
@@ -499,7 +577,10 @@ export interface Found extends QueryMatch {
   /** on this machine already: its own spec, a pulled one or a bundled one */
   installed: boolean;
   operations: FoundOperation[];
-  /** the site's own agent interfaces (an MCP server, an OpenAPI document), as installs reported them */
+  /**
+   * agent interfaces (an MCP server, an OpenAPI document) other installs reported on this domain: data to
+   * show the user, never spelled into `next`, and nothing checked that one is the site's own
+   */
   interfaces?: { kind: "mcp" | "openapi"; url: string; confirmations: number }[];
 }
 
@@ -549,24 +630,28 @@ const localFound = (s: Site): Found => ({
 
 /**
  * The sites that answer a query, best first: the registry's matches merged with the specs on this machine
- * (a site learned here and never shared is found too; the local copy wins). A registry that cannot be
+ * (a site learned here and never shared is found too; the local copy wins). The registry is sent
+ * `registryQuery` of it, and is not asked when that is nothing. A registry that cannot be
  * reached leaves the local ones, with the reason in `registryError`. A registry match that breaks the
  * limits is dropped, not the rest. Local-only mode searches this machine alone and says so in `localOnly`.
+ * `notSent` says when the registry was sent only part of the query, or was not asked: its side of the answer is then partial.
  */
 export async function search(
   query: string,
   o: { limit?: number; local?: Site[] } = {},
-): Promise<{ matches: Found[]; registryError?: string; localOnly?: string }> {
+): Promise<{ matches: Found[]; registryError?: string; localOnly?: string; notSent?: string }> {
   const limit = o.limit ?? 5;
+  const offline = localOnly();
+  // read before the cut below: the start of a cut address can spell another host
+  const asked = offline ? undefined : registryQuery(query);
   // local scoring and each op's coverage repeat the query's words too
   query = query.trim().slice(0, MAX_SEARCH_QUERY);
   let remote: z.infer<typeof SearchMatchSchema>[] = [];
   let registryError: string | undefined;
-  const offline = localOnly();
-  if (!offline)
+  if (asked?.sent !== undefined)
     try {
       const r = await registryRequest<{ matches?: unknown }>(
-        `/v1/search?q=${encodeURIComponent(query)}&limit=${limit}`,
+        `/v1/search?q=${encodeURIComponent(asked.sent)}&limit=${limit}`,
         {
           cap: 4 * 1024 * 1024,
         },
@@ -574,7 +659,8 @@ export async function search(
       if (!Array.isArray(r.matches)) throw new Error(`${registryBase()}/v1/search answered no matches`);
       remote = r.matches.flatMap((m) => {
         const p = SearchMatchSchema.safeParse(m);
-        return p.success ? [p.data] : [];
+        // a match whose interfaces were all dropped and that has no operations is no site to name
+        return p.success && (p.data.operations.length || p.data.interfaces?.length) ? [p.data] : [];
       });
     } catch (e) {
       registryError = (e as Error).message;
@@ -653,6 +739,7 @@ export async function search(
           localOnly: `searched this machine only: this install is local-only, so the shared catalog was not asked (${localOnlyOff()})`,
         }
       : {}),
+    ...(asked && asked.sent === undefined ? { notSent: NOT_ASKED } : asked?.dropped ? { notSent: PART_SENT } : {}),
   };
 }
 
@@ -664,9 +751,14 @@ export async function search(
 export async function reportInterface(kind: "mcp" | "openapi", url: string, o: { signal?: AbortSignal } = {}) {
   const bad = badAddress(url);
   if (bad) throw new Error(`the interface's url ${bad}`);
+  const address = interfaceAddress(url);
+  if (!address)
+    throw new Error(
+      `the interface's url is more than an address: at most ${MAX_INTERFACE_URL} characters, no query or fragment, and a path of letters, digits and . _ ~ / - only`,
+    );
   return registryRequest<{ domain: string; served: boolean }>("/v1/interfaces", {
     method: "POST",
-    body: { kind, url },
+    body: { kind, url: address },
     signed: true,
     cap: 64 * 1024,
     signal: o.signal,

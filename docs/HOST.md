@@ -101,7 +101,8 @@ tier under the default cap of 3. A plan with `maxTier: 1` for a site with no ses
 look at the profile or at other sites' logins.
 
 `hosts` lists known HTTP(S) hostnames from the base URL, requests, derived lookups, trigger URLs,
-soft-navigation pages, `goto` steps, and inline readbacks and their lookups/triggers.
+soft-navigation pages, `goto` steps (an address in `value` or in `selector`), and inline readbacks and
+their lookups/triggers.
 An operation's `pages` lists only its own trigger's static origin and path before the first path
 parameter, without query or fragment. URLs with a templated hostname or port, fully templated
 URLs, non-HTTP(S) URLs and unparseable entries are omitted, never represented with a placeholder

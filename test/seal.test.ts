@@ -224,7 +224,12 @@ test("a passphrase seals without an OS store; a wrong one is a clear error, not 
   process.env.API_ANYTHING_KEY = "wrong horse";
   assert.throws(
     () => loadSession("site"),
-    (e: unknown) => e instanceof SealError && /not the passphrase/.test(e.message) && /API_ANYTHING_KEY/.test(e.next),
+    (e: unknown) =>
+      e instanceof SealError &&
+      /not the passphrase/.test(e.message) &&
+      /API_ANYTHING_KEY/.test(e.next) &&
+      // starting over names every file the old key sealed, the kept answers' store too
+      /to start over, delete .*key-salt\.json.*results\.json.*captures.*snapshots/.test(e.next),
   );
   assert.throws(() => saveSession("site", { cookies: [], values: {} }), /not the passphrase/);
   assert.match(status().problems.find((p) => p.problem === "plaintext")!.detail, /not the passphrase/);
@@ -463,7 +468,11 @@ test("fail closed: once a home has sealed, a missing key store refuses writes (m
     process.env.API_ANYTHING_PLAINTEXT = "1"; // not even the plaintext choice writes over a sealed home
     assert.throws(
       () => saveSession("site", { cookies: jar("plain"), values: {} }),
-      (e: unknown) => e instanceof SealError && /not available here/.test(e.message) && /memory key store/.test(e.next),
+      (e: unknown) =>
+        e instanceof SealError &&
+        /not available here/.test(e.message) &&
+        /memory key store/.test(e.next) &&
+        /start over unsealed here, delete .*sealed\.json.*results\.json/.test(e.next),
     );
     assert.throws(() => saveSession("other", { cookies: jar("plain"), values: {} }), SealError);
     assert.ok(!existsSync(sessionFile("other")));
@@ -829,7 +838,8 @@ test("a missing key-salt.json with passphrase-sealed files is an error, not a ne
     e instanceof SealError &&
     /key-salt\.json is missing/.test(e.message) &&
     /restore the original .*key-salt\.json/.test(e.next) &&
-    /api-anything logout/.test(e.next);
+    /api-anything logout/.test(e.next) &&
+    /results\.json/.test(e.next);
   assert.throws(() => loadSession("site"), missing);
   assert.throws(() => saveSession("other", { cookies: [], values: {} }), missing);
   assert.ok(!existsSync(join(home, "key-salt.json")), "no new salt was made");

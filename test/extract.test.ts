@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import { parse as parseHtml } from "node-html-parser";
 import {
   capOutput,
   extract,
@@ -7,7 +8,10 @@ import {
   extractHtml,
   getPath,
   inferShape,
+  MAX_PAGE_ELEMENTS,
+  PageTooLarge,
   parseBody,
+  parsePage,
   pick,
   returnedFields,
   splitPick,
@@ -375,4 +379,88 @@ test("an html field with all: returns every match as a list, [] when there is no
     }),
     [{ title: "Circe", genres: ["Fantasy", "Mythology", "Fiction"], tags: ["/t/1", "/t/2"], none: [] }],
   );
+});
+
+test("a page of comment or CDATA openers that never close parses in linear time, and what precedes them is read", () => {
+  const list =
+    '<ul><li class="r"><a href="/1">one</a><!-- a comment that closes --></li><li class="r"><a href="/2">two</a></li></ul>';
+  for (const opener of ["<!--", "<![CDATA["]) {
+    // the parser rescans to the end from each opener: seconds for this page, and four times that for twice the page
+    const page = `<html><body>${list}${opener.repeat(Math.ceil(320_000 / opener.length))}`;
+    const t0 = performance.now();
+    const rows = extractHtml(page, { items: "li.r", fields: { title: "a", url: "a@href" } });
+    const ms = performance.now() - t0;
+    assert.deepEqual(rows, [
+      { title: "one", url: "/1" },
+      { title: "two", url: "/2" },
+    ]);
+    assert.ok(ms < 1000, `${opener}: ${Math.round(ms)} ms`);
+  }
+  // a few openers that never close are an ordinary page's (a script holding the text): nothing is cut
+  const stray = `<html><body><script>var a = "<!--";</script>${list}<p class="after">kept</p>`;
+  assert.deepEqual(extractHtml(stray, { items: "p.after", fields: { t: "" } }), [{ t: "kept" }]);
+});
+
+test("a page past the element budget is refused before it is parsed; one at the budget is parsed", () => {
+  const page = (elements: number) => `<html><body>${"<br>".repeat(elements - 2)}</body></html>`;
+  assert.throws(() => parsePage(page(MAX_PAGE_ELEMENTS + 1)), PageTooLarge);
+  assert.throws(() => extractHtml(page(MAX_PAGE_ELEMENTS + 1), { items: "br", fields: {} }), PageTooLarge);
+  // what opens no element is not counted as one: closing tags, comments, a doctype, a bare <
+  const text = `<!doctype html>${page(MAX_PAGE_ELEMENTS)}${"</i>".repeat(1000)}<!-- x --> a < b`;
+  // counted as the body's children: a selector that matches 200,000 siblings takes the parser's library a minute
+  assert.equal(parsePage(text).querySelector("body")?.childNodes.length, MAX_PAGE_ELEMENTS - 2);
+});
+
+test("closing tags, comments and CDATA sections are budgeted too: each ends a text node the tree keeps", () => {
+  // 1 MiB of these opens no element and built 200,000 text nodes; the 32 MiB a body may be, 6.7 million
+  for (const unit of ["x</p>", "x<!--c-->", "x<![CDATA[c]]>"]) {
+    assert.throws(() => parsePage(unit.repeat(MAX_PAGE_ELEMENTS + 1)), PageTooLarge, unit);
+    assert.equal(parsePage(unit.repeat(1000)).text.replaceAll("<![CDATA[c]]>", "").length, 1000, unit);
+  }
+  assert.throws(
+    () => parsePage("x</p>".repeat(MAX_PAGE_ELEMENTS + 1)),
+    /more than 200000 closing tags, comments and CDATA sections/,
+  );
+  // a page at both budgets is parsed
+  const full = `<body>${"<br>".repeat(MAX_PAGE_ELEMENTS - 1)}${"</p>".repeat(MAX_PAGE_ELEMENTS)}`;
+  assert.equal(parsePage(full).querySelector("body")?.childNodes.length, MAX_PAGE_ELEMENTS - 1);
+});
+
+test("unclosed elements nested by the thousand, or one holding thousands of children, parse in time in line with the page", () => {
+  // the parser's repair of these took 5 s, 41 s, 8 s and 10 s: it moves each open element's children up one at a time
+  const pages: [string, string, string, number][] = [
+    ["4,000 nested", `${"<div>".repeat(4000)}<b class="r">x</b>`, "b.r", 1],
+    ["8,000 nested", "<i>".repeat(8000), "", 0],
+    ["one holding 40,000", `<a><b>${"<br>".repeat(40_000)}<u>x</u>`, "b > u", 1],
+    ["rows and cells that never close", `<table>${"<tr><td>x".repeat(2000)}<td class="r">y`, "td.r", 1],
+  ];
+  for (const [what, page, selector, found] of pages) {
+    const t0 = performance.now();
+    const doc = parsePage(page);
+    const ms = performance.now() - t0;
+    assert.ok(ms < 2000, `${what}: ${Math.round(ms)} ms`);
+    if (selector) assert.equal(doc.querySelectorAll(selector).length, found, what);
+  }
+});
+
+test("a page with a few unclosed elements parses as the parser's own default does", () => {
+  for (const page of [
+    "<ul><li>a<li>b<li>c</ul>",
+    "<p>one<p>two<p>three",
+    "<html><body><div><p>a<p>b",
+    "<html><body><ul><li>a<li>b",
+    "<html><body>",
+    '<html><body><div id="x">',
+    "<div><span>x</div><p>after</p>",
+    "<table><tr><td>a<td>b<tr><td>c</table>",
+    '<html><head><title>t</title></head><body><div class="wrap"><ul><li>a</li><li>b</li></ul><br>',
+    `<html><body><ul>${"<li>item".repeat(1000)}`,
+    `<html><body><div>${"<p>para</p>".repeat(3000)}`,
+    '<div title="a>b" class="k"><i>x',
+    "<div ><span\n class=a >x",
+    "<div><li>x</ul>",
+    "<main><script>var a = 1;",
+    "<html><body><p>closed</p></body></html>\n",
+  ])
+    assert.equal(parsePage(page).toString(), parseHtml(page).toString(), page.slice(0, 60));
 });

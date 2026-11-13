@@ -3,7 +3,8 @@
  * and answers. docs/REGISTRY.md says why. Both sides import these types; neither adds a field the other
  * does not read without making it optional.
  */
-import type { Operation } from "./spec.js";
+import { getAt } from "./codec.js";
+import type { Operation, Request } from "./spec.js";
 
 /** Production registry; API_ANYTHING_REGISTRY overrides it (https, or http to this machine for tests). */
 export const REGISTRY_API = "https://api-anything-registry.forth-site.workers.dev";
@@ -112,6 +113,7 @@ export function anonymous(op: Operation): Operation {
     unproven: _u,
     version: _v,
     learnedAt: _l,
+    publicOnly: _p,
     ...rest
   } = op as Operation & {
     version?: unknown;
@@ -263,3 +265,86 @@ export function canonical(value: unknown): string {
 
 /** The text a version's hash (sha256 hex) is taken over: its site's name, then the canonical operation. */
 export const versionHashText = (site: string, operation: Operation) => `${site}\n${canonical(operation)}`;
+
+const GQL_NAME = /(?:^|\})\s*(?:query|mutation|subscription)\s+([A-Za-z_]\w*)/;
+const NAME_AT = [
+  ["body", "json:/operationName"],
+  ["body", "json:/0/operationName"],
+  ["form:fb_api_req_friendly_name"],
+  ["form:operationName"],
+  ["query:operationName"],
+  ["header:x-fb-friendly-name"],
+];
+const DOCUMENT_AT = [["body", "json:/query"], ["body", "json:/0/query"], ["form:query"], ["query:query"]];
+
+/** The GraphQL operation name a request carries, read as learn.ts `operationNameOf` reads it (the Worker cannot import learn.ts). */
+function nameOf(req: Request): string | undefined {
+  const read = (at: string[]) => {
+    try {
+      return getAt(req, at);
+    } catch {
+      return undefined;
+    }
+  };
+  for (const at of NAME_AT) {
+    const v = read(at);
+    if (typeof v === "string" && v) return v;
+  }
+  for (const at of DOCUMENT_AT) {
+    const v = read(at);
+    const m = typeof v === "string" ? GQL_NAME.exec(v) : null;
+    if (m) return m[1];
+  }
+  return undefined;
+}
+
+// a slot's last step at a field that names the operation, and at the document or whole body that can
+const FILLS_NAME =
+  /^(json:(\/\d+)?\/operationName|(form|query)(\[\d+\])?:(operationName|fb_api_req_friendly_name)|header:x-fb-friendly-name)$/i;
+const FILLS_DOCUMENT = /^(body|b64|json:(\/\d+)?(\/query)?|(form|query)(\[\d+\])?:query)$/;
+
+/**
+ * The request an op sends, as the registry's review and a client taking a repair compare it: method,
+ * origin, path and GraphQL operationName, read from the request and its slots. An op's `match` is its
+ * author's word, so it lends only its wildcards (a rotating hash segment, which a heal changes). A path
+ * segment a slot fills is `*`, whatever the stored one says, and so is a name a slot can change: a param's
+ * default moves neither unseen. A URL that fetch would rewrite (dot segments, a backslash) equals only itself.
+ */
+export function requestSig(op: Pick<Operation, "request" | "slots" | "match">): string {
+  const method = op.request.method.toUpperCase();
+  const last = op.slots.map((s) => s.at.at(-1) ?? "");
+  const stored = nameOf(op.request);
+  const name =
+    last.some((st) => FILLS_NAME.test(st)) || (stored !== undefined && last.some((st) => FILLS_DOCUMENT.test(st)))
+      ? "*"
+      : (stored ?? "");
+  const filled = new Set(
+    op.slots.flatMap((s) => (/^path:\d+$/.test(s.at[0] ?? "") ? [Number(s.at[0]!.slice(5))] : [])),
+  );
+  // as codec.ts splits a URL: the path is what comes before the first ? or #
+  const base = op.request.url.split(/[?#]/)[0]!;
+  const odd = JSON.stringify([method, "", base, name, [...filled].sort((a, b) => a - b)]);
+  let u: URL;
+  try {
+    u = new URL(op.request.url);
+  } catch {
+    return odd;
+  }
+  const have = u.pathname.split("/");
+  // the codec counts segments in the stored text and fetch in the parsed URL: they must be the same ones
+  const asStored = base === u.origin + u.pathname || base === u.origin;
+  if (!asStored || [...filled].some((i) => i + 1 >= have.length)) return odd;
+  const declared = (op.match.path ?? "").split("/");
+  const path = have
+    .map((seg, i) =>
+      filled.has(i - 1) || (declared.length === have.length && declared[i] === "*") ? "*" : seg === "*" ? "%2A" : seg,
+    )
+    .join("/");
+  return JSON.stringify([method, u.origin, path, name]);
+}
+
+/**
+ * What an op's browser runs open and do, compared wherever `requestSig` is: its trigger in canonical form.
+ * A heal keeps its op's trigger (heal.ts), so a version with another one opens a page nobody approved.
+ */
+export const triggerSig = (op: Pick<Operation, "trigger">): string => canonical(op.trigger);

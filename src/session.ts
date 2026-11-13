@@ -411,6 +411,25 @@ export function parseSetCookie(line: string, url: string, now = Date.now()): Sto
   return c;
 }
 
+/**
+ * Whether `c`, set by the answer of `setBy`, may not enter `jar` (RFC 6265bis 5.7): a plain-http answer
+ * sets no Secure cookie and no `__Secure-`/`__Host-` name, and never replaces, deletes or shadows a live
+ * Secure cookie of its name that the jar holds for a domain above or below its own. The path is not
+ * compared, so a longer one cannot be sent ahead of it. Loopback counts as secure, as in `cookiesFor`.
+ */
+export function insecureSet(jar: StoredCookie[], c: StoredCookie, setBy: string, now = Date.now()): boolean {
+  const u = new URL(setBy);
+  const host = u.hostname.toLowerCase();
+  if (u.protocol === "https:" || host === "localhost" || host === "127.0.0.1") return false;
+  if (c.secure || /^__(secure|host)-/i.test(c.name)) return true;
+  const bare = (d: string) => d.replace(/^\./, "").toLowerCase();
+  const d = bare(c.domain);
+  return jar.some((x) => {
+    const e = bare(x.domain);
+    return x.secure && x.name === c.name && !expired(x, now) && (e === d || e.endsWith(`.${d}`) || d.endsWith(`.${e}`));
+  });
+}
+
 /** Parse a raw Cookie header ("a=1; b=\"x\"") into a name -> value map. */
 export function parseCookieHeader(raw: string): Record<string, string> {
   const out: Record<string, string> = {};
@@ -450,9 +469,12 @@ export function signInCookies(
  * Cookies every visitor is given, signed in or not, that carry no account: analytics, consent, bot
  * management, CSRF tokens, and Google's signed-out preference cookies. Only positive evidence belongs
  * here: never a login cookie (Google's SID, HSID, SSID, APISID, SAPISID and __Secure-*PSID* stay out).
+ * Analytics scripts set many of these from page script, where a cookie-less probe never sees them
+ * (Google Ads, Hotjar, Segment, Clarity, HubSpot, Bing, Pinterest, TikTok, Stripe's fraud ids,
+ * Datadog RUM). HubSpot's are named one by one: its `__hsmem` is a member's sign-in.
  */
 export const ANONYMOUS_COOKIE =
-  /^(_ga|_ga_[\w-]+|_gid|_gat|_gat_[\w-]+|_fbp|CONSENT|SOCS|OptanonConsent|OptanonAlertBoxClosed|euconsent(-v\d+)?|__cf_bm|_cfuvid|cf_clearance|csrftoken|XSRF-TOKEN|_csrf|NID|AEC|1P_JAR|__Secure-ENID)$/;
+  /^(_ga|_ga_[\w-]+|_gid|_gat|_gat_[\w-]+|_fbp|CONSENT|SOCS|OptanonConsent|OptanonAlertBoxClosed|euconsent(-v\d+)?|__cf_bm|_cfuvid|cf_clearance|csrftoken|XSRF-TOKEN|_csrf|NID|AEC|1P_JAR|__Secure-ENID|_gcl_[\w-]+|_hj[\w-]+|ajs_anonymous_id|_clck|_clsk|__hstc|__hssc|__hssrc|hubspotutk|_uetsid|_uetvid|_pin_unauth|_ttp|_tt_enable_cookie|__stripe_mid|__stripe_sid|_dd_s)$/;
 
 /**
  * Whether a cookie of this name may carry the user's account. A name is anonymous only on positive

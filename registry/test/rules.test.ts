@@ -7,7 +7,7 @@ const t = thresholds({});
 const facts = (f: Partial<Facts> = {}): Facts => ({
   okKeys: 0,
   okNetworks: 0,
-  wrongKeys: 0,
+  wrongNetworks: 0,
   heal: false,
   latest: [],
   failedNetworks: 3,
@@ -20,6 +20,8 @@ test("thresholds default to docs/REGISTRY.md and read env vars", () => {
   assert.equal(t.promoteNetworks, 2);
   assert.equal(t.promoteHealKeys, 1);
   assert.equal(t.recentDays, 30);
+  assert.equal(t.demandPerHour, 20);
+  assert.equal(t.demandPerHourAll, 1000);
   assert.equal(thresholds({ PROMOTE_KEYS: "5", PROMOTE_NETWORKS: "x" }).promoteKeys, 5);
   assert.equal(thresholds({ PROMOTE_NETWORKS: "x" }).promoteNetworks, 2);
 });
@@ -34,8 +36,8 @@ test("promotion, a heal, and wrong outweighing oks", () => {
   assert.equal(promoted(facts({ okKeys: 2, okNetworks: 2, heal: true }), strict), true);
   assert.equal(promoted(facts({ okKeys: 2, okNetworks: 2 }), strict), false);
   assert.equal(promoted(facts({ okKeys: 5, okNetworks: 1, heal: true }), strict), false);
-  assert.equal(promoted(facts({ okKeys: 3, okNetworks: 3, wrongKeys: 1 }), t), false);
-  assert.equal(promoted(facts({ okKeys: 4, okNetworks: 2, wrongKeys: 1 }), t), true);
+  assert.equal(promoted(facts({ okKeys: 3, okNetworks: 3, wrongNetworks: 1 }), t), false);
+  assert.equal(promoted(facts({ okKeys: 4, okNetworks: 2, wrongNetworks: 1 }), t), true);
 });
 
 test("degradation needs more than half failing, at least 3 installs, on at least 3 networks", () => {

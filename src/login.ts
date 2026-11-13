@@ -5,9 +5,10 @@
  * and the persistent browser profile, and re-imports on a self-healing auth failure. The first import
  * of a site from a browser profile waits for a person's yes (`ImportRefused` without one).
  */
-import { readFileSync, rmSync } from "node:fs";
-import { addCookiesToProfile, browserAvailable, clearProfileCookies, login } from "./browser.js";
-import { profileDir } from "./heal.js";
+import { existsSync, readFileSync, rmSync } from "node:fs";
+import { addCookiesToProfile, browserAvailable, clearProfileSite, login } from "./browser.js";
+import { dropCaptures, profileDir } from "./heal.js";
+import { publicAddress } from "./http.js";
 import {
   belongs,
   chooseProfile,
@@ -17,6 +18,7 @@ import {
   parsePin,
   profileLabel,
 } from "./import.js";
+import { profileSignedIn } from "./profile-state.js";
 import {
   type ImportApproval,
   loadSession,
@@ -143,14 +145,20 @@ const PROBE_UA =
  * up to five redirects within the site, reading every Set-Cookie. A cookie page script sets is not
  * seen, but the session cookie a framework gives every visitor (laravel_session, a Rails
  * _app_session, ci_session) is the server's, and a browser would cost a launch and a profile of its
- * own. Undefined when the site did not answer.
+ * own. Undefined when the site did not answer. `refuse`: why an address may not be asked (MCP's
+ * login passes `publicAddress`); the probe stops at the first one it refuses, a redirect's included.
  */
-export async function guestCookieNames(url: string, fetchImpl: typeof fetch = fetch): Promise<string[] | undefined> {
+export async function guestCookieNames(
+  url: string,
+  fetchImpl: typeof fetch = fetch,
+  refuse?: (url: string) => Promise<string | undefined>,
+): Promise<string[] | undefined> {
   const site = siteOf(new URL(url).hostname.toLowerCase());
   const names = new Set<string>();
   let at = url;
   try {
     for (let hop = 0; hop <= 5; hop++) {
+      if (refuse && (await refuse(at))) break;
       const res = await fetchImpl(at, {
         redirect: "manual",
         headers: { "user-agent": PROBE_UA, accept: "text/html,application/xhtml+xml,*/*;q=0.8" },
@@ -186,10 +194,11 @@ export async function knownGuests(
   url: string,
   loginCookies?: string[],
   fetchImpl?: typeof fetch,
+  refuse?: (url: string) => Promise<string | undefined>,
 ): Promise<string[]> {
   const stored = loadSession(site).guestCookies;
   if (loginCookies?.length) return stored ?? [];
-  return union(stored, await guestCookieNames(url, fetchImpl));
+  return union(stored, await guestCookieNames(url, fetchImpl, refuse));
 }
 
 export interface Imported extends ImportedSession {
@@ -367,13 +376,14 @@ export type WindowLogin =
  * The visible-window sign-in. It counts only when login cookies appear or change while the window is
  * open (guest names aside), since a profile that already held them proves nothing: they may be the
  * ones the site has signed out. Only then is the jar replaced; otherwise the stored session stays.
+ * `publicOnly`: an address an agent gave over MCP, whose probe asks only public addresses.
  */
 export async function windowLogin(
   site: string,
   url: string,
-  o: { loginCookies?: string[]; waitForEnter?: boolean } = {},
+  o: { loginCookies?: string[]; waitForEnter?: boolean; publicOnly?: boolean } = {},
 ): Promise<WindowLogin> {
-  const guest = await knownGuests(site, url, o.loginCookies);
+  const guest = await knownGuests(site, url, o.loginCookies, undefined, o.publicOnly ? publicAddress : undefined);
   const { opened, closed } = await login({ url, profileDir: profileDir(), waitForEnter: o.waitForEnter });
   // the user had the site open: a challenge cleared there counts even with no sign-in
   clearCoolDown(site);
@@ -397,24 +407,106 @@ export async function windowLogin(
 export const windowRetry = (site: string, how: string) =>
   `sign in completely in the window (2FA included), then close it: ${how}. If you did sign in and this repeats, ${site}'s login cookie is named like a visitor's: list its name in the spec's loginCookies`;
 
-/** logout: clear the jar and this site's cookies in the profile. */
-export async function logout(site: string): Promise<void> {
-  safeName(site);
-  // removed, not overwritten with an empty jar: a sealed file whose key is lost must still be resettable
-  withLock(sessionFile(site), () => rmSync(sessionFile(site), { force: true }));
-  if (browserAvailable()) {
+/**
+ * The site a logout argument means and the registrable domain its cookies are on. A site or session
+ * of that very name first (the names `status` and a seal error list), then what `login` would have
+ * named the same argument; a name that is neither throws. No domain when nothing says it: a name that
+ * is no domain itself, whose spec is missing or cannot be read.
+ */
+function logoutTarget(target: string): { site: string; domain?: string; origins?: string[] } {
+  if (/^[a-z0-9][a-z0-9._-]*$/i.test(target)) {
+    const name = safeName(target);
+    let baseUrl: string | undefined;
+    // where the spec's pages are: a token they store is kept per origin, port included
+    let origins: string[] = [];
     try {
-      let domain = site.toLowerCase();
-      try {
-        const baseUrl = loadSite(site)?.site.baseUrl;
-        if (baseUrl) domain = siteOf(new URL(baseUrl).hostname);
-      } catch {
-        // A corrupt spec must not prevent logging out a domain-named site.
-      }
-      await clearProfileCookies(domain, profileDir());
+      const spec = loadSite(name)?.site;
+      baseUrl = spec?.baseUrl;
+      origins = spec ? [spec.baseUrl, ...spec.operations.flatMap((o) => [o.trigger.url, o.request.url])] : [];
     } catch {
-      /* no profile yet, or the browser open */
+      // A corrupt spec must not prevent logging out a domain-named site.
     }
+    if (baseUrl || existsSync(sessionFile(name))) {
+      let host: string | undefined;
+      try {
+        if (baseUrl) host = new URL(baseUrl).hostname;
+      } catch {
+        // a baseUrl that is no URL: the name is all there is
+      }
+      // `login` names a new site after its host; a name with no dot is no host
+      host ??= name.includes(".") ? name : undefined;
+      return { site: name, ...(host ? { domain: siteOf(host.toLowerCase()), origins } : {}) };
+    }
+  }
+  try {
+    const t = resolveLoginTarget(target);
+    return { site: t.site, domain: hostOf(t.url), origins: [t.url] };
+  } catch (e) {
+    // a corrupt spec under a domain's own name: the domain is still logged out
+    if (!/^[a-z0-9-]+(\.[a-z0-9-]+)+$/i.test(target)) throw e;
+    const name = safeName(target).replace(/^www\./, "");
+    return { site: name, domain: siteOf(name) };
+  }
+}
+
+/** What a logout did. */
+export interface LoggedOut {
+  /** the site logged out, as `login` names it */
+  site: string;
+  /** a stored session was there, and was removed */
+  session: boolean;
+  /** the site in api-anything's browser profile: cleared (cookies and page storage), its cookies only, none there to clear, or still there */
+  profile: "cleared" | "cookies-cleared" | "none" | "kept";
+  /** why the profile kept them, or what clearing them left there */
+  why?: string;
+  /** what to run instead, when the site's domain was not known */
+  next?: string;
+}
+
+// the storage of the site's origins could not be cleared: the answer must not say more than the cookies
+const STORAGE_LEFT =
+  "the site's cookies were cleared from api-anything's browser profile, and only they: what its pages stored there (localStorage, IndexedDB) could not be cleared, and a browser run can read a token kept there back into a session";
+
+/**
+ * logout: remove the jar, the saved captures (copies of a run's cookies) and the site's cookies in
+ * the profile. It reads no sealed file, so it needs no key. It says when the profile kept the cookies:
+ * another process holds it, the browser did not start, none is found here, or the site's domain is not
+ * known. `cleared` when the site's cookies and its origins' page storage both were; `cookies-cleared`
+ * when the storage could not be.
+ */
+export async function logout(target: string): Promise<LoggedOut> {
+  const { site, domain, origins } = logoutTarget(target);
+  const file = sessionFile(site);
+  // removed, not overwritten with an empty jar: a sealed file whose key is lost must still be resettable
+  const session = withLock(file, () => {
+    const had = existsSync(file);
+    rmSync(file, { force: true });
+    return had;
+  });
+  dropCaptures();
+  if (!existsSync(profileDir())) return { site, session, profile: "none" };
+  // which cookies are the site's is unknown: none only when the profile holds no sign-in of any site
+  if (!domain)
+    return profileSignedIn([])
+      ? {
+          site,
+          session,
+          profile: "kept",
+          why: `the domain of ${site} is not known here (it has no spec that can be read), so its cookies could not be told from another site's`,
+          next: "name the domain it signs in on, which clears that domain's cookies from the profile: api-anything logout <domain>",
+        }
+      : { site, session, profile: "none" };
+  // not cleared: kept unless the profile, read offline, holds no cookie of the site that could carry an account
+  const left = (why: string): LoggedOut =>
+    profileSignedIn([domain]) ? { site, session, profile: "kept", why } : { site, session, profile: "none" };
+  if (!browserAvailable()) return left("no Chromium browser was found here to open the profile with");
+  try {
+    const storage = await clearProfileSite(domain, profileDir(), origins);
+    return storage
+      ? { site, session, profile: "cleared" }
+      : { site, session, profile: "cookies-cleared", why: STORAGE_LEFT };
+  } catch (e) {
+    return left((e as Error).message.split("\n")[0]!);
   }
 }
 

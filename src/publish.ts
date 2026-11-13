@@ -10,10 +10,11 @@ import { slugOf } from "./domain.js";
 import { sharedName } from "./registry.js";
 import type { Evidence, SiteContext, VersionUpload } from "./registry-api.js";
 import { hostsOf, summarize } from "./search.js";
-import { besideOrigins, credentialsOf, ipIn, opUrls, scanSecrets } from "./secrets.js";
-import { loadSession, safeName, siteOf } from "./session.js";
+import { besideOrigins, credentialsOf, ipIn, liveIn, opUrls, ownTexts, pctDecode, scanSecrets } from "./secrets.js";
+import { accountCookies, loadSession, type Session, safeName, siteOf } from "./session.js";
 import type { Operation, Site } from "./spec.js";
 import { bundledDir, exportSite, loadSite, siteNotes } from "./store.js";
+import type { StoredCookie } from "./types.js";
 import { LIMITS, readbackProblems, uploadProblems, vetShared } from "./vet.js";
 
 export const CLIENT_VERSION = (
@@ -117,12 +118,13 @@ export function embedReadback(spec: Site, op: Operation): Operation {
   };
 }
 
-/** Every host an op sends to or opens, `goto` steps included. */
+/** Every host an op sends to or opens, `goto` steps included: the run opens a goto's `value`, else its `selector`. */
 export const hostsOfOp = (op: Operation) => [
   ...hostsOf(op),
   ...(op.trigger.steps ?? []).flatMap((s) => {
+    const url = s.action === "goto" ? (s.value ?? s.selector) : undefined;
     try {
-      return s.action === "goto" && s.value ? [new URL(s.value).hostname] : [];
+      return url ? [new URL(url).hostname] : [];
     } catch {
       return [];
     }
@@ -130,20 +132,90 @@ export const hostsOfOp = (op: Operation) => [
 ];
 
 /**
+ * The live cookies of the site's own domain that may carry the user's account, by their names: every one
+ * but a pinned login cookie's is cleared by positive evidence that a visitor holds it too
+ * (`accountCookies`: an analytics, consent, bot-management or CSRF name, or a name a signed-out visit was
+ * given). `guest`: the names a visit with no cookies is given now, beside the ones a login recorded. A
+ * cookie of another site (an ad network's, in the same jar) is no sign-in to this one.
+ */
+export function accountMaybe(
+  site: Site,
+  session: Pick<Session, "cookies" | "guestCookies">,
+  guest: readonly string[] = [],
+): StoredCookie[] {
+  const own = siteOf(new URL(site.baseUrl).hostname);
+  const mine = session.cookies.filter((c) => siteOf(c.domain.replace(/^\./, "").toLowerCase()) === own);
+  return accountCookies(mine, site.loginCookies, [...(session.guestCookies ?? []), ...guest]);
+}
+
+/**
  * Public: called with no cookies and no session values it answered, it was learned signed out, it reads,
  * it sends nowhere off its site, and it holds no `public` name (a shared bearer). Only such an op is
  * shared without the user's yes, and only such an op do reports promote.
+ *
+ * Signed out needs positive evidence: `learnedLoggedIn` knows a short list of login names (PHPSESSID,
+ * JSESSIONID and connect.sid are not on it). So a `session` with a login on record (`source`) is never
+ * a visitor's, whatever its cookies are called: a framework's session cookie has one name for a visitor
+ * and a member. With none on record, no live cookie of the site may be one whose name could carry an
+ * account (`accountMaybe`, with `guest`).
  */
-export function isPublic(site: Site, op: Operation, evidence: Partial<Evidence>): boolean {
+export function isPublic(
+  site: Site,
+  op: Operation,
+  evidence: Partial<Evidence>,
+  session: Pick<Session, "cookies" | "source" | "guestCookies">,
+  guest: readonly string[] = [],
+): boolean {
   const own = siteOf(new URL(site.baseUrl).hostname);
   return (
     (evidence.cleanReplay === "ok" || evidence.cleanReplay === "blocked") &&
     !op.learnedLoggedIn &&
     !evidence.learnedLoggedIn &&
+    !session.source &&
+    !accountMaybe(site, session, guest).length &&
     op.readOnly &&
     hostsOfOp(op).every((h) => siteOf(h) === own) &&
     !op.public?.length
   );
+}
+
+/**
+ * The params of `args` with a value (3+ characters) that `value` still spells: as it is, percent- or
+ * form-encoded, in a layer or base64 the secret scan reads (`liveIn`, 6+ characters), or as its words
+ * joined another way (a slug: "Jane Doe" as jane-doe, jane_doe or JaneDoe). A heal learns from one run
+ * made with its call's own args, with no second example to tell a copy of one from a constant, so
+ * this reads wider than learn_site's check of its own upload. A number counts as a whole word only: its
+ * digits inside a longer one (a timestamp, limit=1000) are not the arg. A hit may be chance ("api" in
+ * /api/search): the op then stays here, which costs one upload.
+ */
+export function spelled(value: unknown, args: Record<string, unknown>): string[] {
+  const text = JSON.stringify(value);
+  const lower = text.toLowerCase();
+  const words = (t: string) => `-${t.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, "-")}-`;
+  const worded = words(pctDecode(text, false));
+  const run = worded.replaceAll("-", "");
+  // a flag is no one's own, and every JSON body spells true and false
+  const leaves = (v: unknown): string[] =>
+    v === null || typeof v === "boolean" ? [] : typeof v === "object" ? Object.values(v).flatMap(leaves) : [String(v)];
+  const found = (raw: string) => {
+    const s = raw.toLowerCase();
+    if (s.length < 3 || /^(true|false|null)$/.test(s)) return false;
+    const w = words(raw);
+    const asWords = w.length >= 5 && worded.includes(w);
+    if (/^\d+$/.test(s)) return asWords;
+    const enc = encodeURIComponent(s).toLowerCase();
+    const joined = w.replaceAll("-", "");
+    return (
+      [s, enc, enc.replace(/%20/g, "+")].some((f) => lower.includes(f)) ||
+      asWords ||
+      // several words run together, letters among them
+      (w.split("-").length > 3 && joined.length >= 6 && /\p{L}/u.test(joined) && run.includes(joined)) ||
+      liveIn(text, { cookies: [], values: { arg: raw } })
+    );
+  };
+  return Object.entries(args)
+    .filter(([, v]) => leaves(v).some(found))
+    .map(([k]) => k);
 }
 
 /**
@@ -198,10 +270,18 @@ export interface Plan {
 /**
  * The uploads of `ops` (all of the site's when empty), with the export's stripping and scans, the shared
  * rules, a live-secret scan no `public` name waives over the exact bytes sent, and the privacy checks.
+ * `guest`: the cookie names a signed-out visit of the site is given now (`isPublic`).
  */
 export function plan(
   name: string,
-  o: { ops?: string[]; evidence?: Partial<Evidence>; parent?: string; consent?: boolean; as?: string } = {},
+  o: {
+    ops?: string[];
+    evidence?: Partial<Evidence>;
+    parent?: string;
+    consent?: boolean;
+    as?: string;
+    guest?: readonly string[];
+  } = {},
 ): Plan {
   name = safeName(name);
   const r = loadSite(name);
@@ -213,9 +293,8 @@ export function plan(
   const ex = exportSite(name, { keepExamples: true });
   // The user's own notes go only with their yes; without it, only notes that came from the registry
   const notes = o.consent ? siteNotes(name) : siteNotes(name, { from: "registry" });
-  const live = credentialsOf(
-    besideOrigins(loadSession(name), [ex.spec.baseUrl, ...ex.spec.operations.flatMap(opUrls)]),
-  );
+  const session = loadSession(name);
+  const live = credentialsOf(besideOrigins(session, [ex.spec.baseUrl, ...ex.spec.operations.flatMap(opUrls)]));
   const as = o.as ?? registryName(r.site);
   const context: SiteContext = {
     name: as,
@@ -252,8 +331,14 @@ export function plan(
     const fit = readbackProblems(r.site, mine).map((m) => `${n}: ${m}`);
     const bytes = JSON.stringify(upload);
     // `public` keeps a shared bearer out of the shape heuristics, never out of this: a value this
-    // machine holds is refused wherever it sits in what is sent, keys included
-    const strict = scanSecrets([bytes], live).secrets.map((m) => m.replace(/^\$\[0\]/, `the upload of ${n}`));
+    // machine holds is refused wherever it sits in what is sent, keys included. The bytes are no op for
+    // the scan to read what it spells of its own accord, so that is read here: the op's and the site's
+    // addresses and the caller's values (the holdout's args are a check's, or were).
+    const carried = operation.readback && "read" in operation.readback ? operation.readback.read : undefined;
+    const own = [context, operation, carried, { checks: [evidence.holdout ?? {}] }].flatMap(ownTexts);
+    const strict = scanSecrets([bytes], live, undefined, own).secrets.map((m) =>
+      m.replace(/^\$\[0\]/, `the upload of ${n}`),
+    );
     const theirs = ex.secrets.filter(
       (m) =>
         !/^\$\.operations\[\d+\]/.test(m) || m.startsWith(`$.operations[${i}]`) || m.startsWith(`$.operations[${j}]`),
@@ -261,7 +346,8 @@ export function plan(
     return {
       op: n,
       upload,
-      public: isPublic(r.site, mine, evidence),
+      // the jar is the capture's: a learn and a heal save their run's cookies to it before they share
+      public: isPublic(r.site, mine, evidence, session, o.guest),
       errors: [
         ...new Set([...theirs, ...strict]),
         // the read a readback names fits it where the author wrote it: the upload carries a copy

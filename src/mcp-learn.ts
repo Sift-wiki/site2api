@@ -13,8 +13,9 @@ import { badAddress } from "./vet.js";
 /**
  * `enabled`: off with `mcp --no-learn`; set before createServer runs. `publicOnly`: a trigger must be
  * an https page on a public host, since page text can steer an agent into loading any address in the
- * user's browser; tests that learn from the localhost fixture turn it off. The CLI's `learn` takes any
- * address: the user typed it.
+ * user's browser, and so must every request learned from the page and every address the saved op is
+ * later sent to (`LearnSiteOptions.publicOnly`); tests that learn from the localhost fixture turn it
+ * off. The CLI's `learn` takes any address: the user typed it.
  */
 export const learnTool = { enabled: true, publicOnly: true };
 
@@ -114,6 +115,8 @@ export function registerLearn(
           try {
             const caps = server.server.getClientCapabilities();
             r = await learnSite(input, {
+              // what is learned, replayed and saved is held to the rule the trigger is held to
+              publicOnly: learnTool.publicOnly,
               consent: caps?.elicitation
                 ? async (message) => {
                     const a = await server.server.elicitInput({

@@ -9,14 +9,16 @@ import {
   MAX_SEARCH_QUERY,
   nameHashText,
   type Report,
+  requestSig,
   type SearchMatch,
   type Status,
+  triggerSig,
   type UploadResult,
   type VerifyJob,
 } from "../../src/registry-api.js";
 import { domainOf } from "../../src/search.js";
 import type { Operation } from "../../src/spec.js";
-import { badAddress, uploadProblems } from "../../src/vet.js";
+import { badAddress, interfaceAddress, MAX_INTERFACE_URL, uploadProblems } from "../../src/vet.js";
 import { networksOf, sha256Hex, signatureHeaders, signer } from "./auth.js";
 import { catalog, confirmed, entryOf, search } from "./catalog.js";
 import { CSP, homePage, sitemap, sitePage } from "./pages.js";
@@ -41,7 +43,7 @@ import {
   getSite,
   getVersion,
   holders,
-  incumbentSig,
+  incumbent,
   interfacesOf,
   markPending,
   pendingVersions,
@@ -260,23 +262,37 @@ async function searchApi(c: Ctx) {
         interfaces: own,
       });
   }
-  // a site agents want and nobody shared: its domain, never the words of a search
-  const domain = matches.length ? undefined : asked;
-  if (domain) {
-    const { network } = await networksOf(c.request, salt(c));
-    await wantDomain(c.env.DB, domain, network, new Date(c.now).toISOString());
+  // a site agents want and nobody shared: its public domain, never the words of a search
+  if (!matches.length && asked && cleanDomain(asked)) {
+    const { network, prefix } = await networksOf(c.request, salt(c));
+    // the search is answered either way: past the bound nothing is kept
+    if (await mayWant(c, prefix)) await wantDomain(c.env.DB, asked, network, new Date(c.now).toISOString());
     // not cached: the next network asking for it is counted too
     return json({ matches }, 200, { "cache-control": "no-store" });
   }
   return json({ matches });
 }
 
+/**
+ * Whether this network may add a domain to demand this hour. A search takes no key, so the count is by
+ * network prefix; the total counts only what passed, so one refused network cannot spend everyone's.
+ */
+async function mayWant(c: Ctx, prefix: string): Promise<boolean> {
+  const hour = Math.floor(c.now / HOUR);
+  if ((await count(c.env.DB, `net:${prefix}`, "demand", hour, 1)) > c.t.demandPerHour) return false;
+  return (await count(c.env.DB, "all", "demand", hour, 1)) <= c.t.demandPerHourAll;
+}
+
 const DEMAND_DAYS = 30;
 
 const demandSince = (c: Ctx) => new Date(c.now - DEMAND_DAYS * DAY).toISOString();
 
+/** The most asked for; a row an earlier rule stored and `cleanDomain` now refuses is never listed. */
+const demandOf = async (c: Ctx, limit: number) =>
+  (await demandList(c.env.DB, demandSince(c), limit)).filter((d) => cleanDomain(d.domain));
+
 async function demandApi(c: Ctx) {
-  return json({ demand: await demandList(c.env.DB, demandSince(c), 50) });
+  return json({ demand: await demandOf(c, 50) });
 }
 
 /** Aggregate counts only: no key, no network hash. */
@@ -301,22 +317,28 @@ async function withInterfaces(c: Ctx, matches: SearchMatch[]): Promise<SearchMat
 
 const InterfaceSchema = z.object({
   kind: z.enum(["mcp", "openapi"]),
-  url: z.string().max(2000),
+  url: z.string().max(MAX_INTERFACE_URL),
 });
 
-/** An install says a site offers its own agent interface. It must be https on a public host; it is keyed by its registrable domain. */
+/**
+ * An install says a site offers an agent interface. It must be an address and nothing else (`interfaceAddress`),
+ * is stored in that one spelling, and is keyed by its registrable domain.
+ */
 async function addInterface(c: Ctx) {
   const key = await keyOf(c, true);
   const r = InterfaceSchema.safeParse(parseJson(c.body));
   if (!r.success) throw new HttpError(400, "the body is { kind: mcp | openapi, url }", issues(r.error));
-  const bad = badAddress(r.data.url);
-  if (bad) throw new HttpError(422, "the interface is refused", [`its url ${bad}`]);
+  const url = interfaceAddress(r.data.url);
+  if (!url)
+    throw new HttpError(422, "the interface is refused", [
+      `its url ${badAddress(r.data.url) ?? "is more than an address: no query or fragment, and a path of letters, digits and . _ ~ / - only"}`,
+    ]);
   const { network, prefix } = await networksOf(c.request, salt(c));
   await spend(c, "upload", key, prefix, 1);
-  const domain = siteOf(new URL(r.data.url).hostname);
-  await reportInterface(c.env.DB, { ...r.data, domain, key, network }, new Date(c.now).toISOString());
+  const domain = siteOf(new URL(url).hostname);
+  await reportInterface(c.env.DB, { kind: r.data.kind, url, domain, key, network }, new Date(c.now).toISOString());
   const served = (await interfacesOf(c.env.DB, [domain], interfaceKeys(c))).get(domain) ?? [];
-  return json({ domain, served: served.some((i) => i.url === r.data.url) });
+  return json({ domain, served: served.some((i) => i.url === url) });
 }
 
 async function indexApi(c: Ctx) {
@@ -391,12 +413,16 @@ async function upload(c: Ctx) {
 
   const ops = await siteOps(db, u.site.name, u.site.domain);
   const loginCookies = bound?.login_cookies ? (JSON.parse(bound.login_cookies) as string[]).length > 0 : false;
-  const incumbent = await incumbentSig(db, u.site.name, u.operation.name);
+  const live = await incumbent(db, u.site.name, u.operation.name);
+  // what it sends and opens is read from its stored operation: a row's `sig` holds only what its uploader declared
+  const liveOp = live ? (JSON.parse(live.operation) as Operation) : undefined;
   const reasons = reviewReasons(u.site, u.operation, u.evidence, {
     opNames: ops.opNames,
     login: loginCookies || ops.loginOp,
     established: ops.established,
-    ...(incumbent ? { incumbentSig: incumbent } : {}),
+    ...(live && liveOp
+      ? { incumbent: { match: live.sig, request: requestSig(liveOp), trigger: triggerSig(liveOp) } }
+      : {}),
   });
   const heal = await isHeal(c, u.evidence.healedFrom, u.site.name, u.operation.name, key);
   if (claimed) reasons.push(claimed.reason);
@@ -495,7 +521,8 @@ async function reports(c: Ctx) {
   if (!list.success)
     throw new HttpError(400, `the body is { reports: Report[] }, at most ${MAX_REPORTS}`, issues(list.error));
   const { network, prefix } = await networksOf(c.request, salt(c));
-  await spend(c, "report", key, prefix, list.data.length);
+  // an empty batch still writes the key and its counters, so it costs one
+  await spend(c, "report", key, prefix, Math.max(1, list.data.length));
   const db = c.env.DB;
   const now = new Date(c.now).toISOString();
   const versions = new Map((await versionsIn(db, [...new Set(list.data.map((r) => r.hash))])).map((v) => [v.hash, v]));
@@ -600,7 +627,7 @@ async function home(c: Ctx) {
   const q = c.url.searchParams.get("q")?.trim();
   // a site nobody but its uploader vouched for may say it is any brand: it is reached by name or domain only
   if (!q) {
-    const demand = (await demandList(c.env.DB, demandSince(c), 10)).filter((d) => cleanDomain(d.domain));
+    const demand = await demandOf(c, 10);
     // the strip is only shown when its counts are; the page never fails for it
     const by = await community(c.env.DB).catch(() => undefined);
     const stats = by && (await publicStats(c.env.DB, sites, c.now, demandSince(c), by).catch(() => undefined));
@@ -649,12 +676,12 @@ async function wanted(c: Ctx, domain: string) {
 
 async function sitemapXml(c: Ctx) {
   const sites = await catalog(c.env.DB);
-  const demand = await demandList(c.env.DB, demandSince(c), 50);
+  const demand = await demandOf(c, 50);
   return new Response(
     sitemap(
       sites.filter(confirmed).map((s) => s.name),
       c.url.origin,
-      demand.filter((d) => d.networks >= WANTED_INDEX_NETWORKS && cleanDomain(d.domain)).map((d) => d.domain),
+      demand.filter((d) => d.networks >= WANTED_INDEX_NETWORKS).map((d) => d.domain),
     ),
     { headers: { "content-type": "application/xml; charset=utf-8" } },
   );

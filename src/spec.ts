@@ -291,6 +291,13 @@ export const OperationSchema = z.object({
    * `shareOps`. This machine's record, like `learnedAt`: never uploaded, hashed or exported.
    */
   version: z.object({ hash: z.string(), status: z.string() }).optional(),
+  /**
+   * An agent learned this op over MCP (`learn_site`), where page text may have chosen the page. Tiers 1
+   * and 2 send it, and follow its redirects, only to https addresses on public hosts, as they do for a
+   * spec with `shared`; a heal keeps the mark, and an `add` or `learn` the user runs drops it. This
+   * machine's record, like `learnedAt`.
+   */
+  publicOnly: z.literal(true).optional(),
 });
 
 /** The most a budget can say: an hour between requests, and one a second over the hour (store.ts keeps that many sends). */
@@ -318,9 +325,10 @@ export const SiteSchema = z.object({
   /**
    * Where `pull` fetched this spec from. A spec that carries it is someone else's wherever it is
    * saved now (a heal writes a user copy): it is checked against the shared rules on every load,
-   * and its heals do not rescan.
+   * and its heals do not rescan. `by` says no human ran the pull: an agent did, or the background
+   * upgrade of a bundled site.
    */
-  shared: z.object({ from: z.string(), sha256: z.string(), by: z.literal("agent").optional() }).optional(),
+  shared: z.object({ from: z.string(), sha256: z.string(), by: z.enum(["agent", "upgrade"]).optional() }).optional(),
 });
 
 export type Request = z.infer<typeof RequestSchema>;

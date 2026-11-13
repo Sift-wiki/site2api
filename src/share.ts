@@ -6,8 +6,9 @@ import { createHash } from "node:crypto";
 import { join } from "node:path";
 import { cleanCall } from "./clean.js";
 import { siteOf } from "./domain.js";
+import { publicAddress } from "./http.js";
 import { loadSettings, localOnly, localOnlyOff } from "./identity.js";
-import { hostsOfOp, type OpPlan, personal, plan, uploadName } from "./publish.js";
+import { accountMaybe, hostsOfOp, type OpPlan, personal, plan, spelled, uploadName } from "./publish.js";
 import { registryRequest } from "./registry.js";
 import {
   anonymous,
@@ -21,9 +22,9 @@ import {
   type VersionUpload,
 } from "./registry-api.js";
 import { flushReports } from "./report.js";
-import { home, readJson, withLock, writePrivate } from "./session.js";
+import { home, loadSession, readJson, withLock, writePrivate } from "./session.js";
 import type { Operation } from "./spec.js";
-import { loadSite, updateSite } from "./store.js";
+import { exportSite, loadSite, updateSite } from "./store.js";
 
 /** The purpose of the check learn_site records from its holdout call: the one kind an automatic share may carry. */
 export const HOLDOUT_PURPOSE = "learn_site holdout";
@@ -52,14 +53,43 @@ const offReason = () =>
     : "sharing was never asked: the user has not answered whether to share (api-anything setup --yes --share-only, or --no-share --share-only, records it)";
 
 /**
- * Uploads each named op of a local site. A public read (learned logged out, clean replay ok, its hosts
- * on its own site) goes automatically when settings allow sharing; anything else only with `consent`.
+ * The cookie names a signed-out visit of the site is given now (login.ts's probe: one GET of the site's
+ * address with no cookies), asked only where they decide whether `ops` are public: no login is on
+ * record, an op could be public, and the session holds a cookie of the site whose name alone could
+ * carry an account. A framework's session cookie and a load balancer's are every visitor's, and no
+ * list knows their names. The site of an op an agent learned or someone shared is asked only at a
+ * public address, as its clean replay is.
+ */
+async function visitorNames(site: string, ops: string[], fetchImpl?: typeof fetch): Promise<string[]> {
+  const r = loadSite(site);
+  const session = loadSession(site);
+  const mine = r?.site.operations.filter((op) => ops.includes(op.name)) ?? [];
+  const open = mine.some((op) => op.readOnly && !op.learnedLoggedIn && !op.public?.length);
+  if (!r || !open || session.source || !accountMaybe(r.site, session).length) return [];
+  const { guestCookieNames } = await import("./login.js");
+  const guarded = !!r.site.shared || mine.some((op) => op.publicOnly);
+  return (await guestCookieNames(r.site.baseUrl, fetchImpl, guarded ? publicAddress : undefined)) ?? [];
+}
+
+/**
+ * Uploads each named op of a local site. A public read (learned logged out, in a session that shows no
+ * account, clean replay ok, its hosts on its own site) goes automatically when settings allow sharing;
+ * anything else only with `consent`.
  * One that holds what may be the user's own waits for their yes too. `parent`: the version it replaces.
+ * `guest`: the names a signed-out visit is given, when the caller asked already (`visitorNames`, through
+ * `fetchImpl` otherwise).
  */
 export async function shareOps(
   site: string,
   ops: string[],
-  o: { evidence: Partial<Evidence>; consent?: boolean; parent?: string; signal?: AbortSignal } = { evidence: {} },
+  o: {
+    evidence: Partial<Evidence>;
+    consent?: boolean;
+    parent?: string;
+    signal?: AbortSignal;
+    guest?: string[];
+    fetchImpl?: typeof fetch;
+  } = { evidence: {} },
 ): Promise<ShareOutcome[]> {
   // plan reads no names as all of them
   if (!ops.length) return [];
@@ -74,7 +104,9 @@ export async function shareOps(
   try {
     // the registry is asked for the site's name only when something may go up
     const as = o.consent || loadSettings().share ? await uploadName(site, { signal: o.signal }) : undefined;
-    p = plan(site, { ops, evidence: o.evidence, parent: o.parent, consent: o.consent, ...(as ? { as } : {}) });
+    // with the user's yes, public or not decides nothing
+    const guest = o.guest ?? (o.consent ? [] : await visitorNames(site, ops, o.fetchImpl));
+    p = plan(site, { ops, evidence: o.evidence, parent: o.parent, consent: o.consent, guest, ...(as ? { as } : {}) });
   } catch (e) {
     return ops.map((op) => ({ site, op, shared: false, reason: (e as Error).message.split("\n")[0] }));
   }
@@ -122,7 +154,7 @@ export async function shareOps(
               needsConsent: true,
               reason: op.public
                 ? "it may hold something of the user's own (personal): shared only with their yes"
-                : "it needed a login, writes, sends off its site or uses a public credential: shared only with the user's yes",
+                : "it needed a login or was learned in a session that may be signed in, writes, sends off its site or uses a public credential: shared only with the user's yes",
             }),
       });
       continue;
@@ -172,20 +204,55 @@ function examplesOf(op: Operation): Record<string, unknown> | undefined {
 /**
  * A call healed an op that was the registry version `parent`. When sharing is on and the healed op is
  * public, as a clean replay of its examples shows, it goes up as the version that repairs `parent`.
+ * `args`: the healing call's own. The heal may have learned the request from a run made with them, and
+ * the export puts `{param}` back only where learning made a slot: a template that spells one anywhere
+ * else stays here, as learn_site keeps an op that spells the user's own request.
  */
 export async function healBack(
   site: string,
   opName: string,
   parent: string,
-  o: { fetchImpl?: typeof fetch; minIntervalMs?: number; signal?: AbortSignal } = {},
+  o: { fetchImpl?: typeof fetch; minIntervalMs?: number; signal?: AbortSignal; args?: Record<string, unknown> } = {},
 ): Promise<ShareOutcome | undefined> {
   if (!loadSettings().share) return undefined;
-  const op = loadSite(site)?.site.operations.find((x) => x.name === opName);
+  const mine = loadSite(site)?.site;
+  const op = mine?.operations.find((x) => x.name === opName);
   // nothing that could be public: no replay is spent on it
-  if (!op || op.version || !op.readOnly || op.learnedLoggedIn || op.public?.length) return undefined;
+  if (!mine || !op || op.version || !op.readOnly || op.learnedLoggedIn || op.public?.length) return undefined;
+  if (o.args) {
+    // what the heal learned, as the upload would carry it; the param examples are the version's own
+    const sent = exportSite(site).spec.operations.find((x) => x.name === opName)!;
+    const kept = spelled({ request: sent.request, slots: sent.slots, volatile: sent.volatile }, o.args);
+    if (kept.length)
+      return {
+        site,
+        op: opName,
+        shared: false,
+        reason: `the healed request keeps the ${kept.join(", ")} of the call that healed it: sharing it would say what was asked`,
+      };
+  }
   const args = examplesOf(op);
   if (!args) return undefined;
-  const clean = await cleanCall(op, args, { site, fetchImpl: o.fetchImpl, minIntervalMs: o.minIntervalMs });
+  // The session's part of public, before the replay: nobody is here to ask, so an op that would wait
+  // for a yes stays, and no request is spent on it.
+  const session = loadSession(site);
+  const guest = await visitorNames(site, [opName], o.fetchImpl);
+  if (session.source || accountMaybe(mine, session, guest).length)
+    return {
+      site,
+      op: opName,
+      shared: false,
+      needsConsent: true,
+      reason:
+        "the session may be signed in (a login on record, or a cookie no signed-out visit is given): the heal is shared only with the user's yes",
+    };
+  const clean = await cleanCall(op, args, {
+    site,
+    fetchImpl: o.fetchImpl,
+    minIntervalMs: o.minIntervalMs,
+    // an op an agent learned or someone shared: the page its heal learned from chose the request
+    publicOnly: !!op.publicOnly || !!mine.shared,
+  });
   if (clean.class !== "ok" && clean.class !== "blocked") return undefined;
   // the registry counts it as a heal only after this install's `fail` report on `parent`: send that first
   await flushReports(o.signal);
@@ -193,6 +260,7 @@ export async function healBack(
     evidence: { cleanReplay: clean.class, healedFrom: parent },
     parent,
     signal: o.signal,
+    guest,
   });
   return shared;
 }
@@ -208,10 +276,19 @@ const sha = (text: string) => createHash("sha256").update(text).digest("hex");
 /** The upload of an op answering a claim: its anonymous form, and the site by its name and address alone. */
 function claimUpload(op: OpPlan): VersionUpload {
   const { name, domain, baseUrl, loginCookies, pace } = op.upload.site;
+  const { clientVersion, tier, holdout } = op.upload.evidence;
   return {
     site: { name, domain, baseUrl, ...(loginCookies ? { loginCookies } : {}), ...(pace ? { pace } : {}) },
     operation: anonymous(op.upload.operation),
-    evidence: { ...op.upload.evidence, learnedLoggedIn: true, cleanReplay: "skipped" },
+    // Field by field, never a spread: the holdout's args are the args of the check `anonymous` took out,
+    // the learner's own. The registry's schema asks for the record, so it goes empty.
+    evidence: {
+      clientVersion,
+      learnedLoggedIn: true,
+      cleanReplay: "skipped",
+      ...(holdout ? { holdout: { args: {}, ok: holdout.ok, ...(holdout.tier ? { tier: holdout.tier } : {}) } } : {}),
+      ...(tier ? { tier } : {}),
+    },
   };
 }
 

@@ -2,14 +2,23 @@
  * Learning against the live site. One routine, run trigger -> match -> learn, serves three jobs:
  * add (create), recapture (heal), and the tier-3 read. Rescan is the browserless heal.
  */
-import { rmSync, statSync } from "node:fs";
+import { readdirSync, rmSync, statSync } from "node:fs";
 import { join } from "node:path";
-import { atStep, browserAvailable, PageUnreachable, ProfileInUse, runTrigger, waitReport } from "./browser.js";
+import {
+  atStep,
+  browserAvailable,
+  PageUnreachable,
+  ProfileInUse,
+  runTrigger,
+  TRIGGER_BUDGET_MS,
+  waitReport,
+} from "./browser.js";
 import { botWall, type Class, judge, type Observed, pickedShape } from "./classify.js";
-import { asText, escapeTemplate, fillTemplate, getAt, setAt, templateRefs, walk } from "./codec.js";
+import { asText, escapeTemplate, fillTemplate, getAt, type Step, setAt, templateRefs, walk } from "./codec.js";
 import { acceptedConfirms, recordedConfirms } from "./confirm.js";
-import { capOutput, extract } from "./extract.js";
-import { buildRequest, MAX_REDIRECTS, ownMatch, REDIRECT, refusal } from "./http.js";
+import { DEADLINE, DeadlineExceeded, within } from "./deadline.js";
+import { capOutput, extract, tagsOf } from "./extract.js";
+import { buildRequest, MAX_BODY_BYTES, MAX_REDIRECTS, ownMatch, publicAddress, REDIRECT, refusal } from "./http.js";
 import {
   type Args,
   ASSET_EXT,
@@ -20,6 +29,7 @@ import {
   hashLike,
   learnOperation,
   matches,
+  operationNameOf,
   requestMatch,
   UUID,
   unplaced,
@@ -31,7 +41,7 @@ export { unplaced };
 import type { NextAction } from "./execute.js";
 import { standIn } from "./paging.js";
 import { readSealed, SealError, writeSealed } from "./seal.js";
-import { besideOrigins, credentialsOf, opUrls, scanSecrets, signInFills } from "./secrets.js";
+import { besideOrigins, credentialsOf, leafName, opUrls, scanSecrets, signInFills } from "./secrets.js";
 import {
   CAPTURE_TTL_MS,
   cookieHeaderFor,
@@ -51,6 +61,7 @@ import {
   OperationSchema,
   type Paging,
   type Param,
+  type Request,
   type ResponseSpec,
   type Site,
   type Slot,
@@ -68,7 +79,18 @@ import {
   updateSite,
 } from "./store.js";
 import type { CaptureResult, Exchange, TriggerStep } from "./types.js";
-import { LIMITS, notARead, pagingProblems, readbackProblems, vetShared } from "./vet.js";
+import {
+  badAddress,
+  graphqlDocuments,
+  isGraphql,
+  LIMITS,
+  METHOD_OVERRIDE,
+  notARead,
+  pagingProblems,
+  readbackProblems,
+  vetShared,
+  writesGraphql,
+} from "./vet.js";
 
 export const profileDir = () => join(home(), "profile");
 
@@ -110,19 +132,47 @@ export interface Attempt {
 export const PROFILE_HINT =
   "another api-anything process (an MCP server?) holds the browser profile; it lets go after a few seconds idle: wait, or stop it, then retry once";
 
+const encoded = (args: Args) =>
+  Object.fromEntries(Object.entries(args).map(([k, v]) => [k, encodeURIComponent(asText(v))]));
+
 /** Fill `{param}` in a trigger. URL parts are percent-encoded; step values are typed as given. */
 export function fillTrigger(t: Trigger, args: Args): Trigger {
-  const enc = Object.fromEntries(Object.entries(args).map(([k, v]) => [k, encodeURIComponent(asText(v))]));
-  const step = (s: TriggerStep): TriggerStep => ({
-    ...s,
-    ...(s.selector !== undefined ? { selector: fillTemplate(s.selector, args) } : {}),
-    ...(s.value !== undefined ? { value: fillTemplate(s.value, s.action === "goto" ? enc : args) } : {}),
-  });
+  const enc = encoded(args);
+  const step = (s: TriggerStep): TriggerStep => {
+    // a goto's address is a URL wherever it is written: the step opens `value ?? selector`
+    const vars = s.action === "goto" ? enc : args;
+    return {
+      ...s,
+      ...(s.selector !== undefined ? { selector: fillTemplate(s.selector, vars) } : {}),
+      ...(s.value !== undefined ? { value: fillTemplate(s.value, vars) } : {}),
+    };
+  };
   return {
     url: fillTemplate(t.url, enc),
     ...(t.softFrom ? { softFrom: fillTemplate(t.softFrom, enc) } : {}),
     ...(t.steps ? { steps: t.steps.map(step) } : {}),
   };
+}
+
+/**
+ * Why a trigger filled with these args is not opened, or undefined when it may be: an arg makes a
+ * path segment of one of its addresses "." or "..". Percent-encoding leaves dots alone, and a URL
+ * parser drops such a segment, ".." with the one before it, so the page opened would be another one
+ * (`/u/{name}` with the name ".." is `/`). Asked where a page is about to be opened, not in
+ * `fillTrigger`: a message about a call that already ran spells its page with it.
+ */
+export function triggerRefusal(t: Trigger, args: Args): string | undefined {
+  const enc = encoded(args);
+  const urls = [t.url, t.softFrom, ...(t.steps ?? []).map((s) => (s.action === "goto" ? (s.value ?? s.selector) : ""))];
+  for (const url of urls) {
+    const path = (url ?? "").split(/[?#]/)[0]!;
+    const seg = path.split("/").find((seg) => {
+      const filled = fillTemplate(seg, enc);
+      return filled !== seg && /^(?:\.|%2e){1,2}$/i.test(filled);
+    });
+    if (seg) return `the args make the path segment ${seg} of ${path} a dot segment: a URL reads it as another address`;
+  }
+  return undefined;
 }
 
 const SAFE_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
@@ -171,19 +221,109 @@ export const writeGuard = (m?: Match, o: { url?: string; args?: Args } = {}) => 
     (!!m && Object.keys(m).length > 0 && matches(m, e.request));
 };
 
+const hostnameOf = (url: string) => {
+  try {
+    return new URL(url).hostname.toLowerCase();
+  } catch {
+    return undefined;
+  }
+};
+
+/** A step path at `at` or below it: the same steps, the last one a JSON pointer at or under `at`'s. */
+const below = (leaf: Step[], at: Step[]) =>
+  at.every(
+    (st, i) => leaf[i] === st || (i === at.length - 1 && st.startsWith("json:") && !!leaf[i]?.startsWith(`${st}/`)),
+  );
+
+const VARIABLES = /^(?:json:(?:\/\d+)?\/variables(?:\/|$)|form:variables$)/;
+/**
+ * Whether a request is the own request of someone else's read, told from the op's request, since
+ * the match is its author's text (`{host}` alone covers every POST the steps send there). The same
+ * origin and path, a segment a slot or a rotating token fills being any segment; the same kind of
+ * body (a form the click submits, or a multipart upload, is not a JSON read); no mutation and no
+ * method override. On one GraphQL endpoint the path says nothing, so there it is also the op's
+ * operation: a query carrying its document under the op's operation name, or the op's document.
+ * A request with no document (a persisted query) cannot be read, and passes only as the op's own
+ * template: the same name, and the same body outside the variables, the slots and the rotating tokens.
+ * ponytail: one path that takes every action by a body field which is not GraphQL (JSON-RPC) is
+ * still told by its path alone.
+ */
+function sharedOwn(op: Pick<Operation, "request" | "slots" | "volatile">): (req: Request) => boolean {
+  let own: URL;
+  try {
+    own = new URL(op.request.url);
+  } catch {
+    return () => false;
+  }
+  const wild = [...op.slots, ...op.volatile].map((s) => s.at);
+  const anySegment = new Set(wild.flatMap((at) => (/^path:\d+$/.test(at[0]!) ? [Number(at[0]!.slice(5))] : [])));
+  const segments = (u: URL) => u.pathname.split("/").slice(1);
+  const want = segments(own);
+  // an arg is no sign of GraphQL: a search text may read like a document ("query planner")
+  const blank = (req: Request) =>
+    op.slots.reduce((r, slot) => {
+      try {
+        return setAt(r, slot.at, "");
+      } catch {
+        return r; // nothing there
+      }
+    }, req);
+  const fixed = (req: Request) =>
+    JSON.stringify(
+      walk(req)
+        .filter((l) => /^(?:body$|form(?:\[\d+\])?:)/.test(l.at[0]!) && !l.container)
+        .filter((l) => !l.at.some((st) => VARIABLES.test(st)) && !wild.some((at) => below(l.at, at)))
+        .map((l) => [l.at.join(" > "), l.value])
+        .sort(),
+    );
+  const documents = (req: Request) => JSON.stringify(graphqlDocuments(req).map((d) => d.trim()));
+  const mediaType = (req: Request) => {
+    const type = Object.entries(req.headers).find(([k]) => k.toLowerCase() === "content-type")?.[1] ?? "";
+    return type.split(";")[0]!.trim().toLowerCase();
+  };
+  return (req) => {
+    const u = new URL(req.url);
+    const got = segments(u);
+    if (u.origin !== own.origin || got.length !== want.length) return false;
+    if (want.some((w, i) => !anySegment.has(i) && decodeLoose(w, false) !== decodeLoose(got[i]!, false))) return false;
+    if (mediaType(req) !== mediaType(op.request)) return false;
+    if (graphqlDocuments(req).some(writesGraphql)) return false;
+    if (walk(req).some((l) => METHOD_OVERRIDE.test(leafName(l.at)) && !/^(get|head|)$/i.test(l.value.trim())))
+      return false;
+    if (!isGraphql({ request: blank(req), params: [] }) && !isGraphql({ request: blank(op.request), params: [] }))
+      return true;
+    const name = operationNameOf(req);
+    const named = name === operationNameOf(op.request);
+    // a query carrying its document on every item: a read by GraphQL's own rules
+    if (!notARead({ request: req, slots: [], params: [] }))
+      return (named && name !== undefined) || documents(req) === documents(op.request);
+    return named && fixed(req) === fixed(op.request);
+  };
+}
+
 /**
  * A read's trigger must not write either: a shared spec that says "read" but clicks a button that
- * POSTs. Once the steps run, unsafe requests other than the op's own are aborted. Every hop of a
- * redirect chain that started with the op's own unsafe request (`via`) is the op's own too, on any
- * origin, as Chrome itself would follow it (a signed read the server checks elsewhere with a 307).
- * The hops of any other chain are judged by their own address: an asset sent on to a write stops.
+ * POSTs. Once the steps run, unsafe requests other than the op's own are aborted. The op's own is
+ * one with the method of the op's request that its match covers: a GET or HEAD read has none,
+ * whatever its match names. Every hop of a redirect chain that started with the op's own unsafe
+ * request (`via`) is the op's own too, on any origin, as Chrome itself would follow it (a signed
+ * read the server checks elsewhere with a 307). The hops of any other chain are judged by their own
+ * address: an asset sent on to a write stops.
  * ponytail: that includes a 307 of the op's own read to a write on its own site; the server chose
- * it, and nothing in the spec tells it from a check. `shared`: the spec is someone else's, and an
- * unsafe hop of that chain to another site is aborted, before the steps run too.
+ * it, and nothing in the spec tells it from a check. `shared`: the spec is someone else's, and so
+ * is its match. Its own request must also be the op's request (`sharedOwn`), and an unsafe hop of
+ * that chain to another site is aborted, before the steps run too.
  */
-const readGuard = (m: Match, shared = false) => {
+export const readGuard = (op: Pick<Operation, "match" | "request" | "slots" | "volatile">, shared = false) => {
+  const m = op.match;
+  const method = op.request.method.toUpperCase();
+  const theirs = shared ? sharedOwn(op) : () => true;
   const own = (e: Exchange) =>
-    !SAFE_METHODS.has(e.request.method.toUpperCase()) && Object.keys(m).length > 0 && matches(m, e.request);
+    !SAFE_METHODS.has(method) &&
+    e.request.method.toUpperCase() === method &&
+    Object.keys(m).length > 0 &&
+    matches(m, e.request) &&
+    theirs(e.request);
   const site = (e: Exchange) => siteOf(new URL(e.request.url).hostname);
   return (e: Exchange, acting: boolean, via?: Exchange): boolean =>
     e.resourceType !== "websocket" &&
@@ -319,32 +459,43 @@ function sessionValuesOf(op: Operation, e: Exchange): Record<string, string> {
   return out;
 }
 
-/** The text a templated ref holds inside a leaf: the template's other holes match anything. */
-function refPart(template: string, ref: string, leaf: string, escape?: "url" | "json"): string | undefined {
-  const re = template
-    .split(/(\{\{|\}\}|\{[^{}]+\})/)
-    .map((p) =>
-      p === "{{"
-        ? "\\{"
-        : p === "}}"
-          ? "\\}"
-          : p === `{${ref}}`
-            ? "(.*?)"
-            : /^\{[^{}]+\}$/.test(p)
-              ? ".*?"
-              : escapeRe(p),
-    )
-    .join("");
-  const m = new RegExp(`^${re}$`, "s").exec(leaf);
-  if (!m) return undefined;
+/**
+ * The text a templated ref holds inside a leaf: the template's other holes match anything. A scan,
+ * not a pattern: the leaf is the page's, and one lazy wildcard per hole takes time that grows with
+ * the leaf's length to the power of the holes. Each hole ends at the first place the literal after
+ * it stands, as a lazy wildcard would; the last runs to the template's closing text.
+ */
+export function refPart(template: string, ref: string, leaf: string, escape?: "url" | "json"): string | undefined {
+  const lits = [""];
+  const holes: string[] = [];
+  for (const p of template.split(/(\{\{|\}\}|\{[^{}]+\})/)) {
+    if (/^\{[^{}]+\}$/.test(p)) {
+      holes.push(p);
+      lits.push("");
+    } else lits[lits.length - 1] += p === "{{" ? "{" : p === "}}" ? "}" : p;
+  }
+  const want = holes.indexOf(`{${ref}}`);
+  const end = leaf.length - lits.at(-1)!.length;
+  if (want < 0 || !leaf.startsWith(lits[0]!) || !leaf.endsWith(lits.at(-1)!) || end < lits[0]!.length) return undefined;
+  let pos = lits[0]!.length;
+  let found: string | undefined;
+  for (let i = 0; i < holes.length; i++) {
+    const closing = i === holes.length - 1;
+    const lit = closing ? "" : lits[i + 1]!;
+    const stop = closing ? end : leaf.indexOf(lit, pos);
+    if (stop < 0 || stop + lit.length > end) return undefined;
+    if (i === want) found = leaf.slice(pos, stop);
+    pos = stop + lit.length;
+  }
+  if (found === undefined) return undefined;
   try {
     return escape === "url"
-      ? decodeURIComponent(m[1]!)
+      ? decodeURIComponent(found)
       : escape === "json"
-        ? (JSON.parse(`"${m[1]}"`) as string)
-        : m[1];
+        ? (JSON.parse(`"${found}"`) as string)
+        : found;
   } catch {
-    return m[1];
+    return found;
   }
 }
 
@@ -381,7 +532,14 @@ function carriesArgs(op: Operation, e: Exchange, args: Args): boolean {
     secure: false,
     httpOnly: false,
   }));
-  const expected = buildRequest(op, args, { cookies, values: sessionValuesOf(op, e) });
+  let expected: Request;
+  try {
+    expected = within(() => buildRequest(op, args, { cookies, values: sessionValuesOf(op, e) }), DEADLINE.args);
+  } catch (x) {
+    // args the op's patterns take too long to test: no exchange is shown to carry them
+    if (x instanceof DeadlineExceeded) return false;
+    throw x;
+  }
   return op.params.every((p) => {
     if (args[p.name] === undefined && p.default === undefined) return !p.required;
     const slots = op.slots.filter(
@@ -408,7 +566,14 @@ function pickHit(op: Operation, hits: Exchange[], args: Args): Exchange | undefi
   // An answer to another query is never a fallback. Compare the declared parameter positions,
   // including short values and structured args; substring ranking is only a discovery aid.
   const answered = hits.filter((e) => (e.response || e.aborted) && carriesArgs(op, e, args));
-  const score = (e: Exchange) => (e.aborted || judgeExchange(op, e)?.class === "ok" ? 1 : 0);
+  const score = (e: Exchange) => {
+    try {
+      return e.aborted || judgeExchange(op, e)?.class === "ok" ? 1 : 0;
+    } catch (x) {
+      if (x instanceof DeadlineExceeded) return 0;
+      throw x;
+    }
+  };
   return answered.reduce<Exchange | undefined>((best, e) => (!best || score(e) >= score(best) ? e : best), undefined);
 }
 
@@ -435,12 +600,16 @@ export async function runOpTrigger(
   args: Args,
   o: { intercept?: boolean } = {},
 ): Promise<TriggerRun> {
+  const refused = triggerRefusal(op.trigger, args);
+  if (refused) throw new Error(`not opening ${op.name}'s page: ${refused}`);
   const t = fillTrigger(op.trigger, args);
-  const isHit = (e: Exchange) => matches(op.match, e.request);
+  // What a read's guard stopped never left: it is no answer of the read's, and the run does not end on
+  // it (seen: a click's POST to the address a GET read matches by path, taken for the read's answer).
+  const isHit = (e: Exchange) => matches(op.match, e.request) && !(op.readOnly && e.aborted);
   // A write's tier-3 run is the UI sending it for real, once; learning or healing one intercepts it.
   const once = !o.intercept && !op.readOnly ? sendOnce(op) : undefined;
   const shared = !!loadSite(site)?.site.shared;
-  const intercept = once ?? (o.intercept ? writeGuard(op.match, { url: t.url, args }) : readGuard(op.match, shared));
+  const intercept = once ?? (o.intercept ? writeGuard(op.match, { url: t.url, args }) : readGuard(op, shared));
   // Intercepted, a write's confirm sends nothing, so learning accepts it. For real, only what its
   // learning recorded is accepted, the question asked with this call's values; a read accepts none.
   const confirm = o.intercept ? () => true : once ? recordedConfirms(op.trigger.confirms ?? [], args) : undefined;
@@ -520,7 +689,19 @@ export function pageDown(capture: CaptureResult): Attempt | undefined {
  * it dismissed when there was one, since the request may have been waiting on it.
  */
 export function firedNothing(op: Operation, capture: CaptureResult): string {
-  const no = `the trigger fired no request matching ${JSON.stringify(op.match)} (${waitReport(capture)})`;
+  // a read's match may cover what its guard stopped: said, since "no request" alone would send the user to the match
+  const site = siteOfUrl(op.request.url);
+  const stopped = op.readOnly
+    ? [
+        ...new Set(
+          capture.exchanges.filter((e) => e.aborted && matches(op.match, e.request)).map((e) => requestLabel(e, site)),
+        ),
+      ]
+    : [];
+  const held = stopped.length
+    ? `: ${stopped.slice(0, 3).join(", ")} matched and ${stopped.length > 1 ? "were" : "was"} stopped in the browser as a possible write, which a read never sends`
+    : "";
+  const no = `the trigger fired no request matching ${JSON.stringify(op.match)}${held} (${waitReport(capture)})`;
   const asked = capture.dialogs?.find((d) => d.type === "confirm" && !d.accepted);
   if (!asked) return no;
   const why = op.readOnly
@@ -531,6 +712,28 @@ export function firedNothing(op: Operation, capture: CaptureResult): string {
   return `${no}: the page asked to confirm ${atStep(asked.step)} and was told no, since ${why}; nothing is confirmed on the user's behalf`;
 }
 
+/**
+ * The run's time ran out in its steps, so the rest of them never ran: that the op's request is not
+ * there says nothing about the op. An error, as any timeout is, so nothing heals from it.
+ */
+export function cutShort(op: Pick<Operation, "trigger" | "readOnly">, capture: CaptureResult): Attempt | undefined {
+  if (capture.cut === undefined) return undefined;
+  const steps = op.trigger.steps ?? [];
+  const at = `${atStep(capture.cut)} of ${steps.length} (${steps[capture.cut]?.action})`;
+  return {
+    tier: 3,
+    class: "error",
+    reason: `the trigger's steps were cut short ${at}: ${waitReport(capture)}`,
+    ambiguous: true,
+    // a write may have left: its own status says what to check, and nothing here says to send it again
+    ...(op.readOnly
+      ? {
+          hint: `retry once: a browser run has ${TRIGGER_BUDGET_MS / 1000} s for its start, the page and the steps. If it repeats, the trigger's waits are too long for it`,
+        }
+      : {}),
+  };
+}
+
 /** The run ended on a bot challenge that did not solve: its requests never fired, which says nothing about the op. */
 export function challengePage(capture: CaptureResult): Attempt | undefined {
   const doc = lastLoad(capture);
@@ -538,16 +741,19 @@ export function challengePage(capture: CaptureResult): Attempt | undefined {
   return wall ? { tier: 3, class: "blocked", reason: `the trigger page stayed a bot challenge (${wall})` } : undefined;
 }
 
-/** A tier-3 result: the site's own request, answered. */
+/** A tier-3 result: the site's own request, answered. Throws `DeadlineExceeded` when reading it runs past `DEADLINE.read`. */
 export function judgeExchange(op: Operation, e: Exchange): Attempt | undefined {
   const r = e.response;
   if (!r) return undefined;
   return {
     tier: 3,
     status: r.status,
-    ...judge(op, { status: r.status, headers: r.headers, body: r.body ?? "", url: e.request.url }),
+    ...judged(op, { status: r.status, headers: r.headers, body: r.body ?? "", url: e.request.url }),
   };
 }
+
+/** `judge`, held to `DEADLINE.read`: an answer built to be slow to read throws `DeadlineExceeded`, never a drift. */
+const judged = (op: Operation, r: Observed) => within(() => judge(op, r), DEADLINE.read);
 
 /* ------------------------------------------------------------ captures */
 
@@ -696,6 +902,22 @@ export function loadCapture(id: string, now = Date.now()): CaptureFile {
   return c;
 }
 
+/**
+ * Delete every saved capture. `logout` calls it: a capture is a copy of its run's cookies, loadable
+ * for 24 h, and learning from one puts them back in a session. Which site's cookies a capture holds
+ * is inside the sealed file, and logout asks for no key, so all of them go.
+ */
+export function dropCaptures(): void {
+  const dir = join(home(), "captures");
+  let names: string[];
+  try {
+    names = readdirSync(dir).filter((f) => f.endsWith(".json"));
+  } catch {
+    return; // no captures yet
+  }
+  for (const name of names) rmSync(join(dir, name), { force: true });
+}
+
 /* ----------------------------------------------------------------- add */
 
 export interface AddInput {
@@ -721,6 +943,11 @@ export interface AddInput {
   fetchImpl?: typeof fetch;
   /** learn_site's: refuse (`NotARead`) a learned request `notARead` refuses, before anything is sent or saved */
   readsOnly?: boolean;
+  /**
+   * learn_site over MCP: the op is saved with `publicOnly`, and what this add itself sends goes only to
+   * https addresses on public hosts, redirects included. Without it the op is saved with no mark.
+   */
+  publicOnly?: boolean;
 }
 
 /** A request learn_site may not save as a read (`notARead`): nothing was sent and nothing saved. */
@@ -863,7 +1090,7 @@ function learnOrExplain(
 function resolves(spec: ResponseSpec, body: string | undefined): boolean {
   if (!body) return false;
   try {
-    const d = extract(spec, body);
+    const d = within(() => extract(spec, body), DEADLINE.read);
     return d !== undefined && d !== null && !(Array.isArray(d) && !d.length);
   } catch {
     return false;
@@ -873,7 +1100,7 @@ function resolves(spec: ResponseSpec, body: string | undefined): boolean {
 /** The data the op's recipe reads from an answer, as JSON; undefined when it is no data, or empty. */
 function answerOf(op: Operation, r: Observed | undefined): string | undefined {
   if (!r) return undefined;
-  const j = judge(op, r);
+  const j = judged(op, r);
   if (j.class !== "ok" || j.data === undefined || j.data === null || (Array.isArray(j.data) && !j.data.length))
     return undefined;
   return JSON.stringify(j.data);
@@ -902,7 +1129,7 @@ async function ignoredAlone(
   changed: string[],
   run1: Exchange,
   session: Session,
-  opts: { site: string; fetchImpl?: typeof fetch },
+  opts: { site: string; fetchImpl?: typeof fetch; publicOnly?: boolean },
 ): Promise<string[]> {
   const one = answerOf(op, observed(run1));
   if (one === undefined) return [];
@@ -953,7 +1180,7 @@ function saveOperation(
   let preview: AddResult["preview"];
   const res = exchange?.response;
   if (exchange && res) {
-    const j = judge(operation, {
+    const j = judged(operation, {
       status: res.status,
       headers: res.headers,
       body: res.body ?? "",
@@ -1214,6 +1441,7 @@ export async function addOperation(input: AddInput): Promise<AddResult> {
     params,
     ...(checks?.length && !i.write ? { checks } : {}),
     ...(old?.links ? { links: old.links } : {}),
+    ...(i.publicOnly ? { publicOnly: true as const } : {}),
   };
   if (stood) operation = stood.restore(operation);
   // Paging and a readback are the caller's contract too: kept while they still fit the op learned again.
@@ -1255,8 +1483,12 @@ export async function addOperation(input: AddInput): Promise<AddResult> {
   // signatures. One replay of run 1's template with example 2's args tells them apart.
   if (operation.minTier === 3 && operation.readOnly && run2) {
     try {
-      const sent = await sendDerived(operation, ex2 ?? ex1, session, { site: i.site, fetchImpl: i.fetchImpl });
-      if (judge(operation, sent).class === "ok") {
+      const sent = await sendDerived(operation, ex2 ?? ex1, session, {
+        site: i.site,
+        fetchImpl: i.fetchImpl,
+        publicOnly: i.publicOnly,
+      });
+      if (judged(operation, sent).class === "ok") {
         operation = { ...operation, minTier: 1 };
         warnings.push(
           "...but run 1's template replays fine with example 2's args, so those values are session-scoped: minTier 1",
@@ -1287,6 +1519,7 @@ export async function addOperation(input: AddInput): Promise<AddResult> {
       doubted = await ignoredAlone(operation, ex1, ex2, changed, learned.exchange, session, {
         site: i.site,
         fetchImpl: i.fetchImpl,
+        publicOnly: i.publicOnly,
       });
       if (doubted.length)
         reason = `example 1's args with only ${values(doubted)} from example 2 ${doubted.length > 1 ? "were" : "was"} answered with example 1's data`;
@@ -1377,27 +1610,73 @@ function nearestToken(texts: string[], v: Volatile, strict = false): string | un
 }
 
 /**
+ * Whether the rescan may fetch `url`. The spec names the trigger; a page names its scripts and a
+ * server its redirects, and neither chooses an address on this machine or network. So such an
+ * address is fetched only on the trigger's own origin (`home`: asked first, so it costs no lookup and
+ * a site on localhost keeps healing), or where someone else's spec could send: https, a public host,
+ * no private address behind it (`publicAddress`).
+ */
+async function mayFetch(url: string, home: string): Promise<boolean> {
+  let u: URL;
+  try {
+    u = new URL(url);
+  } catch {
+    return false;
+  }
+  if (u.protocol !== "http:" && u.protocol !== "https:") return false;
+  return u.origin === home || (await publicAddress(url)) === undefined;
+}
+
+/**
+ * A body as text, read while `budget` lasts: one rescan keeps the document and every script for the
+ * token scan, so together they get what tier 1 reads of one body. A declared length over what is left
+ * is not read at all, and a stream is cut off where it runs out: no clues from that one.
+ */
+async function readText(r: Response, budget: { left: number }): Promise<string> {
+  const over = new Error("the rescan's pages are larger than api-anything reads");
+  if (Number(r.headers.get("content-length") ?? "") > budget.left) {
+    await r.body?.cancel().catch(() => {});
+    throw over;
+  }
+  if (!r.body) return "";
+  const reader = r.body.getReader();
+  const chunks: Uint8Array[] = [];
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    budget.left -= value.byteLength;
+    if (budget.left < 0) {
+      await reader.cancel().catch(() => {});
+      throw over;
+    }
+    chunks.push(value);
+  }
+  return new TextDecoder().decode(Buffer.concat(chunks));
+}
+
+/**
  * A page's text and where it ended up, for the rescan. Redirects are taken by hand (as many as a plain fetch would follow) so
- * that `off` is asked about every address before it is fetched: one it rules out is not fetched,
- * and the text is empty.
+ * that `off` and `mayFetch` are asked about every address before it is fetched: one they rule out is
+ * not fetched, and the text is empty.
  */
 async function fetchText(
   url: string,
   headers: (url: string) => Record<string, string>,
   fetchImpl: typeof fetch,
-  off: (url: string) => boolean,
+  o: { off: (url: string) => boolean; home: string; budget: { left: number } },
 ): Promise<{ text: string; url: string }> {
   try {
     const signal = AbortSignal.timeout(15_000);
-    for (let hops = 0; hops <= MAX_REDIRECTS && !off(url); hops++) {
+    for (let hops = 0; hops <= MAX_REDIRECTS && !o.off(url) && (await mayFetch(url, o.home)); hops++) {
       const r = await fetchImpl(url, { headers: headers(url), redirect: "manual", signal });
       const location = REDIRECT.has(r.status) ? r.headers.get("location") : null;
-      if (!location) return { text: r.ok ? await r.text() : "", url };
+      if (!location && r.ok) return { text: await readText(r, o.budget), url };
       await r.body?.cancel();
+      if (!location) break;
       url = new URL(location, url).href;
     }
   } catch {
-    /* unreachable, or too slow: no clues from it */
+    /* unreachable, too slow, or too large: no clues from it */
   }
   return { text: "", url };
 }
@@ -1415,7 +1694,7 @@ export async function rescan(
   args: Args,
   fetchImpl: typeof fetch = fetch,
 ): Promise<{ operation: Operation; diff: string } | undefined> {
-  if (!op.volatile.length) return undefined;
+  if (!op.volatile.length || triggerRefusal(op.trigger, args)) return undefined;
   const session = loadSession(site);
   const url = fillTrigger(op.trigger, args).url;
   const headers = (u: string) => {
@@ -1426,17 +1705,30 @@ export async function rescan(
     if (cookie) h.cookie = cookie;
     return h;
   };
-  const theWrite = (u: string) => !op.readOnly && matches(ownMatch(op), { method: "GET", url: u, headers: {} });
-  const { text: doc, url: docUrl } = await fetchText(url, headers, fetchImpl, theWrite);
+  const off = (u: string) => !op.readOnly && matches(ownMatch(op), { method: "GET", url: u, headers: {} });
+  if (hostnameOf(url) === undefined) return undefined;
+  // an op an agent learned over MCP: its trigger's own origin is held to the public-address rule too
+  const from = { off, home: op.publicOnly ? "" : new URL(url).origin, budget: { left: MAX_BODY_BYTES } };
+  const { text: doc, url: docUrl } = await fetchText(url, headers, fetchImpl, from);
   if (!doc) return undefined;
+  // One tag at a time (`tagsOf`), and the address tested apart from finding it: a pattern across the
+  // document, `<script\b[^>]*\bsrc=`, reads on to the next `>` from every tag that never closes. The
+  // last address in a tag is taken, as that pattern's greedy run took it.
+  const named = (tag: string, attr: string, ok: (address: string) => boolean = () => true) => {
+    const own = new RegExp(`^<${tag}\\b`, "i");
+    const value = new RegExp(`\\b${attr}=["']([^"']+)["']`, "gi");
+    return [...tagsOf(doc, tag)].flatMap(({ text }) => {
+      const found = own.test(text) ? [...text.matchAll(value)].map((m) => m[1]!).filter(ok) : [];
+      return found.slice(-1);
+    });
+  };
   // relative to the document's final URL: a redirect (a locale prefix) moves where "../static" points
-  const refs = [
-    ...doc.matchAll(/<script\b[^>]*\bsrc=["']([^"']+)["']/gi),
-    ...doc.matchAll(/<link\b[^>]*\bhref=["']([^"']+\.m?js(?:\?[^"']*)?)["']/gi),
-  ].map((m) => new URL(m[1]!, docUrl).href);
+  const refs = [...named("script", "src"), ...named("link", "href", (v) => /.\.m?js(?:\?.*)?$/s.test(v))].map(
+    (ref) => new URL(ref, docUrl).href,
+  );
   // ponytail: only scripts the document references directly; ids in lazily loaded chunks need recapture.
   const scripts = await Promise.all(
-    [...new Set(refs)].slice(0, 40).map(async (s) => (await fetchText(s, headers, fetchImpl, theWrite)).text),
+    [...new Set(refs)].slice(0, 40).map(async (s) => (await fetchText(s, headers, fetchImpl, from)).text),
   );
   const texts = [doc, ...scripts];
 
@@ -1461,7 +1753,7 @@ function template(op: Operation, args: Args): string {
   let req = op.request;
   try {
     // one seed for both sides: generated values are no change
-    req = buildRequest(op, args, { cookies: [], values: {} }, "");
+    req = within(() => buildRequest(op, args, { cookies: [], values: {} }, ""), DEADLINE.args);
   } catch {
     /* compare raw */
   }
@@ -1551,6 +1843,13 @@ function saveHealed(
   strategy: "rescan" | "recapture",
   attempt: Attempt,
 ): HealResult {
+  // an op an agent learned over MCP stays on public addresses: the page it heals from chose the new request
+  const sends = [op.request.url, ...op.slots.flatMap((s) => (s.from ? [s.from.request.url] : []))];
+  if (before.publicOnly && sends.some((u) => badAddress(u)))
+    return {
+      outcome: "failed",
+      reason: "the healed request is not https on a public host, and this operation goes only to public addresses",
+    };
   const allowed = new Set((op.public ?? []).map((h) => `$.request.headers.${h}`));
   const secrets = scanSecrets(op, credentialsOf(besideOrigins(loadSession(site), opUrls(op))), allowed).secrets;
   if (secrets.length)
@@ -1642,6 +1941,22 @@ function learnable(op: Operation, a: Args): boolean {
 }
 
 /**
+ * Why a read's recaptured request is neither replayed nor saved: its method may write and is not the
+ * one the op reads with, or it carries a GraphQL mutation. The page sent it where nothing is stopped
+ * (while it loaded) and the op's match covers it; the replay would send it from here as a read, with
+ * the session and with no `allowWrites`.
+ */
+function becameWrite(op: Operation, candidate: Operation): string | undefined {
+  if (!op.readOnly) return undefined;
+  const [was, now] = [op.request.method.toUpperCase(), candidate.request.method.toUpperCase()];
+  if (now !== was && !SAFE_METHODS.has(now))
+    return `the page's request is a ${now}, and ${op.name} reads with ${was}: a read's heal never takes a method that may write`;
+  if (graphqlDocuments(candidate.request).some(writesGraphql))
+    return `the page's request carries a GraphQL mutation, and ${op.name} is a read`;
+  return undefined;
+}
+
+/**
  * Rescan, then recapture; a candidate is saved only after `validate` (a replay) says ok.
  * A write's validation is the write itself, so a write gets exactly one validation in total.
  * Recapture learns from the call's args (defaults filled) when they can be located, else from the
@@ -1681,7 +1996,7 @@ export async function healOperation(
     return {
       outcome: "failed",
       attempt: last,
-      reason: `${tried}; recapture needs the browser, which this call does not run (maxTier 1, or an unconfirmed operation an agent pulled)`,
+      reason: `${tried}; recapture needs the browser, which this call does not run (maxTier 1, or an unconfirmed operation no person pulled)`,
     };
   // nothing was learned about the op: once a browser is installed, the next call heals
   if (!browserAvailable())
@@ -1725,8 +2040,11 @@ export async function healOperation(
       reason: `the trigger landed on a sign-in page (${run.loginWall})`,
     };
   }
-  if (!run.capture.exchanges.some((e) => matches(op.match, e.request))) {
-    const down = pageDown(run.capture);
+  // A read learns from what left the browser. What its guard stopped is not the read's request: learned,
+  // it would be replayed from here as one (seen: a GET read healed into the POST its click sends).
+  const exchanges = op.readOnly ? run.capture.exchanges.filter((e) => !e.aborted) : run.capture.exchanges;
+  if (!exchanges.some((e) => matches(op.match, e.request))) {
+    const down = pageDown(run.capture) ?? cutShort(op, run.capture);
     if (down) return { outcome: "failed", attempt: down, transient: true, reason: down.reason };
     return {
       outcome: "failed",
@@ -1734,7 +2052,15 @@ export async function healOperation(
       reason: firedNothing(op, run.capture),
     };
   }
-  const seen = run.matched && judgeExchange(op, run.matched);
+  let seen: Attempt | undefined;
+  try {
+    seen = run.matched && judgeExchange(op, run.matched);
+  } catch (e) {
+    if (!(e instanceof DeadlineExceeded)) throw e;
+    // the site's own answer takes too long to read: nothing to learn from, and nothing to retry
+    const reason = `the site's own answer was not read: ${e.message}`;
+    return { outcome: "failed", attempt: { tier: 3, class: "error", reason }, reason };
+  }
   if (seen && learnedNothing(seen))
     return {
       outcome: "failed",
@@ -1743,7 +2069,7 @@ export async function healOperation(
       reason: `the site's own request says ${seen.class}: ${seen.reason}`,
     };
   // The site's own answer is this call's answer only when the trigger ran with this call's args.
-  const fallback = op.readOnly && learnArgs === callArgs && run.matched ? judgeExchange(op, run.matched) : undefined;
+  const fallback = op.readOnly && learnArgs === callArgs ? seen : undefined;
   let fresh: Operation;
   let sessionValues: Record<string, string>;
   let settings: string[];
@@ -1773,7 +2099,7 @@ export async function healOperation(
       sessionValues,
       settings,
     } = learnOperation({
-      exchanges: run.capture.exchanges,
+      exchanges,
       pages: capturePages(run.capture),
       examples: [learnArgs],
       cookies: run.capture.cookies,
@@ -1835,6 +2161,7 @@ export async function healOperation(
     ...(op.links ? { links: op.links } : {}),
     ...(op.readback ? { readback: op.readback } : {}),
     ...(op.unproven ? { unproven: op.unproven } : {}),
+    ...(op.publicOnly ? { publicOnly: op.publicOnly } : {}),
     minTier: Math.max(op.minTier, fresh.minTier) as Operation["minTier"],
     response: {
       ...fresh.response,
@@ -1847,6 +2174,8 @@ export async function healOperation(
       embedded: op.response.embedded,
     },
   };
+  const wrote = becameWrite(op, candidate);
+  if (wrote) return { outcome: "failed", attempt: last, fallback, reason: `${wrote}; not saved` };
   const lost = [...new Set(op.slots.flatMap((s) => (s.param ? [s.param] : [])))].filter(
     (p) => !candidate.slots.some((s) => s.param === p),
   );

@@ -20,6 +20,7 @@ import { buildRequest, decodeBody, holdsRef, REDIRECT, unknownArgs } from "../..
 import { type Operation, parseSite } from "../../src/spec.js";
 import { badAddress, vetShared } from "../../src/vet.js";
 import { networksOf } from "./auth.js";
+import { callArg } from "./pages.js";
 import { count, type D1Database } from "./store.js";
 import { versionHash } from "./upload.js";
 
@@ -190,13 +191,10 @@ type TryResult = Pick<CallResult, "ok" | "class" | "data" | "truncated" | "ms" |
   cached?: true;
 };
 
-const shellArg = (s: string) => (/^[\w.,:/@%+=-]+$/.test(s) ? s : `'${s.replace(/'/g, `'\\''`)}'`);
-const argText = (v: unknown) => (typeof v === "string" ? v : typeof v === "object" ? JSON.stringify(v) : String(v));
-
 /** How to call it for real; `ran`: the catalog sent the request (or answered from its cache). */
 function nextOf(site: string, op?: string, args: Record<string, unknown> = {}, ran = false): string {
   const call = op
-    ? ` then \`${["api-anything call", site, op, ...Object.entries(args).map(([k, v]) => shellArg(`${k}=${argText(v)}`))].join(" ")}\``
+    ? ` then \`${["api-anything call", site, op, ...Object.entries(args).map(([k, v]) => callArg(k, v))].join(" ")}\``
     : ` then ask your agent for ${site}`;
   const how = `from your own machine and agent: \`npx -y api-anything setup\` (Node 22),${call}.`;
   return ran ? `This ran once on the catalog's server as a demo. To call it ${how}` : `To call ${site} ${how}`;

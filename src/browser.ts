@@ -365,13 +365,45 @@ export async function addCookiesToProfile(cookies: StoredCookie[], profileDir: s
   }
 }
 
-/** Clear one site's cookies from the profile: any host under the registrable domain. */
-export async function clearProfileCookies(site: string, profileDir: string): Promise<void> {
+/**
+ * Clear one site from the profile: the cookies of any host under the registrable domain `site`, then
+ * what its pages stored (localStorage, IndexedDB, caches, service workers) for the https and http
+ * origins of the domain, its www. host, every host those cookies were on, and `origins` under it (a
+ * port is part of an origin, and no cookie names one). Throws when the cookies could not be cleared;
+ * answers whether the storage was.
+ */
+export async function clearProfileSite(site: string, profileDir: string, origins: string[] = []): Promise<boolean> {
   const release = hold();
   try {
     const ctx = await openBrowser({ profileDir });
     const esc = site.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    await ctx.clearCookies({ domain: new RegExp(`(^|\\.)${esc}$`) });
+    const under = new RegExp(`(^|\\.)${esc}$`);
+    const hosts = new Set([site, `www.${site}`]);
+    for (const c of await ctx.cookies()) {
+      const host = c.domain.replace(/^\./, "").toLowerCase();
+      if (under.test(host)) hosts.add(host);
+    }
+    await ctx.clearCookies({ domain: under });
+    const all = new Set([...hosts].flatMap((h) => [`https://${h}`, `http://${h}`]));
+    for (const o of origins) {
+      try {
+        const u = new URL(o);
+        if (/^https?:$/.test(u.protocol) && under.test(u.hostname)) all.add(u.origin);
+      } catch {
+        /* no address */
+      }
+    }
+    let page: Page | undefined;
+    try {
+      page = await ctx.newPage();
+      const cdp = await ctx.newCDPSession(page);
+      for (const origin of all) await cdp.send("Storage.clearDataForOrigin", { origin, storageTypes: "all" });
+      return true;
+    } catch {
+      return false;
+    } finally {
+      await page?.close().catch(() => {});
+    }
   } finally {
     release();
   }
@@ -436,6 +468,21 @@ const within = <T>(p: Promise<T>, otherwise: T, ms = SEAL_MS): Promise<T> => {
   });
   // cleared when the call settles first: a timer left running keeps the process alive for its 5 s
   return Promise.race([p.catch(() => otherwise), late]).finally(() => clearTimeout(timer));
+};
+
+/**
+ * Whether `p` settled within `ms`; what it throws by then, it throws. One given up on is left to end
+ * unheard: closing its page rejects it, and nothing else would handle that.
+ */
+const inTime = (p: Promise<unknown>, ms: number): Promise<boolean> => {
+  let timer: NodeJS.Timeout | undefined;
+  const late = new Promise<boolean>((r) => {
+    timer = setTimeout(() => {
+      p.catch(() => {});
+      r(false);
+    }, ms);
+  });
+  return Promise.race([p.then(() => true), late]).finally(() => clearTimeout(timer));
 };
 
 /**
@@ -579,9 +626,15 @@ export interface TriggerOptions {
   confirm?: (a: { message: string; origin: string; step: number }) => boolean;
   /** extra wait after the network first goes quiet (default 300) */
   settleMs?: number;
-  /** overall budget; also the per-action Playwright timeout (default 30000) */
+  /** overall budget; also the per-action Playwright timeout (default TRIGGER_BUDGET_MS) */
   timeoutMs?: number;
 }
+
+/**
+ * A run's whole budget: the browser's start, the page's load, a challenge's wait and the steps. The
+ * bundled specs' step waits add up to 7 s at most, and a test holds every one of them to a third of this.
+ */
+export const TRIGGER_BUDGET_MS = 30_000;
 
 /** A page load that treats "this URL is a download" as loaded (the request is still captured). */
 async function goto(page: Page, url: string, referer?: string): Promise<void> {
@@ -657,7 +710,7 @@ function requestBody(req: Request): string | undefined {
 
 /** Load the trigger in the browser and return every exchange it caused, with bodies and cookies. */
 export async function runTrigger(o: TriggerOptions): Promise<CaptureResult> {
-  const timeout = o.timeoutMs ?? 30_000;
+  const timeout = o.timeoutMs ?? TRIGGER_BUDGET_MS;
   const deadline = Date.now() + timeout;
   const release = hold();
   let ctx: BrowserContext;
@@ -676,7 +729,18 @@ export async function runTrigger(o: TriggerOptions): Promise<CaptureResult> {
 
   const exchanges: Exchange[] = [];
   let acting = false;
-  const intercept = o.intercept;
+  // The guard reads what a page sent, and what it throws on (a body nested too deep to walk) it has
+  // not judged: that request does not leave. Unheard, the throw would reject a route's handler, or
+  // raise in the DevTools listener, and end the process with the request still paused.
+  const intercept =
+    o.intercept &&
+    ((e: Exchange, steps: boolean, via?: Exchange) => {
+      try {
+        return o.intercept!(e, steps, via);
+      } catch {
+        return true;
+      }
+    });
   // Set when the run ends: from then on nothing its pages send may leave.
   let sealed = false;
   /** each guarded page's tap, once attached (undefined when that failed) */
@@ -1059,9 +1123,21 @@ export async function runTrigger(o: TriggerOptions): Promise<CaptureResult> {
     acting = true;
     // steps typed into a challenge interstitial would time out on selectors the real page has
     if (o.steps?.length) await outwait();
+    // The step the time ran out in: the caller is told, since what the rest would have sent is not missing.
+    let cut: number | undefined;
     for (const [i, s] of (o.steps ?? []).entries()) {
-      step = i;
-      await runStep(page, s);
+      // A step gets what is left of the run's budget, not one of its own: a wait is a timer of the
+      // spec's length, and a key press or the look at a field to fill has no timeout at all.
+      const left = deadline - Date.now();
+      if (left > 0) {
+        step = i;
+        page.setDefaultTimeout(left);
+      }
+      // a second more: a step with a timeout of its own (a click whose button is gone) fails with it
+      if (left <= 0 || !(await inTime(runStep(page, s), left + 1000))) {
+        cut = i;
+        break;
+      }
     }
     await waitForData();
     // A JS challenge (AWS WAF, Cloudflare) solves itself and reloads, often after a second or more:
@@ -1101,6 +1177,7 @@ export async function runTrigger(o: TriggerOptions): Promise<CaptureResult> {
       // a copy: what a page shows while the run closes it is not the run's
       ...(dialogs.length ? { dialogs: [...dialogs] } : {}),
       wait,
+      ...(cut === undefined ? {} : { cut }),
     };
   } finally {
     over = true;
