@@ -726,6 +726,8 @@ export function exportSite(
   for (const op of spec.operations) {
     delete op.learnedAt;
     delete op.version;
+    // how this machine learned it; whoever pulls the op runs it under the shared rules anyway
+    delete op.publicOnly;
   }
   const allowed = new Set<string>();
   const named: [string, string][] = [];

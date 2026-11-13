@@ -61,6 +61,18 @@ class Transport(WithFake):
         self.assertEqual(Client(self.fake.url).health(), {"ok": True, "version": "0.4.0"})
         self.assertNotIn("authorization", self.fake.last["headers"])
 
+    def test_health_sends_no_token(self) -> None:
+        # whoever answers the health check has shown nothing: it gets no token the client holds
+        with open(os.path.join(self.home, "serve-token"), "w") as f:
+            f.write(TOKEN)
+        self.assertEqual(Client(self.fake.url).health()["ok"], True)
+        self.assertNotIn("authorization", self.fake.last["headers"])
+        os.environ["API_ANYTHING_TOKEN"] = "from-env"
+        Client(self.fake.url).health()
+        self.assertNotIn("authorization", self.fake.last["headers"])
+        self.client().health()
+        self.assertNotIn("authorization", self.fake.last["headers"])
+
     def test_bearer_token_from_the_file(self) -> None:
         with open(os.path.join(self.home, "serve-token"), "w") as f:
             f.write(TOKEN)

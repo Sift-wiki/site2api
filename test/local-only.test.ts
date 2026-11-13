@@ -134,8 +134,11 @@ for (const how of ["env", "setting"] as const)
       mine();
       assert.equal(await uploadName("mine"), "example-com");
       assert.equal(await upgradeBundled("hacker-news"), false);
-      const op = loadSite("mine")!.site.operations[0]!;
-      assert.equal(await servedNow("mine", op), undefined);
+      // servedNow asks only for a spec that is someone else's: a pulled one, here in the user's folder as a heal leaves it
+      const theirs = { from: `${base}/v1/sites/pulled`, sha256: "0".repeat(64) };
+      saveSite(parseSite({ ...loadSite("mine")!.site, name: "pulled", shared: theirs }));
+      const op = loadSite("pulled")!.site.operations[0]!;
+      assert.equal(await servedNow("pulled", op), undefined);
       assert.equal(await verifyCandidates(), 0);
       queueReport({ hash: "a".repeat(64), outcome: "ok", tier: 1, ms: 5 });
       await flushReports();

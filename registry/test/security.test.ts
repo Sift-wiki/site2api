@@ -1,9 +1,11 @@
 /** The registry's defences against a hostile uploader: each test reproduces one way in that used to work. */
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
-import { OperationSchema } from "../../src/spec.js";
+import { requestSig } from "../../src/registry-api.js";
+import { OperationSchema, parseSite } from "../../src/spec.js";
+import { LIMITS, vetShared } from "../../src/vet.js";
 import { search } from "../src/catalog.js";
-import type { Env } from "../src/worker.js";
+import worker, { type Env } from "../src/worker.js";
 import { ADMIN, evidence, install, op, registry, report, seed, send, site, upload } from "./helpers.js";
 
 /** A site on example.net, its op on www.example.net. */
@@ -16,7 +18,7 @@ const net = (name: string, over: Record<string, unknown> = {}) => ({
   }),
 });
 
-async function uploaded(env: Env, body: unknown): Promise<{ status: string; reasons?: string[] }> {
+async function uploaded(env: Env, body: unknown): Promise<{ hash: string; status: string; reasons?: string[] }> {
   const r = await send(env, "POST", "/v1/versions", { as: install(), body });
   assert.equal(r.status, 201, r.text);
   return r.body;
@@ -87,6 +89,297 @@ describe("reads that write, sent to review", () => {
       r.reasons?.some((x) => /caller's own cookie:csrftoken/.test(x)),
       JSON.stringify(r),
     );
+  });
+
+  test("a cookie or session ref inside a slot's template is review", async () => {
+    const templated = (slot: Record<string, unknown>, header: string) =>
+      upload({
+        operation: op({
+          request: { method: "GET", url: "https://www.example.com/api/search?q=dune", headers: { [header]: "x" } },
+          slots: [{ param: "q", at: ["query:q"] }, slot],
+        }),
+      });
+    const bearer = await uploaded(
+      registry().env,
+      templated({ param: "q", at: ["header:authorization"], template: "Bearer {session:token}" }, "authorization"),
+    );
+    assert.equal(bearer.status, "review", JSON.stringify(bearer));
+    assert.ok(
+      bearer.reasons?.some((x) => /caller's own session:token/.test(x)),
+      JSON.stringify(bearer),
+    );
+    const csrf = await uploaded(
+      registry().env,
+      templated({ param: "q", at: ["header:x-csrftoken"], template: "{cookie:csrftoken}" }, "x-csrftoken"),
+    );
+    assert.equal(csrf.status, "review", JSON.stringify(csrf));
+    assert.ok(
+      csrf.reasons?.some((x) => /caller's own cookie:csrftoken/.test(x)),
+      JSON.stringify(csrf),
+    );
+    // a lookup's slot counts as the op's own
+    const lookup = await uploaded(
+      registry().env,
+      upload({
+        operation: op({
+          request: { method: "GET", url: "https://www.example.com/api/search?q=dune&id=7", headers: {} },
+          slots: [
+            { param: "q", at: ["query:q"] },
+            {
+              at: ["query:id"],
+              path: "id",
+              from: {
+                request: { method: "GET", url: "https://www.example.com/api/id?q=dune&t=x", headers: {} },
+                slots: [
+                  { param: "q", at: ["query:q"] },
+                  { param: "q", at: ["query:t"], template: "{cookie:csrftoken}" },
+                ],
+              },
+            },
+          ],
+        }),
+      }),
+    );
+    assert.ok(
+      lookup.reasons?.some((x) => /caller's own cookie:csrftoken/.test(x)),
+      JSON.stringify(lookup),
+    );
+    // an arg's hole and literal braces are no ref
+    const plain = await uploaded(
+      registry().env,
+      templated({ param: "q", at: ["header:x-note"], template: "{q} {{session:token}}" }, "x-note"),
+    );
+    assert.equal(plain.status, "candidate", JSON.stringify(plain));
+  });
+
+  test("a query document beside anything else is review", async () => {
+    const gql = "https://www.example.com/graphql";
+    const json = { "content-type": "application/json" };
+    const variables = [{ param: "q", at: ["body", "json:/variables/q"] }];
+    const cases: [string, string, Record<string, string>, string][] = [
+      [
+        "a decoy query leaf",
+        "https://www.example.com/api/account/close",
+        json,
+        '{"confirm":true,"query":"query Q { viewer { id } }"}',
+      ],
+      [
+        "a batch with a documentless item",
+        gql,
+        json,
+        '[{"query":"{ __typename }"},{"operationName":"CloseAccount","variables":{"confirm":true},"extensions":{"persistedQuery":{"version":1}}}]',
+      ],
+      [
+        "a document beside a persisted query",
+        gql,
+        json,
+        '{"query":"{ __typename }","operationName":"CloseAccount","extensions":{"persistedQuery":{"version":1}}}',
+      ],
+      [
+        "no document under a content type that says graphql",
+        "https://www.example.com/api/account/close",
+        { "content-type": "application/json; profile=graphql" },
+        '{"confirm":true}',
+      ],
+      [
+        "a JSON mutation under application/graphql+json",
+        gql,
+        { "content-type": "application/graphql+json" },
+        '{"query":"mutation { closeAccount { ok } }"}',
+      ],
+      ["a repeated query key", gql, json, '{"query":"mutation { closeAccount { ok } }","query":"{ __typename }"}'],
+      ["a batch item that is no object", gql, json, '[{"query":"{ __typename }"},"closeAccount"]'],
+      ["an empty document", gql, json, '{"query":" "}'],
+      ["JSON sent as a raw document", gql, { "content-type": "application/graphql" }, '{"confirm":true}'],
+    ];
+    for (const [what, url, headers, body] of cases) {
+      const r = await send(registry().env, "POST", "/v1/versions", {
+        as: install(),
+        body: upload({
+          operation: op({
+            name: "viewer",
+            request: { method: "POST", url, headers, body },
+            slots: [],
+            params: [],
+            trigger: { url: "https://www.example.com/me" },
+            match: { host: "www.example.com", path: new URL(url).pathname },
+          }),
+        }),
+      });
+      // the shared rules may refuse it outright; what it must never be is served unreviewed
+      if (r.status === 201) assert.equal(r.body.status, "review", `${what}: ${r.text}`);
+      else assert.equal(r.status, 422, `${what}: ${r.text}`);
+    }
+
+    // what stays a candidate: documents, their variables and their names, and nothing else
+    const queries: [string, Record<string, string>, string, unknown[]][] = [
+      [
+        "a named query",
+        json,
+        '{"operationName":"Search","query":"query Search($q: String) { search(q: $q) { title } }","variables":{"q":"dune"}}',
+        variables,
+      ],
+      ["a shorthand query", json, '{"query":"{ search(first: 3) { title } }"}', []],
+      [
+        "a batch of two queries",
+        json,
+        '[{"query":"query A { a }"},{"query":"query Search($q: String) { search(q: $q) { title } }","variables":{"q":"dune"}}]',
+        [{ param: "q", at: ["body", "json:/1/variables/q"] }],
+      ],
+      [
+        "a raw document",
+        { "content-type": "application/graphql; charset=utf-8" },
+        "query Search { search { title } }",
+        [],
+      ],
+    ];
+    for (const [what, headers, body, slots] of queries) {
+      const r = await uploaded(
+        registry().env,
+        upload({
+          operation: op({
+            name: "gqlSearch",
+            request: { method: "POST", url: gql, headers, body },
+            slots,
+            params: slots.length ? op().params : [],
+            trigger: { url: "https://www.example.com/search" },
+            match: { host: "www.example.com", path: "/graphql" },
+          }),
+        }),
+      );
+      assert.equal(r.status, "candidate", `${what}: ${JSON.stringify(r)}`);
+    }
+  });
+
+  test("a POST whose document a slot fills is review", async () => {
+    // the stored document is a param's placeholder: whatever the param's default says is what a call sends
+    const filled = await send(registry().env, "POST", "/v1/versions", {
+      as: install(),
+      body: upload({
+        operation: op({
+          name: "viewer",
+          request: {
+            method: "POST",
+            url: "https://www.example.com/api/gql",
+            headers: { "content-type": "application/json" },
+            body: '{"query":"{doc}"}',
+          },
+          slots: [{ param: "doc", at: ["body", "json:/query"] }],
+          params: [
+            {
+              name: "doc",
+              type: "string",
+              required: false,
+              default: "mutation { closeAccount(confirm: true) { ok } }",
+              example: "{ viewer { id } }",
+            },
+          ],
+          trigger: { url: "https://www.example.com/me" },
+          match: { host: "www.example.com", path: "/api/gql" },
+          response: { format: "json", extract: "data" },
+        }),
+      }),
+    });
+    if (filled.status === 201) assert.equal(filled.body.status, "review", filled.text);
+    else assert.equal(filled.status, 422, filled.text);
+
+    // a search API's body has the same shape, so it is a maintainer's call too
+    const searchBody = await uploaded(
+      registry().env,
+      upload({
+        operation: op({
+          request: {
+            method: "POST",
+            url: "https://www.example.com/api/search",
+            headers: { "content-type": "application/json" },
+            body: '{"query":"{q}"}',
+          },
+          slots: [{ param: "q", at: ["body", "json:/query"] }],
+        }),
+      }),
+    );
+    assert.equal(searchBody.status, "review", JSON.stringify(searchBody));
+    assert.ok(
+      searchBody.reasons?.some((x) => /a read sent as POST, not a GraphQL query/.test(x)),
+      JSON.stringify(searchBody),
+    );
+  });
+
+  test("a GraphQL body another parser would read differently is review", async () => {
+    const hidden = '{"query":"{ a }","variables":{"x":"&query=mutation{closeAccount{ok}}&y="}}';
+    const form = "application/x-www-form-urlencoded";
+    const cases: [string, Record<string, string>, string, unknown[], unknown[]][] = [
+      // a form parser reads query=mutation{closeAccount{ok}}
+      ["JSON under a form content type", { "content-type": form }, hidden, [], []],
+      ["JSON under no content type", {}, hidden, [], []],
+      ["JSON under text/plain", { "content-type": "text/plain" }, hidden, [], []],
+      [
+        "a slot that fills the content type",
+        { "content-type": "application/json" },
+        hidden,
+        [{ param: "ct", at: ["header:content-type"] }],
+        [{ name: "ct", type: "string", required: false, default: form }],
+      ],
+      [
+        "a header slot, however it is cased",
+        { "content-type": "application/json" },
+        hidden,
+        [{ param: "ct", at: ["header:Content-Type"] }],
+        [{ name: "ct", type: "string", required: false, default: form }],
+      ],
+      [
+        "a form slot on a raw document",
+        { "content-type": "application/graphql" },
+        "query Search { search { title } }",
+        [{ param: "x", at: ["form:x"] }],
+        [{ name: "x", type: "string", required: false, default: "1" }],
+      ],
+      [
+        "a form slot on a JSON body",
+        { "content-type": "application/json" },
+        '{"query":"{ a }"}',
+        [{ param: "x", at: ["form[1]:x"] }],
+        [{ name: "x", type: "string", required: false, default: "1" }],
+      ],
+    ];
+    for (const [what, headers, body, slots, params] of cases) {
+      const r = await send(registry().env, "POST", "/v1/versions", {
+        as: install(),
+        body: upload({
+          operation: op({
+            name: "viewer",
+            request: { method: "POST", url: "https://www.example.com/graphql", headers, body },
+            slots,
+            params,
+            trigger: { url: "https://www.example.com/me" },
+            match: { host: "www.example.com", path: "/graphql" },
+          }),
+        }),
+      });
+      if (r.status === 201) assert.equal(r.body.status, "review", `${what}: ${r.text}`);
+      else assert.equal(r.status, 422, `${what}: ${r.text}`);
+    }
+    // JSON as JSON, with its charset, and under the media type that says GraphQL over JSON
+    for (const type of ["application/json; charset=utf-8", "application/graphql+json"]) {
+      const r = await uploaded(
+        registry().env,
+        upload({
+          operation: op({
+            name: "gqlSearch",
+            request: {
+              method: "POST",
+              url: "https://www.example.com/graphql",
+              headers: { "content-type": type },
+              body: '{"query":"query Search($q: String) { search(q: $q) { title } }","variables":{"q":"dune"}}',
+            },
+            slots: [{ param: "q", at: ["body", "json:/variables/q"] }],
+            trigger: { url: "https://www.example.com/search" },
+            match: { host: "www.example.com", path: "/graphql" },
+          }),
+        }),
+      );
+      assert.equal(r.status, "candidate", `${type}: ${JSON.stringify(r)}`);
+    }
   });
 
   test("a new op name on a site with a login is review; a new version of an op it has is not", async () => {
@@ -193,6 +486,90 @@ describe("drive-by ops on established sites", () => {
   });
 });
 
+describe("an op name no live version holds is still new", () => {
+  const servedNames = async (env: Env) =>
+    (await send(env, "GET", "/v1/sites/example-com")).body.operations.map(
+      (o: { operation: { name: string }; status: string }) => `${o.operation.name}:${o.status}`,
+    );
+  const at = (name: string, path: string, description: string) =>
+    op({
+      name,
+      description,
+      request: { method: "GET", url: `https://www.example.com${path}?q=dune`, headers: {} },
+      match: { host: "www.example.com", path },
+    });
+
+  test("a second upload under a name only a review version holds is review, on an established site", async () => {
+    const { env } = registry();
+    await seed(env, { site, operations: [op()] });
+    const first = await uploaded(env, upload({ operation: at("follow", "/api/friendships/create", "List follows") }));
+    assert.equal(first.status, "review");
+    const again = await uploaded(
+      env,
+      upload({ operation: at("follow", "/api/friendships/create", "List follows, again") }),
+    );
+    assert.equal(again.status, "review", JSON.stringify(again));
+    assert.ok(
+      again.reasons?.some((x) => /new op on an established site: follow/.test(x)),
+      JSON.stringify(again),
+    );
+    assert.deepEqual(await servedNames(env), ["searchBooks:live"]);
+  });
+
+  test("the same on a site with a login, seeded or not", async () => {
+    const login = { ...site, loginCookies: ["sessionid"] };
+    const seeded = registry();
+    await seed(seeded.env, { site: login, operations: [op()] });
+    const book = (d: string) => upload({ operation: at("bookPage", "/api/book", d) });
+    assert.equal((await uploaded(seeded.env, book("A book"))).status, "review");
+    assert.equal((await uploaded(seeded.env, book("A book, again"))).status, "review");
+
+    const fresh = registry();
+    const own = (d: string) => upload({ site: login, operation: at("bookPage", "/api/book", d) });
+    assert.equal((await uploaded(fresh.env, own("A book"))).status, "review");
+    const again = await uploaded(fresh.env, own("A book, again"));
+    assert.equal(again.status, "review", JSON.stringify(again));
+    assert.ok(
+      again.reasons?.some((x) => /new op on a site with a login: bookPage/.test(x)),
+      JSON.stringify(again),
+    );
+  });
+
+  test("a re-upload under the name of a blocked op, or of one the seed dropped, is review", async () => {
+    const { env } = registry();
+    const first = (await seed(env, { site, operations: [op(), at("legacy", "/api/legacy", "Legacy")] })).body
+      .operations;
+    const hash = first.find((o: { name: string }) => o.name === "searchBooks").hash;
+    await send(env, "POST", `/v1/admin/versions/${hash}`, {
+      body: { status: "blocked" },
+      headers: { authorization: `Bearer ${ADMIN}` },
+    });
+    const blocked = await uploaded(
+      env,
+      upload({ operation: at("searchBooks", "/psettings/close-account", "Find books") }),
+    );
+    assert.equal(blocked.status, "review", JSON.stringify(blocked));
+
+    // the next seed no longer has legacy: its version is archived
+    await seed(env, { site, operations: [at("other", "/api/other", "Other")] });
+    const dropped = await uploaded(env, upload({ operation: at("legacy", "/psettings/close-account", "Legacy") }));
+    assert.equal(dropped.status, "review", JSON.stringify(dropped));
+    assert.deepEqual(await servedNames(env), ["other:live"]);
+  });
+
+  test("a version of a live op that keeps its match is a candidate, as is anything on a site with no live op", async () => {
+    const { env } = registry();
+    await seed(env, { site, operations: [op()] });
+    assert.equal((await uploaded(env, upload({ operation: op({ description: "repaired" }) }))).status, "candidate");
+
+    const fresh = registry();
+    assert.equal((await uploaded(fresh.env, upload())).status, "candidate");
+    assert.equal((await uploaded(fresh.env, upload({ operation: op({ description: "again" }) }))).status, "candidate");
+    const second = at("second", "/api/second", "Second");
+    assert.equal((await uploaded(fresh.env, upload({ operation: second }))).status, "candidate");
+  });
+});
+
 describe("takeover of a live op", () => {
   test("the incumbent is served ahead of any newer live version until it degrades", async () => {
     const { env } = registry();
@@ -259,6 +636,358 @@ describe("takeover of a live op", () => {
     raw.prepare("UPDATE versions SET status = 'degraded' WHERE hash = ?").run(live.hash);
     const again = await uploaded(env, upload({ site: li, operation: at("/psettings/close-account", "ATTACKER 2") }));
     assert.equal(again.status, "review");
+  });
+
+  test("a site the crowd made live stays established while its only live op is degraded", async () => {
+    const { env, raw } = registry();
+    const first = (await send(env, "POST", "/v1/versions", { as: install(), body: upload() })).body;
+    await report(env, install(), first.hash, "ok", "198.51.100.1");
+    await report(env, install(), first.hash, "ok", "192.0.2.1");
+    const served = async () => (await send(env, "GET", "/v1/sites/example-com")).body.operations;
+    assert.equal((await served())[0].status, "live");
+    raw.prepare("UPDATE versions SET status = 'degraded' WHERE hash = ?").run(first.hash);
+
+    const moved = op({
+      description: "ATTACKER",
+      request: { method: "GET", url: "https://www.example.com/psettings/close-account?q=dune", headers: {} },
+      match: { host: "www.example.com", path: "/psettings/close-account" },
+    });
+    const close = await uploaded(env, upload({ operation: moved }));
+    assert.equal(close.status, "review", JSON.stringify(close));
+    const extra = op({ name: "follow", match: { host: "www.example.com", path: "/api/follow" } });
+    assert.equal((await uploaded(env, upload({ operation: extra }))).status, "review");
+    assert.deepEqual(
+      (await served()).map((o: { hash: string }) => o.hash),
+      [first.hash],
+      "the degraded incumbent is still what callers get",
+    );
+    // a heal that keeps the match and the request is a candidate, as on any established site
+    assert.equal((await uploaded(env, upload({ operation: op({ description: "repaired" }) }))).status, "candidate");
+  });
+});
+
+describe("a site that had a live op", () => {
+  test("stays established once the daily job archives its degraded op", async () => {
+    const { env, raw } = registry();
+    const first = (await send(env, "POST", "/v1/versions", { as: install(), body: upload() })).body;
+    await report(env, install(), first.hash, "ok", "198.51.100.1");
+    await report(env, install(), first.hash, "ok", "192.0.2.1");
+    const status = () =>
+      (raw.prepare("SELECT status FROM versions WHERE hash = ?").get(first.hash) as { status: string }).status;
+    assert.equal(status(), "live");
+    // it stops working: failures from three networks, and no ok for 40 days
+    for (const ip of ["100.64.1.1", "100.64.2.1", "100.64.3.1"]) await report(env, install(), first.hash, "fail", ip);
+    assert.equal(status(), "degraded");
+    raw
+      .prepare("UPDATE versions SET last_ok_at = ? WHERE hash = ?")
+      .run(new Date(Date.now() - 40 * 86_400_000).toISOString(), first.hash);
+    await worker.scheduled({ scheduledTime: Date.now() }, env);
+    assert.equal(status(), "archived");
+
+    const moved = op({
+      description: "ATTACKER",
+      request: { method: "GET", url: "https://www.example.com/psettings/close-account?q=dune", headers: {} },
+      match: { host: "www.example.com", path: "/psettings/close-account" },
+    });
+    const close = await uploaded(env, upload({ operation: moved }));
+    assert.equal(close.status, "review", JSON.stringify(close));
+    const extra = op({ name: "follow", match: { host: "www.example.com", path: "/api/follow" } });
+    assert.equal((await uploaded(env, upload({ operation: extra }))).status, "review");
+    // a second name for its domain gets around nothing
+    const alias = await send(env, "POST", "/v1/versions", {
+      as: install(),
+      body: upload({ site: { ...site, name: "example-books" }, operation: moved }),
+    });
+    if (alias.status === 201) assert.equal(alias.body.status, "review", alias.text);
+    else assert.equal(alias.status, 422, alias.text);
+  });
+
+  test("a site whose versions were only ever candidates is not established", async () => {
+    const { env } = registry();
+    await uploaded(env, upload());
+    const extra = op({ name: "bookPage", match: { host: "www.example.com", path: "/api/book" } });
+    assert.equal((await uploaded(env, upload({ operation: extra }))).status, "candidate");
+  });
+});
+
+describe("a version that keeps the incumbent's match and sends elsewhere", () => {
+  const li = { name: "linkedin", domain: "example.com", baseUrl: "https://www.example.com" };
+  const search = (over: Record<string, unknown> = {}) =>
+    op({
+      name: "search",
+      description: "Search people",
+      request: { method: "GET", url: "https://www.example.com/api/search?q=dune", headers: {} },
+      match: { host: "www.example.com", path: "/api/search" },
+      ...over,
+    });
+  const moved = /its request .*differs from the live version's .*under the same match/;
+  const judged = async (incumbent: unknown, next: unknown) => {
+    const { env } = registry();
+    assert.equal((await seed(env, { site: li, operations: [incumbent] })).status, 200);
+    return uploaded(env, upload({ site: li, operation: next }));
+  };
+  const review = async (what: string, incumbent: unknown, next: unknown) => {
+    const r = await judged(incumbent, next);
+    assert.equal(r.status, "review", `${what}: ${JSON.stringify(r)}`);
+    assert.ok(
+      r.reasons?.some((x) => moved.test(x)),
+      `${what}: ${JSON.stringify(r)}`,
+    );
+  };
+  const elsewhere = { method: "GET", url: "https://www.example.com/psettings/close-account?q=dune", headers: {} };
+
+  test("a request moved under the same match is review", async () => {
+    await review("another path", search(), search({ description: "ATTACKER", request: elsewhere }));
+    // the template stays put; the params' defaults move it on every call that leaves them out
+    await review(
+      "path slots with defaults",
+      search(),
+      search({
+        slots: [
+          { param: "q", at: ["query:q"] },
+          { param: "a", at: ["path:0"] },
+          { param: "b", at: ["path:1"] },
+        ],
+        params: [
+          { name: "q", type: "string", required: true, example: "dune" },
+          { name: "a", type: "string", required: false, default: "psettings" },
+          { name: "b", type: "string", required: false, default: "close-account" },
+        ],
+      }),
+    );
+    // fetch resolves the dot segments, and the slots fill what is left of them
+    await review(
+      "dot segments",
+      search(),
+      search({
+        request: { method: "GET", url: "https://www.example.com/x/../api/search?q=dune", headers: {} },
+        slots: [
+          { param: "q", at: ["query:q"] },
+          { param: "a", at: ["path:2"] },
+          { param: "b", at: ["path:3"] },
+        ],
+        params: [
+          { name: "q", type: "string", required: true, example: "dune" },
+          { name: "a", type: "string", required: false, default: "psettings" },
+          { name: "b", type: "string", required: false, default: "close-account" },
+        ],
+      }),
+    );
+  });
+
+  test("a trigger moved under the same request is review; a heal keeps its trigger", async () => {
+    const elsewhere = /its trigger differs from the live version's/;
+    const steps = [
+      { action: "fill", selector: "#q", value: "{q}" },
+      { action: "press", value: "Enter" },
+    ];
+    const cases: [string, unknown, unknown][] = [
+      [
+        "another page, opened at tier 3",
+        op(),
+        op({
+          minTier: 3,
+          trigger: { url: "https://www.example.com/psettings/close-account?confirm=1&q={q}" },
+        }),
+      ],
+      [
+        "added steps",
+        op(),
+        op({
+          minTier: 3,
+          trigger: {
+            url: op().trigger.url,
+            steps: [{ action: "goto", value: "https://www.example.com/psettings/close-account" }, ...steps],
+          },
+        }),
+      ],
+      [
+        "a page loaded first",
+        op(),
+        op({ trigger: { ...op().trigger, softFrom: "https://www.example.com/psettings" } }),
+      ],
+      [
+        "another step among the same ones",
+        op({ trigger: { url: op().trigger.url, steps } }),
+        op({ trigger: { url: op().trigger.url, steps: [steps[0], { action: "press", value: "Delete" }] } }),
+      ],
+    ];
+    for (const [what, incumbent, next] of cases) {
+      const { env } = registry();
+      assert.equal((await seed(env, { site, operations: [incumbent] })).status, 200);
+      const r = await send(env, "POST", "/v1/versions", { as: install(), body: upload({ operation: next }) });
+      if (r.status === 201) {
+        assert.equal(r.body.status, "review", `${what}: ${r.text}`);
+        assert.ok(
+          r.body.reasons.some((x: string) => elsewhere.test(x)),
+          `${what}: ${r.text}`,
+        );
+      } else assert.equal(r.status, 422, `${what}: ${r.text}`);
+    }
+
+    // a heal as heal.ts builds one: the request and its slots repaired, the op's own trigger kept
+    const healed = (trigger: unknown) =>
+      op({
+        request: { method: "GET", url: "https://www.example.com/api/search?query=dune", headers: {} },
+        slots: [{ param: "q", at: ["query:query"] }],
+        minTier: 2,
+        trigger,
+      });
+    const plain = registry().env;
+    await seed(plain, { site, operations: [op()] });
+    const heal = await uploaded(plain, upload({ operation: healed(op().trigger) }));
+    assert.equal(heal.status, "candidate", JSON.stringify(heal));
+    // the same trigger, whatever order its keys are written in
+    const stepped = registry().env;
+    await seed(stepped, { site, operations: [op({ trigger: { url: op().trigger.url, steps } })] });
+    const reordered = {
+      steps: steps.map((s) => Object.fromEntries(Object.entries(s).reverse())),
+      url: op().trigger.url,
+    };
+    const same = await uploaded(stepped, upload({ operation: healed(reordered) }));
+    assert.equal(same.status, "candidate", JSON.stringify(same));
+  });
+
+  test("a match that names no path or no host hides nothing", async () => {
+    const anyPath = { match: { host: "www.example.com" } };
+    await review("no path", search(anyPath), search({ ...anyPath, request: elsewhere }));
+    const anyHost = { match: { path: "/api/search" } };
+    await review(
+      "no host",
+      search(anyHost),
+      search({
+        ...anyHost,
+        request: { method: "GET", url: "https://files.example.com/api/search?q=dune", headers: {} },
+      }),
+    );
+    for (const loose of [anyPath, anyHost]) {
+      const heal = await judged(search(loose), search({ ...loose, description: "Search people, repaired" }));
+      assert.equal(heal.status, "candidate", JSON.stringify(heal));
+    }
+  });
+
+  test("a GraphQL body that names another operation under the same match is review", async () => {
+    const gql = (body: string, over: Record<string, unknown> = {}) =>
+      search({
+        request: {
+          method: "POST",
+          url: "https://www.example.com/graphql",
+          headers: { "content-type": "application/json" },
+          body,
+        },
+        slots: [{ param: "q", at: ["body", "json:/variables/q"] }],
+        trigger: { url: "https://www.example.com/search?q={q}" },
+        match: { host: "www.example.com", path: "/graphql", operationName: "Search" },
+        ...over,
+      });
+    const live = gql(
+      '{"operationName":"Search","query":"query Search($q: String) { search(q: $q) { title } }","variables":{"q":"dune"}}',
+    );
+    await review(
+      "another name",
+      live,
+      gql(
+        '{"operationName":"Viewer","query":"query Viewer($q: String) { viewer { email addresses(q: $q) { line1 } } }","variables":{"q":"dune"}}',
+      ),
+    );
+    // the stored name stays; a param's default picks the document's other operation
+    await review(
+      "a name a slot fills",
+      live,
+      gql(
+        '{"operationName":"Search","query":"query Search($q: String) { search(q: $q) { title } } query Viewer { viewer { email } }","variables":{"q":"dune"}}',
+        {
+          slots: [
+            { param: "q", at: ["body", "json:/variables/q"] },
+            { param: "which", at: ["body", "json:/operationName"] },
+          ],
+          params: [
+            { name: "q", type: "string", required: true, example: "dune" },
+            { name: "which", type: "string", required: false, default: "Viewer" },
+          ],
+        },
+      ),
+    );
+    const heal = await judged(
+      live,
+      gql(
+        '{"operationName":"Search","query":"query Search($q: String) { search(q: $q) { title author } }","variables":{"q":"dune"}}',
+      ),
+    );
+    assert.equal(heal.status, "candidate", JSON.stringify(heal));
+  });
+
+  test("a heal that sends the same request is a candidate, across a segment its match wildcards too", async () => {
+    const same = await judged(search(), search({ description: "Search people, repaired" }));
+    assert.equal(same.status, "candidate", JSON.stringify(same));
+    const hashed = (hash: string, path = `/api/${hash}/search`) =>
+      search({
+        request: { method: "GET", url: `https://www.example.com${path}?q=dune`, headers: {} },
+        match: { host: "www.example.com", path: "/api/*/search" },
+      });
+    const rotated = await judged(hashed("Zx81kQp0aLm3TyU7"), hashed("Bq7mN2x0Rk5WvE9a"));
+    assert.equal(rotated.status, "candidate", JSON.stringify(rotated));
+    await review(
+      "the wildcard covers one segment only",
+      hashed("Zx81kQp0aLm3TyU7"),
+      hashed("", "/psettings/x/close-account"),
+    );
+    // a segment a param fills is the caller's on both sides
+    const byId = (description: string) =>
+      search({
+        description,
+        request: { method: "GET", url: "https://www.example.com/people/dune", headers: {} },
+        slots: [{ param: "q", at: ["path:1"] }],
+        match: { host: "www.example.com", path: "/people/*" },
+      });
+    assert.equal((await judged(byId("A person"), byId("A person, repaired"))).status, "candidate");
+  });
+
+  test("an incumbent stored before the rule is read from its operation, not its stored signature", async () => {
+    const { env, raw } = registry();
+    await seed(env, { site: li, operations: [search()] });
+    assert.equal(raw.prepare("SELECT sig FROM versions").get()?.sig, '["GET","www.example.com","/api/search",""]');
+    const r = await uploaded(
+      env,
+      upload({ site: li, operation: search({ description: "ATTACKER", request: elsewhere }) }),
+    );
+    assert.ok(
+      r.reasons?.some((x) => moved.test(x)),
+      JSON.stringify(r),
+    );
+  });
+
+  test("the request's signature reads the URL as fetch does", () => {
+    const sig = (url: string, slots: { param: string; at: string[] }[] = [], path = "/api/search") =>
+      requestSig(
+        OperationSchema.parse(search({ request: { method: "GET", url, headers: {} }, slots, match: { path } })),
+      );
+    const plain = sig("https://www.example.com/api/search?q=dune");
+    assert.equal(plain, '["GET","https://www.example.com","/api/search",""]');
+    assert.equal(sig("https://www.example.com/api/search?q=other#x"), plain, "the query is no part of it");
+    for (const url of [
+      "https://www.example.com/x/../api/search",
+      "https://www.example.com/api/./search",
+      "https://www.example.com/api/%2e%2e/api/search",
+      "https://www.example.com\\@www.example.com/api/search",
+      "https://www.example.com:8443/api/search",
+      "https://files.example.com/api/search",
+      "http://www.example.com/api/search",
+      "https://www.example.com/api/search/",
+    ])
+      assert.notEqual(sig(url), plain, url);
+    // a slot past the path's end, or one on a segment the URL parser folds away, never reads as the plain path
+    assert.notEqual(sig("https://www.example.com/api/search", [{ param: "q", at: ["path:5"] }]), plain);
+    assert.notEqual(sig("https://www.example.com/api/search", [{ param: "q", at: ["path:1"] }]), plain);
+    assert.equal(
+      sig("https://www.example.com/api/search", [{ param: "q", at: ["path:1"] }]),
+      sig("https://www.example.com/api/find", [{ param: "q", at: ["path:1"] }]),
+    );
+    // a literal * is no wildcard
+    assert.notEqual(
+      sig("https://www.example.com/api/*", [], "/api/*x"),
+      sig("https://www.example.com/api/search", [{ param: "q", at: ["path:1"] }], "/api/*x"),
+    );
   });
 });
 
@@ -363,6 +1092,77 @@ describe("abuse limits", () => {
     const codes: number[] = [];
     for (let i = 0; i < 3; i++) codes.push((await post(env, install(), `2001:db8:${i + 1}::1`, i)).status);
     assert.deepEqual(codes, [201, 201, 429]);
+  });
+
+  test("a site stays pullable whatever other installs add to it", async () => {
+    const roomy = { NEW_KEY_UPLOADS: "1000", UPLOADS_PER_HOUR: "1000", UPLOADS_PER_HOUR_ALL: "1000" };
+    /** What src/registry.ts pull() holds a served site to; answers the names it serves. */
+    const pulled = async (env: Env, name = "example-com") => {
+      const served = (await send(env, "GET", `/v1/sites/${name}`)).body;
+      const spec = parseSite({
+        name,
+        baseUrl: served.baseUrl,
+        ...(served.displayName ? { displayName: served.displayName } : {}),
+        operations: served.operations.map((o: { operation: object; hash: string; status: string }) => ({
+          ...o.operation,
+          version: { hash: o.hash, status: o.status },
+        })),
+      });
+      assert.deepEqual(vetShared(spec).errors, []);
+      const size = Buffer.byteLength(JSON.stringify(spec, null, 2));
+      assert.ok(size <= LIMITS.file, `${size} bytes`);
+      return spec.operations.map((o) => o.name);
+    };
+    const first = async () => {
+      const r = registry(roomy);
+      const { hash } = await uploaded(r.env, upload());
+      // uploads within one millisecond are ordered by hash: the first install's is plainly the oldest
+      r.raw.prepare("UPDATE versions SET created_at = '2026-01-01T00:00:00.000Z' WHERE hash = ?").run(hash);
+      return r.env;
+    };
+    const wide = (name: string, params: number) =>
+      op({
+        name,
+        match: { host: "www.example.com", path: `/api/${name}` },
+        params: [
+          ...op().params,
+          ...Array.from({ length: params }, (_, p) => ({
+            name: `p${p}`,
+            required: false,
+            enum: Array.from({ length: 100 }, (_, v) => `${v}`.padStart(50, "x")),
+          })),
+        ],
+      });
+
+    // by count: one name more than a shared spec may hold
+    const many = await first();
+    for (let i = 0; i < 50; i++) assert.equal((await post(many, install(), `100.64.${i}.1`, i)).status, 201);
+    const names = await pulled(many);
+    assert.equal(names.length, 50);
+    assert.ok(names.includes("searchBooks"), "the op that was served first stays");
+
+    // by size: each upload is within the body cap, two of them are over the spec's
+    const big = await first();
+    for (const name of ["big0", "big1"]) {
+      assert.equal((await uploaded(big, upload({ operation: wide(name, 25) }))).status, "candidate");
+      assert.ok((await pulled(big)).includes("searchBooks"));
+    }
+    assert.equal((await pulled(big)).length, 2);
+
+    // one op that alone is over it once written out is not served, and a site with nothing else has no answer
+    const huge = await first();
+    assert.equal((await uploaded(huge, upload({ operation: wide("huge", 45) }))).status, "candidate");
+    assert.deepEqual(await pulled(huge), ["searchBooks"]);
+    const alone = { name: "example-net", domain: "example.net", baseUrl: "https://www.example.net" };
+    const theirs = {
+      ...wide("huge", 45),
+      ...net("example-net").operation,
+      name: "huge",
+      params: wide("huge", 45).params,
+    };
+    assert.equal((await uploaded(huge, upload({ site: alone, operation: theirs }))).status, "candidate");
+    assert.equal((await send(huge, "GET", "/v1/sites/example-net")).status, 404);
+    assert.deepEqual((await send(huge, "GET", "/v1/search?q=example.net")).body.matches, []);
   });
 });
 

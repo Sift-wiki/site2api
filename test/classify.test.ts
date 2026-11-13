@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { classify, emptyResults, judge, type Observed } from "../src/classify.js";
+import { botWall, classify, emptyResults, judge, type Observed, signInForm } from "../src/classify.js";
+import { MAX_PAGE_ELEMENTS } from "../src/extract.js";
 import { type Operation, OperationSchema } from "../src/spec.js";
 
 const op = (over: Record<string, unknown> = {}): Operation =>
@@ -254,6 +255,11 @@ test("a sign-in form that embeds a CAPTCHA widget is auth; a CAPTCHA page with n
       assert.equal(cls(o, html(status, walled)), "blocked", `walled ${o.response.format} ${status}`);
     }
   }
+  // the form is found however long the attributes before its action
+  const long = signIn
+    .replace("<form ", `<form data-state="${"x".repeat(2100)}" `)
+    .replace('<input name="username">', "");
+  assert.equal(cls(op(), html(403, long)), "auth");
 });
 
 test("input: 400 naming a param; error: 5xx and unexplained GraphQL errors", () => {
@@ -699,4 +705,101 @@ test("a signed-in JSON read redirected to a same-site page with no login or chal
     cls(me, { ...html(200, "<title>Just a moment...</title>"), url: "https://www.s.test/x", redirected: true }),
     "blocked",
   );
+});
+
+/** What `fn` answers and how long it held the thread, in ms. */
+const held = <T>(fn: () => T): [T, number] => {
+  const t0 = performance.now();
+  const value = fn();
+  return [value, performance.now() - t0];
+};
+// A pattern that rescans the body from every unclosed tag takes seconds on these bodies (8 times more per
+// doubling for the form scan), and a pass that reads each tag once a few milliseconds: no machine is between.
+const LINEAR_MS = 1000;
+
+test("signInForm reads each input and form tag once, and finds the forms it found as one pattern", () => {
+  const forms: [string, boolean][] = [
+    ['<form><input name="username"><input type="password" name="pw"></form>', true],
+    ["<form><input class=x name='email'><input type=password></form>", true],
+    ['<FORM><INPUT TYPE="password"><INPUT ID="a" NAME="login"></FORM>', true],
+    ['<form><input type="password">\n<input\n  id="k"\n  name="session_key"></form>', true],
+    ['<input type="password" autocomplete="current-password">', true],
+    ['<input type="password"><input autocomplete=username>', true],
+    ['<form method="post" action="/users/sign_in"><input type="password" name="pw"></form>', true],
+    ["<form action=/login><input type=password></form>", true],
+    // not only a tag's first action=
+    ['<form data-action="submit" action="https://s.test/session/new"><input type="password"></form>', true],
+    ['<form action="/search"><input type="password" name="pw"></form>', false],
+    ['<form action="/login"><input name="username"></form>', false],
+    // however long the attributes before it: a tag is read to its own >
+    [`<form data-x="${"y".repeat(2100)}" action="/login"><input type="password" name="pw"></form>`, true],
+    [`<form><input type="password"><input data-x="${"y".repeat(5000)}" name="username"></form>`, true],
+    // the name and the action count in their own tag only
+    ['<form class="f"><input type="password"><select name="user"></select><a href="/login">x</a></form>', false],
+    ['<form class="f"></form><div data-x action="/sign-in"><input type="password"></div>', false],
+    ['<input type="password"><input name="userid_hint">', false],
+  ];
+  for (const [page, is] of forms) assert.equal(signInForm(page), is, page);
+});
+
+test("a body built to slow the sign-in scan is judged in time linear in its size", () => {
+  const listed = op({ response: { format: "html", html: { items: "li.r", fields: { t: "" } } }, slots: [] });
+  // a password field, then form tags that never close, then actions that name no login: about 16 KB
+  const forms = `<html><body><input type="password">${"<form ".repeat(900)}${"action=x/".repeat(1200)}`;
+  // the same with inputs that never close: 256 KB
+  const inputs = `<html><body><p>type=password</p>${"<input ".repeat(36_000)}`;
+  const answers: [string, () => string, string][] = [
+    // a vendor's script that rides on ordinary pages, on a challenge status: the sign-in test decides
+    ["a 403 naming DataDome", () => cls(op(), html(403, `datadome ${forms}`)), "blocked"],
+    [
+      "a 403 with Kasada's header",
+      () => cls(op(), { status: 403, headers: { "content-type": "text/html", "x-kpsdk-ct": "t" }, body: forms }),
+      "blocked",
+    ],
+    ["an html read whose selector finds nothing", () => cls(listed, html(200, forms)), "drift"],
+    ["inputs that never close", () => cls(listed, html(200, inputs)), "drift"],
+  ];
+  for (const [what, answer, is] of answers) {
+    const [c, ms] = held(answer);
+    assert.equal(c, is, what);
+    assert.ok(ms < LINEAR_MS, `${what}: ${Math.round(ms)} ms`);
+  }
+});
+
+test("AWS WAF's challenge script is found, and a body of its openings is scanned in linear time", () => {
+  const sdk = (src: string) => html(403, `<html><head><script src="${src}"></script></head><body>x</body></html>`);
+  for (const src of [
+    "https://abc123.edge.sdk.awswaf.com/abc123/def456/challenge.js",
+    "/__challenge_AbC-9/v1/challenge.js",
+    "/__challenge_x/challenge.js",
+  ])
+    assert.match(botWall(sdk(src)) ?? "", /^AWS WAF challenge page/, src);
+  // the script on an ordinary status, or the path with no script behind it, is no wall
+  assert.equal(botWall({ ...sdk("/__challenge_x/challenge.js"), status: 200 }), undefined);
+  assert.equal(botWall(sdk("/__challenge_x/other.js")), undefined);
+  assert.equal(botWall(sdk('/__challenge_x/a.css"></script><script src="/static/challenge.js')), undefined);
+  const [wall, ms] = held(() => botWall(html(403, "/__challenge_a/".repeat(14_000))));
+  assert.equal(wall, undefined);
+  assert.ok(ms < LINEAR_MS, `${Math.round(ms)} ms`);
+});
+
+test("an html answer with more elements than the page budget is refused before it is parsed: error, not drift", () => {
+  const listed = op({ response: { format: "html", html: { items: "li.r", fields: { t: "" } } }, slots: [] });
+  const page = (elements: number) =>
+    html(200, `<html><body><ul><li class="r">first</li></ul>${"<p>".repeat(elements - 4)}</body></html>`);
+  const over = judge(listed, page(MAX_PAGE_ELEMENTS + 1));
+  // drift would start a heal, which reads the same page again
+  assert.equal(over.class, "error");
+  assert.match(over.reason, new RegExp(`more than ${MAX_PAGE_ELEMENTS} elements`));
+  assert.equal(over.missing, undefined);
+  // closing tags, comments and a bare < open no element; they have a budget of their own
+  const closers = `${"</p>".repeat(MAX_PAGE_ELEMENTS - 100)}${"<!-- c -->".repeat(10)} 1 < 2`;
+  const at = judge(listed, { ...page(MAX_PAGE_ELEMENTS), body: page(MAX_PAGE_ELEMENTS).body + closers });
+  assert.equal(at.class, "ok");
+  assert.deepEqual(at.data, [{ t: "first" }]);
+  const text = judge(listed, { ...page(10), body: page(10).body + "x</p>".repeat(MAX_PAGE_ELEMENTS + 1) });
+  assert.equal(text.class, "error");
+  assert.match(text.reason, new RegExp(`more than ${MAX_PAGE_ELEMENTS} closing tags, comments and CDATA sections`));
+  // the same page where a results page with no results is looked for
+  assert.equal(emptyResults(page(MAX_PAGE_ELEMENTS + 1).body, { items: "ul li.r", empty: "p.none" }), undefined);
 });

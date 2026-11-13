@@ -6,11 +6,11 @@ import * as zlib from "node:zlib";
 import type { SendBudget } from "./budget.js";
 import { asText, fillSlotTemplate, setAt, templateRefs, walk } from "./codec.js";
 import { matches } from "./learn.js";
-import { cookieHeaderFor, cookieValue, parseSetCookie, type Session } from "./session.js";
+import { cookieHeaderFor, cookieValue, insecureSet, parseSetCookie, type Session } from "./session.js";
 import type { Match, Operation, Param, Request } from "./spec.js";
 import { reserveSend } from "./store.js";
 import type { StoredCookie } from "./types.js";
-import { badAddress } from "./vet.js";
+import { badAddress, graphqlDocuments, writesGraphql } from "./vet.js";
 
 /**
  * The most of one tier-1 response body read from the network, and the most a zstd body this module
@@ -209,9 +209,29 @@ function transform(v: string, t: "strip-quotes" | "url-decode" | undefined): str
 export const holdsRef = (s: Operation["slots"][number]) =>
   !!s.ref || (s.template !== undefined && templateRefs(s.template).length > 0);
 
+const slotRefs = (op: Pick<Operation, "slots">) =>
+  op.slots.flatMap((s) => [...(s.ref ? [s.ref] : []), ...templateRefs(s.template ?? "")]);
+
+/**
+ * The cookies `buildRequest` puts into `op`'s request through a `cookie:` ref, each with its value.
+ * One can be a host-only cookie of another host of the site (`cookieValue`), which the request's
+ * Cookie header never carries. Throws for a request address that is no URL.
+ */
+export function filledCookies(op: Pick<Operation, "request" | "slots">, session: Session): [string, string][] {
+  const names = new Set(
+    slotRefs(op)
+      .filter((r) => r.startsWith("cookie:"))
+      .map((r) => r.slice("cookie:".length)),
+  );
+  return [...names].flatMap((name): [string, string][] => {
+    const value = cookieValue(session.cookies, name, op.request.url);
+    return value ? [[name, value]] : [];
+  });
+}
+
 /** The names of the stored, non-empty session values `buildRequest` puts into `op`'s request. */
 export function filledValues(op: Pick<Operation, "request" | "slots">, session: Session): string[] {
-  const refs = op.slots.flatMap((s) => [...(s.ref ? [s.ref] : []), ...templateRefs(s.template ?? "")]);
+  const refs = slotRefs(op);
   const filled = (ref: string) => {
     try {
       return !!resolveRef(ref, session, op.request.url);
@@ -348,7 +368,36 @@ export function buildRequest(op: Operation, args: Record<string, unknown>, sessi
   if (cookie) req.headers.cookie = cookie;
   // fetch would refuse it quoting the value, which may be a session's: name the header only
   for (const [k, h] of Object.entries(req.headers)) if (/[\r\n\0]/.test(h)) throw new BadHeader(k);
+  // The spec's rules see only the stored document: an arg, a default or a slot template must not make a
+  // read a mutation, as a looked-up value must not (lookup.ts `derive`).
+  if (op.readOnly && graphqlDocuments(req).some((d) => writesGraphql(d) && OPERATION.test(d)))
+    throw new ReadWrites(op.name);
   return req;
+}
+
+// What GraphQL ignores between tokens: whitespace (a BOM too), commas, and comments. A comment is
+// taken whole to its line's end, so a run of `#` has one reading and a long one cannot stall the match.
+const IGNORED = "(?:[\\s,]|#[^\\n\\r]*(?=[\\n\\r]|$))*";
+/**
+ * How the grammar opens a mutation or subscription: the keyword, at most one name, then its
+ * variables `(`, a directive `@` or its selection `{`. `writesGraphql` finds the keyword leading a
+ * top-level definition whatever stands between it and the `{`, which a search phrase filled into a
+ * `query` field can do ("mutation testing tools {2024}"); no GraphQL parser reads that as an
+ * operation, so only text of this shape is refused.
+ */
+const OPERATION = new RegExp(`(?<!\\w)(?:mutation|subscription)${IGNORED}(?:[A-Za-z_]\\w*${IGNORED})?[{(@]`);
+
+/**
+ * A read whose filled request is a GraphQL mutation or subscription: a read never sends one, so none
+ * was sent. The test is the document's shape (`writesGraphql`, `OPERATION`), which text typed into a search box
+ * can have too, so the reason says what was read and what to change; it repeats no arg.
+ */
+export class ReadWrites extends Error {
+  constructor(name: string) {
+    super(
+      `${name} is a read, and with these args its filled request reads as a GraphQL mutation or subscription (its query text holds an operation that opens with that keyword and a "{"); a read never sends one: nothing was sent. If that was search text and not a document, rephrase it without the braces`,
+    );
+  }
 }
 
 /** A filled header whose value holds a line break or a NUL: no request can carry it, so none was sent. */
@@ -528,7 +577,8 @@ export async function send(
       const res = await (opts.fetchImpl ?? fetch)(url, { ...init, redirect: "manual", signal });
       for (const line of res.headers.getSetCookie?.() ?? []) {
         const c = parseSetCookie(line, url);
-        if (!c) continue;
+        // a plain-http answer is whatever the network returned: it cannot touch a Secure cookie
+        if (!c || insecureSet(jar, c, url)) continue;
         setCookies.push(c);
         jar = [
           ...jar.filter(

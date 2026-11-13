@@ -1,5 +1,5 @@
 /** Classify every response, never by status code alone. See DESIGN.md "Failure classifier". */
-import { type HTMLElement, parse as parseHtml } from "node-html-parser";
+import type { HTMLElement } from "node-html-parser";
 import { BodyTooDeep, templateRefs } from "./codec.js";
 import {
   extract,
@@ -8,11 +8,14 @@ import {
   getPath,
   getPathRegex,
   inferShape,
+  PageTooLarge,
   parseBody,
+  parsePage,
   parseShown,
   pick,
   pickEntry,
   splitRegex,
+  tagsOf,
 } from "./extract.js";
 import { siteOf } from "./session.js";
 import type { Operation, ResponseSpec } from "./spec.js";
@@ -74,7 +77,8 @@ const CHALLENGES: [string, RegExp | undefined, RegExp?][] = [
   [
     "AWS WAF",
     /awsWafCookieDomainList|gokuProps|<title>Human Verification<\/title>/i,
-    /AwsWafIntegration|\.awswaf\.com|\/__challenge_[\w-]+\/[^"']*challenge\.js/i,
+    // both runs bounded: unbounded, a body of `/__challenge_x/` openings is rescanned from each one
+    /AwsWafIntegration|\.awswaf\.com|\/__challenge_[\w-]{1,128}\/[^"']{0,512}challenge\.js/i,
   ],
   ["Amazon", /automated access to Amazon data|\/errors\/validateCaptcha/i],
   ["Imperva", /Incapsula incident/i, /_Incapsula_Resource/i],
@@ -97,12 +101,21 @@ const CHALLENGE_TITLE =
 const LOGIN_SAID =
   /"require_login"\s*:\s*true|login_required|not logged in|(log|sign) ?in to continue|please (log|sign) ?in|authentication required|bad authentication|could not authenticate|bad guest token|invalid session|session (has )?expired|invalid (application-id or )?api[ _-]?key|api[ _-]?key (is )?(invalid|expired)/i;
 const LOGIN = new RegExp(`${LOGIN_SAID.source}|type=["']password["']|accounts\\.google\\.com\\/ServiceLogin`, "i");
-/** A sign-in form: a password field next to a username field, a current-password hint, or a form posting to a login path. */
-export const signInForm = (body: string) =>
-  /type=["']?password/i.test(body) &&
-  /<input[^>]*name=["']?(user(name)?|e-?mail|login|session_key)\b|autocomplete=["']?(current-password|username)|<form[^>]*action=["']?[^"'>\s]*(log_?in|sign_?in|sign-in|session)/i.test(
-    body,
-  );
+const USER_FIELD = /name=["']?(user(name)?|e-?mail|login|session_key)\b/i;
+const LOGIN_ACTION = /log_?in|sign_?in|sign-in|session/i;
+/**
+ * A sign-in form: a password field next to a username field, a current-password hint, or a form posting to a login path.
+ * The whole body is read, since the form may sit deep in a large page, one input or form tag at a time (`tagsOf`).
+ */
+export function signInForm(body: string): boolean {
+  if (!/type=["']?password/i.test(body)) return false;
+  if (/autocomplete=["']?(current-password|username)/i.test(body)) return true;
+  for (const tag of tagsOf(body, "input")) if (USER_FIELD.test(tag.text)) return true;
+  // every action= of the tag, not only its first (a data-action before the real one)
+  for (const tag of tagsOf(body, "form"))
+    for (const action of tag.text.matchAll(/action=["']?([^"'>\s]*)/gi)) if (LOGIN_ACTION.test(action[1]!)) return true;
+  return false;
+}
 const LOGIN_URL = /\/(login|signin|sign_in|sign-in|accounts\/login|i\/flow\/login|onboarding|ServiceLogin)(\/|$|\?)/i;
 /** The URL's path is a sign-in page's, whether it was asked for or redirected to. */
 export function loginPath(url: string): boolean {
@@ -230,7 +243,7 @@ export function emptyResults(body: string, recipe: { items: string; empty?: stri
     if (recipe.empty && parseShown(body).querySelector(recipe.empty)) return `"${recipe.empty}" is on the page`;
     const parts = containerOf(recipe.items);
     if (!parts) return undefined;
-    const box = parseHtml(body).querySelector(parts.container);
+    const box = parsePage(body).querySelector(parts.container);
     if (!box) return undefined;
     const tag = /^[a-z][a-z0-9-]*/i.exec(parts.item)?.[0];
     return box.querySelector(tag ?? "*") ? undefined : `the container of "${recipe.items}" is on the page and empty`;
@@ -461,7 +474,7 @@ function hidden(el: HTMLElement | null): boolean {
 /** The error a form page shows, if any. Never throws. */
 function formError(body: string): string | undefined {
   try {
-    const doc = parseHtml(body);
+    const doc = parsePage(body);
     const shown = (sel: string, words: boolean) =>
       doc.querySelectorAll(sel).find((el) => {
         const t = el.text.replace(/\s+/g, " ").trim();
@@ -873,6 +886,8 @@ export function judge(op: Operation, r: Observed): Judged {
   try {
     c = classifyResponse(op, r, readJson, readTarget);
   } catch (e) {
+    // nothing was compared, and the same page comes back: an error, with its own words
+    if (e instanceof PageTooLarge) return is("error", e.message);
     return is("error", `the op's response recipe failed: ${(e as Error).message}`);
   }
   if (c.class !== "ok" && !c.lost) return c;
@@ -890,6 +905,8 @@ export function judge(op: Operation, r: Observed): Judged {
   } catch (e) {
     // a write's non-JSON answer: hand back its text
     if (!op.readOnly) return { ...c, data: r.body.trim() ? r.body.slice(0, 1000) : null };
+    // not drift: a heal would read the same page again
+    if (e instanceof PageTooLarge) return is("error", e.message);
     return is("drift", `extract failed: ${(e as Error).message}`);
   }
 }

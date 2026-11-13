@@ -1,9 +1,10 @@
 /** What an uploaded or seeded version must pass, and what makes one `review`. docs/REGISTRY.md "Trust". */
 import { z } from "zod";
+import { templateRefs, walk } from "../../src/codec.js";
 import { siteOf } from "../../src/domain.js";
-import { type Evidence, type SiteContext, versionHashText } from "../../src/registry-api.js";
+import { type Evidence, requestSig, type SiteContext, triggerSig, versionHashText } from "../../src/registry-api.js";
 import { type Operation, OperationSchema, SiteSchema } from "../../src/spec.js";
-import { uploadProblems, vetShared, writesGraphql } from "../../src/vet.js";
+import { DOCUMENT_AT, uploadProblems, vetShared, WHOLE_BODY, writesGraphql } from "../../src/vet.js";
 import { sha256Hex } from "./auth.js";
 
 export const HASH = z.string().regex(/^[0-9a-f]{64}$/);
@@ -49,7 +50,10 @@ export function parseOperation(input: unknown): { op: Operation } | { errors: st
 
 export const versionHash = (site: string, op: Operation) => sha256Hex(versionHashText(site, op));
 
-/** The request an op matches: method, host, path, GraphQL operationName; stored with each version for maintainers. */
+/**
+ * The request an op says it matches: method, host, path, GraphQL operationName; stored with each version for
+ * maintainers. Its author's word: what it sends is `requestSig`.
+ */
 export const matchSig = (op: Operation) =>
   JSON.stringify([
     op.request.method.toUpperCase(),
@@ -109,41 +113,68 @@ export function nameRefusal(name: string, domain: string): string | undefined {
   return `a new site's name is its domain ${domain} with dots as dashes: ${want}, not ${name}`;
 }
 
-/** The GraphQL documents a JSON or GraphQL body carries at `query`. */
-function documents(op: Operation): string[] {
+const GRAPHQL_FIELDS = new Set(["query", "variables", "operationName"]);
+// a slot's first step that picks the body's parser, or writes the body as a form's pairs
+const REPARSES = /^(header:content-type$|form(\[\d+\])?:)/i;
+// one media type with plain parameters: of two in a list, the server's parser picks
+const MEDIA_TYPE = /^\s*([a-z0-9.+/-]+)\s*(;\s*[\w-]+=("[\w.-]*"|[\w.-]*)\s*)*$/i;
+const JSON_TYPES = new Set(["application/json", "application/graphql+json"]);
+
+/** The documents of a body that is GraphQL and nothing else; undefined when it carries anything more. */
+function documents(op: Operation): string[] | undefined {
   const body = op.request.body ?? "";
-  if (/graphql/i.test(op.request.headers["content-type"] ?? "")) return [body];
+  const type = MEDIA_TYPE.exec(op.request.headers["content-type"] ?? "")?.[1]?.toLowerCase();
+  let j: unknown;
   try {
-    const j: unknown = JSON.parse(body);
-    return (Array.isArray(j) ? j : [j]).flatMap((item) => {
-      const q = (item as { query?: unknown } | null)?.query;
-      return typeof q === "string" ? [q] : [];
-    });
+    j = JSON.parse(body);
   } catch {
-    return [];
+    // not JSON: a raw document, and only under the media type that says the body is one
+    return type === "application/graphql" ? [body] : undefined;
   }
+  // JSON under another type is another parser's to read: a form parser finds its own `query=` inside a string
+  if (!type || !JSON_TYPES.has(type)) return undefined;
+  // parsers disagree on which value of a repeated key counts
+  if (walk(op.request).some((l) => l.at[0] === "body" && l.repeated?.length)) return undefined;
+  const docs: string[] = [];
+  for (const item of Array.isArray(j) ? j : [j]) {
+    if (!item || typeof item !== "object" || Array.isArray(item)) return undefined;
+    const q = (item as { query?: unknown }).query;
+    // a field the rule does not know (an id, extensions, the endpoint's own fields) could be the real request
+    if (typeof q !== "string" || !q.trim() || Object.keys(item).some((k) => !GRAPHQL_FIELDS.has(k))) return undefined;
+    docs.push(q);
+  }
+  return docs;
 }
 
 /**
  * A POST that carries GraphQL query documents and nothing else. Stricter than vetShared: a persisted query
- * (a hash, no document) could name a mutation, so it goes to review.
+ * (a hash, no document) could name a mutation, so it goes to review, and so does a document a slot fills,
+ * which is whatever an arg or a param's default makes it (a search API's `{"query":"{q}"}` included). The
+ * body is read as its content type says a server reads it, so a slot may not fill that header, nor write
+ * form pairs into a body that is no form.
  */
 function graphqlQuery(op: Operation): boolean {
+  const rewrites = (at: string[]) =>
+    WHOLE_BODY.test(at.at(-1) ?? "") || at.some((st) => DOCUMENT_AT.test(st)) || REPARSES.test(at[0] ?? "");
+  if (op.slots.some((s) => rewrites(s.at))) return false;
   const docs = documents(op);
   const reads = (d: string) => /^\s*(query|fragment)\b|^\s*\{/.test(d.replace(/#[^\n\r]*/g, ""));
-  return docs.length > 0 && docs.every((d) => reads(d) && !writesGraphql(d));
+  return !!docs?.length && docs.every((d) => reads(d) && !writesGraphql(d));
 }
 
 /** What the registry already holds of the upload's site. */
 export interface SiteHeld {
-  /** op names any version of the site has */
+  /** op names the site has a live or degraded version of */
   opNames: string[];
   /** the site lists login cookies or has an op learned while signed in */
   login: boolean;
-  /** some site on its domain has a live or seeded op */
+  /** some site on its domain has a seeded op or a version that was ever live */
   established: boolean;
-  /** the match signature (`matchSig`) of the op's incumbent: its live or degraded version live the longest */
-  incumbentSig?: string;
+  /**
+   * the op's incumbent, its live or degraded version live the longest: what it says it matches (`matchSig`),
+   * what it sends (`requestSig`) and what its browser runs open (`triggerSig`)
+   */
+  incumbent?: { match: string; request: string; trigger: string };
 }
 
 /** Why a version is outside the automatic rules: served to its uploader only until a maintainer decides. */
@@ -163,7 +194,12 @@ export function reviewReasons(
   if (op.readOnly && method !== "GET" && method !== "HEAD" && !(method === "POST" && graphqlQuery(op)))
     reasons.push(`a read sent as ${method}${method === "POST" ? ", not a GraphQL query" : ""}`);
   const lookupSlots = op.slots.flatMap((s) => s.from?.slots ?? []);
-  const refs = [...new Set([...op.slots, ...lookupSlots].flatMap((s) => (s.ref ? [s.ref] : [])))];
+  // a ref is one whether it fills the whole leaf or a hole of the slot's template (http.ts holdsRef)
+  const refs = [
+    ...new Set(
+      [...op.slots, ...lookupSlots].flatMap((s) => [...(s.ref ? [s.ref] : []), ...templateRefs(s.template ?? "")]),
+    ),
+  ];
   if (refs.length) reasons.push(`sends the caller's own ${refs.join(", ")}`);
   // a lookup runs with the caller's cookies, and what it answers (a CSRF token under any name) goes into the read
   const derived = op.slots.filter((s) => s.from).map((s) => s.at.join(" > "));
@@ -175,8 +211,20 @@ export function reviewReasons(
   // a heal keeps its match, built from stable identity only; a new endpoint under an old name (linkedin
   // search turned into /psettings/close-account) is a new op wearing a trusted name
   const sig = matchSig(op);
-  if (!newOp && held.established && held.incumbentSig && sig !== held.incumbentSig)
-    reasons.push(`its match ${sig} differs from the live version's ${held.incumbentSig}`);
+  const sent = requestSig(op);
+  const incumbent = held.incumbent;
+  if (!newOp && held.established) {
+    // no incumbent to compare with: a maintainer looks, rather than any match passing
+    if (!incumbent) reasons.push(`no live version of ${op.name} to compare its match with`);
+    else if (sig !== incumbent.match)
+      reasons.push(`its match ${sig} differs from the live version's ${incumbent.match}`);
+    // the match is the uploader's word; the request is what every caller sends
+    else if (sent !== incumbent.request)
+      reasons.push(`its request ${sent} differs from the live version's ${incumbent.request}, under the same match`);
+    // tier 3 and every heal open the trigger, whatever the request is; a heal keeps its op's own
+    else if (triggerSig(op) !== incumbent.trigger)
+      reasons.push("its trigger differs from the live version's, under the same request");
+  }
   if (op.public?.length) reasons.push(`lists public values: ${op.public.join(", ")}`);
   // blocked: a bot wall answered the cookie-free replay, so the data is public behind it
   if (evidence.cleanReplay !== "ok" && evidence.cleanReplay !== "blocked")

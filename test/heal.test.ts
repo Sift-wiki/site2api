@@ -11,7 +11,7 @@ import { join } from "node:path";
 import { after, before, describe, test } from "node:test";
 import { browserAvailable, closeBrowser } from "../src/browser.js";
 import { call } from "../src/execute.js";
-import { addOperation, type CaptureFile } from "../src/heal.js";
+import { addOperation, type CaptureFile, refPart } from "../src/heal.js";
 import { parseSite } from "../src/spec.js";
 import { loadSite, markStale, saveSite, staleMark } from "../src/store.js";
 import type { Exchange } from "../src/types.js";
@@ -175,6 +175,79 @@ describe("add: what it refuses to save, and what it doubts", () => {
       /refusing to save .*sign-in page.*api-anything login walled-add.*then add again/,
     );
     assert.equal(loadSite("walled-add"), undefined);
+  });
+});
+
+describe("refPart: the text a templated ref holds in a leaf the page sent", () => {
+  /** What refPart was: one lazy wildcard per hole, which backtracks through every split of a leaf that does not fit. */
+  const byRegex = (template: string, ref: string, leaf: string): string | undefined => {
+    const re = template
+      .split(/(\{\{|\}\}|\{[^{}]+\})/)
+      .map((p) =>
+        p === "{{"
+          ? "\\{"
+          : p === "}}"
+            ? "\\}"
+            : p === `{${ref}}`
+              ? "(.*?)"
+              : /^\{[^{}]+\}$/.test(p)
+                ? ".*?"
+                : p.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"),
+      )
+      .join("");
+    return new RegExp(`^${re}$`, "s").exec(leaf)?.[1];
+  };
+
+  test("a leaf that does not fit is read in time linear in its length, whatever the holes", () => {
+    const timed = (template: string, leaf: string) => {
+      const t0 = performance.now();
+      assert.equal(refPart(template, "session:t", leaf), undefined);
+      return performance.now() - t0;
+    };
+    const dots = timed("{session:t}.{a}.{b}!", ".".repeat(5000));
+    assert.ok(dots < 250, `3 holes on 5000 dots: ${Math.round(dots)} ms`);
+    const letters = timed("{session:t}{q}{q}{q}{q}{q}{q}!", "a".repeat(48));
+    assert.ok(letters < 50, `7 holes on 48 letters: ${Math.round(letters)} ms`);
+    const long = timed("{session:t}.{a}.{b}.{c}.{d}.{e}.{f}!", ".".repeat(1_000_000));
+    assert.ok(long < 250, `7 holes on a million dots: ${Math.round(long)} ms`);
+  });
+
+  test("the answers are the lazy pattern's", () => {
+    assert.equal(refPart("v1:{session:t}", "session:t", "v1:abc"), "abc");
+    assert.equal(refPart("{session:t}.{a}.{b}!", "session:t", "x.y.z!"), "x");
+    assert.equal(refPart("{session:t}.{a}.{b}!", "a", "x.y.z!"), "y");
+    assert.equal(refPart("{session:t}.{a}.{b}!", "b", "x.y.z.w!"), "z.w");
+    assert.equal(refPart("{a}{session:t}", "a", "xy"), "");
+    assert.equal(refPart("{a}{session:t}", "session:t", "xy"), "xy");
+    assert.equal(refPart("{{{session:t}}}", "session:t", "{k}"), "k");
+    assert.equal(refPart("{session:t}", "session:t", "line1\nline2"), "line1\nline2");
+    assert.equal(refPart("a{session:t}a", "session:t", "a"), undefined, "the ends may not overlap");
+    assert.equal(refPart("v1:{session:t}", "session:t", "v2:abc"), undefined);
+    assert.equal(refPart("{session:t}.{a}!", "session:t", "x.y"), undefined);
+    assert.equal(refPart("v1:{a}", "session:t", "v1:abc"), undefined, "a ref the template does not hold");
+    assert.equal(refPart("q={session:t}", "session:t", "q=a%20b", "url"), "a b");
+    assert.equal(refPart("q={session:t}", "session:t", "q=%E0%A4%A", "url"), "%E0%A4%A", "a bad escape stays raw");
+    assert.equal(refPart('"{session:t}"', "session:t", '"a\\"b"', "json"), 'a"b');
+  });
+
+  test("the scan and the lazy pattern agree on random templates and leaves", () => {
+    // a small alphabet, so that literals recur inside the holes' text and every split is in play
+    let seed = 0x2f6e2b1;
+    const rand = (n: number) => {
+      seed = (Math.imul(seed, 1103515245) + 12345) >>> 0;
+      return (seed >>> 8) % n;
+    };
+    const text = (max: number) => Array.from({ length: rand(max + 1) }, () => "ab.{}"[rand(5)]!).join("");
+    const piece = () => [() => "{h}", () => "{o}", () => "{{", () => "}}", () => "ab."[rand(3)]!][rand(5)]!();
+    let fit = 0;
+    for (let i = 0; i < 100_000; i++) {
+      const template = Array.from({ length: 1 + rand(7) }, piece).join("");
+      const leaf = text(8);
+      const want = byRegex(template, "h", leaf);
+      assert.equal(refPart(template, "h", leaf), want, JSON.stringify({ template, leaf }));
+      if (want !== undefined) fit++;
+    }
+    assert.ok(fit > 5000, `only ${fit} leaves fit a template`);
   });
 });
 

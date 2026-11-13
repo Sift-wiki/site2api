@@ -39,12 +39,13 @@ or the client's `timeout` passes.
 ## Tools for agent frameworks
 
 ```python
-tools = client.tools(format="openai")             # or "anthropic", "json_schema"
-result = client.run_tool(name, arguments)          # the model's tool call
+tools = client.tools(format="openai")                    # or "anthropic", "json_schema"
+result = client.run_tool(name, arguments, tools=tools)   # the model's tool call
 ```
 
-One tool per operation, named `<site>__<op>`, with the operation's argument schema. Adapters for
-LangChain/LangGraph and the OpenAI Agents SDK:
+One tool per operation, named `<site>__<op>`, with the operation's argument schema. `run_tool` raises
+`ValueError` for a name outside `tools`; without `tools=`, any name an earlier `tools()` call on the
+same client listed still runs. Adapters for LangChain/LangGraph and the OpenAI Agents SDK:
 
 ```python
 from api_anything.integrations import langchain, openai_agents

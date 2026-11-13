@@ -6,7 +6,7 @@
 import { parse } from "tldts";
 import { walk } from "./codec.js";
 import { siteOf } from "./domain.js";
-import { parsePath, returnedFields } from "./extract.js";
+import { fieldSelector, parsePath, pickName, returnedFields } from "./extract.js";
 import { linkProblems } from "./links.js";
 import {
   credentialName,
@@ -30,6 +30,10 @@ export const LIMITS = {
   companions: 8,
   enum: 100,
   checks: 10,
+  htmlFields: 50,
+  /** the general-sibling and descendant steps one comma-separated part of an html selector may hold (`searchSteps`) */
+  selectorSteps: 4,
+  fieldName: 64,
   /**
    * A shared pace slows its callers down, never so far that the site is unusable: at most a minute
    * between requests (a longer gap answers rate, budget.ts's 10 s wait), and at least one an hour.
@@ -42,6 +46,10 @@ const READ_METHODS = new Set(["GET", "HEAD", "POST"]);
 const READ_ONLY = new Set(["GET", "HEAD", "OPTIONS"]);
 // Op and param names are spelled in the commands `next` hints give an agent to run.
 const NAME = /^[A-Za-z][A-Za-z0-9_.-]{0,63}$/;
+// A pick's and an html recipe's field names reach an agent as `returns` and in a drift's `reason`: names, not sentences.
+// A pick's may be the path it reads (a.b, items[0].title, tags[*]); any other key is renamed (name=["odd key"]).
+const FIELD_NAME = /^[\w$@-]+$/;
+const PICK_NAME = /^[\w$@-]+(?:\.[\w$@-]+|\[\d+\]|\[\*\])*$/;
 /**
  * What a looked-up value may be: an identifier (a numeric id, a slug, a UUID, a base64 id). The answer is
  * text the site's users may write, so nothing with spaces, braces, quotes or parentheses, which could make
@@ -52,17 +60,15 @@ export const DERIVED_VALUE = /^[\w.~:@+=/-]{1,512}$/;
 /** A field or header some servers take the request's real method from (Rails, Laravel, Express's method-override). */
 export const METHOD_OVERRIDE = /^(_method|x-http-method(-override)?|x-method-override)$/i;
 // A param that is the whole body (raw, base64, the JSON root or a batch's item) is the request the caller
-// writes; one at `query` of a GraphQL request is its document.
-const WHOLE_BODY = /^(body|b64|json:(\/\d+)?)$/;
-const DOCUMENT_AT = /^(json:(\/\d+)?\/query|(form|query)(\[\d+\])?:query)$/;
+// writes; one at `query` of a GraphQL request is its document. The registry's upload rules read them too.
+export const WHOLE_BODY = /^(body|b64|json:(\/\d+)?)$/;
+export const DOCUMENT_AT = /^(json:(\/\d+)?\/query|(form|query)(\[\d+\])?:query)$/;
 // a group with a quantifier inside it, itself quantified: (a+)+, (\w*)*, (x+){2,}
 const NESTED_QUANTIFIER = /\((?:[^()\\]|\\.)*[*+}](?:[^()\\]|\\.)*\)[*+{]/;
 
-/** Index of the `]` that closes the class opened at `open`. */
+/** Index of the `]` that closes the class opened at `open`: the first one, so `[]` and `[^]` are whole classes. */
 function classEnd(s: string, open: number): number {
   let i = open + 1;
-  if (s[i] === "^") i++;
-  if (s[i] === "]") i++;
   while (i < s.length && s[i] !== "]") i += s[i] === "\\" ? 2 : 1;
   return i;
 }
@@ -111,7 +117,7 @@ const DOT: CharSet = {
 /** A class the reader does not model: it may accept any unit, which is the complement of nothing. */
 const ANY: CharSet = { ranges: [], negated: true };
 // a control escape is one code unit, not its letter: \n is a newline, which \s accepts
-const CONTROL: Record<string, number> = { n: 10, r: 13, t: 9, v: 11, f: 12, "0": 0 };
+const CONTROL: Record<string, number> = { n: 10, r: 13, t: 9, v: 11, f: 12 };
 const complement = (set: CharSet): CharSet => ({ ranges: set.ranges, negated: true });
 const literal = (code: number): CharSet => ({ ranges: [[code, code]] });
 
@@ -126,24 +132,33 @@ const intersects = (a: CharSet, b: CharSet): boolean => {
   return a.ranges.some(([alo, ahi]) => b.ranges.some(([blo, bhi]) => alo <= bhi && blo <= ahi));
 };
 
-/** One matcher unit at `i`: a literal code unit, or the set of a class or escape. */
+/**
+ * One matcher unit at `i`: a literal code unit, or the set of a class or escape, read as the engine
+ * reads a pattern compiled with no `u` flag. An escape this reader does not model may match anything.
+ */
 function unit(s: string, i: number): { code?: number; set?: CharSet; next: number } | undefined {
   const c = s[i];
   if (c === undefined) return undefined;
   if (c === "\\") {
-    const e = s[i + 1] ?? "";
+    const e = s[i + 1];
+    if (e === undefined) return undefined;
     const known = CLASSES[e.toLowerCase()];
     if (known) return { set: e === e.toUpperCase() ? complement(known) : known, next: i + 2 };
     const x = s.slice(i + 2, i + 4);
     if (e === "x" && /^[0-9a-f]{2}$/i.test(x)) return { code: Number.parseInt(x, 16), next: i + 4 };
     const u = s.slice(i + 2, i + 6);
     if (e === "u" && /^[0-9a-f]{4}$/i.test(u)) return { code: Number.parseInt(u, 16), next: i + 6 };
-    // \0 followed by a digit is an octal or backreference form, not NUL: left unread
-    if (e === "0" && /\d/.test(s[i + 2] ?? "")) return undefined;
+    // \0, and the octal escape it starts: \012 is a newline
+    const octal = e === "0" ? /^[0-7]{1,3}/.exec(s.slice(i + 1, i + 4)) : null;
+    if (octal) return { code: Number.parseInt(octal[0], 8), next: i + 1 + octal[0].length };
+    // \cJ is the control character of that letter
+    if (e === "c" && /^[a-z]$/i.test(s[i + 2] ?? "")) return { code: s.charCodeAt(i + 2) % 32, next: i + 3 };
     if (e in CONTROL) return { code: CONTROL[e], next: i + 2 };
-    if (e.length === 1) return { code: e.codePointAt(0), next: i + 2 };
-    // \b, \p{...}: a boundary or a property, not one unit's set
-    return undefined;
+    // a word boundary matches no unit (`bracket` reads the \b of a class, a backspace)
+    if (e === "b" || e === "B") return undefined;
+    // \x and \u with no digits are the letter; any other letter or digit is an escape not read here (\c1, \p, \k, \1)
+    if (/[a-z0-9]/i.test(e) && e !== "x" && e !== "u") return { set: ANY, next: i + 2 };
+    return { code: e.charCodeAt(0), next: i + 2 };
   }
   if (c === "[") {
     const end = classEnd(s, i);
@@ -155,8 +170,8 @@ function unit(s: string, i: number): { code?: number; set?: CharSet; next: numbe
   if (c === "(" || c === ")" || c === "|" || c === "^" || c === "$" || c === "*" || c === "+" || c === "?") {
     return undefined;
   }
-  if (c === "{") return undefined;
-  return { code: c.codePointAt(0), next: i + 1 };
+  // a `{` where an atom starts opens no count: it is a brace. One unit of an astral character is read at a time.
+  return { code: c.charCodeAt(0), next: i + 1 };
 }
 
 /** A bracket class's set, or undefined when it holds something this reader does not model. */
@@ -169,9 +184,11 @@ function bracket(s: string, open: number, end: number): CharSet | undefined {
   }
   const ranges: [number, number][] = [];
   while (i < end) {
-    const first = unit(s, i);
+    // inside a class a `[` is itself, not the start of another, and \b is a backspace
+    const first =
+      s[i] === "[" ? { code: 91, next: i + 1 } : s.startsWith("\\b", i) ? { code: 8, next: i + 2 } : unit(s, i);
     if (!first) return undefined;
-    if (first.set) {
+    if ("set" in first && first.set) {
       if (first.set.negated) return undefined;
       ranges.push(...first.set.ranges);
       i = first.next;
@@ -190,9 +207,25 @@ function bracket(s: string, open: number, end: number): CharSet | undefined {
   return { ranges, negated };
 }
 
+/**
+ * `unit`, with a class this reader does not model ([.], [\s\S], [\D], [\p{L}]) read as one that may
+ * accept any unit, rather than as no unit at all.
+ */
+function read(s: string, i: number): { code?: number; set?: CharSet; next: number } | undefined {
+  if (s[i] !== "[") return unit(s, i);
+  const end = classEnd(s, i);
+  return { set: bracket(s, i, end) ?? ANY, next: end + 1 };
+}
+
+/** Past any word-boundary assertion at `i`: \b and \B match no unit, so what follows starts where they do. */
+function pastBoundary(s: string, i: number): number {
+  while (s[i] === "\\" && (s[i + 1] === "b" || s[i + 1] === "B")) i += 2;
+  return i;
+}
+
 /** One matcher atom at `i`: the set it matches (when it is one unit) and where the next atom starts. */
 function atom(s: string, i: number): { set?: CharSet; next: number } {
-  const u = unit(s, i);
+  const u = read(s, i);
   if (!u) return { next: i + 1 };
   let next = u.next;
   // a quantifier repeats the same atom, so for overlap it still matches one unit
@@ -210,14 +243,16 @@ function atom(s: string, i: number): { set?: CharSet; next: number } {
  */
 function overlaps(a: string, b: string): boolean {
   if (b.startsWith(a)) return true;
-  let i = 0;
-  let j = 0;
+  let i = pastBoundary(a, 0);
+  let j = pastBoundary(b, 0);
   while (i < a.length && j < b.length) {
+    // a nested group is not read: what it matches may be what the other alternative does ((a|(a))*)
+    if (a[i] === "(" || b[j] === "(") return true;
     const x = atom(a, i);
     const y = atom(b, j);
     if (!x.set || !y.set || !intersects(x.set, y.set)) return false;
-    i = x.next;
-    j = y.next;
+    i = pastBoundary(a, x.next);
+    j = pastBoundary(b, y.next);
   }
   return i >= a.length || j >= b.length;
 }
@@ -239,11 +274,66 @@ function quantifier(after: string): { next: number; repeats: boolean; unbounded:
   return { next: b[0].length, repeats: most >= 2, unbounded: b[2] !== undefined && b[3] === "" };
 }
 
+/** Where the body of the group opened at `open` starts: past `?:`, a lookaround's mark or a `?<name>`. */
+function groupBody(re: string, open: number): number {
+  const body = open + 1;
+  if (re[body] !== "?") return body;
+  if (re[body + 1] === "<" && re[body + 2] !== "=" && re[body + 2] !== "!") {
+    const end = re.indexOf(">", body);
+    return end === -1 ? body : end + 1;
+  }
+  return body + (re[body + 1] === "<" ? 3 : 2);
+}
+
+interface Scanned {
+  /** each group's body, and whether its own quantifier repeats it */
+  groups: { start: number; end: number; repeated: boolean }[];
+  /** where each quantifier sits, `?` and counts included */
+  quantifiers: number[];
+  /** \1 to \9 or \k<name>: what one matches depends on what a group matched, which no screen here reads */
+  backreference: boolean;
+}
+
+/** A regex's groups and quantifiers, with escapes and classes skipped. */
+function scan(re: string): Scanned {
+  const open: number[] = [];
+  const out: Scanned = { groups: [], quantifiers: [], backreference: false };
+  for (let i = 0; i < re.length; i++) {
+    const c = re[i]!;
+    if (c === "\\") {
+      if (/[1-9k]/.test(re[i + 1] ?? "")) out.backreference = true;
+      i++;
+    } else if (c === "[") i = classEnd(re, i);
+    else if (c === "(") {
+      const body = groupBody(re, i);
+      open.push(body);
+      i = body - 1; // the `?` of `(?:` is no quantifier
+    } else if (c === ")") {
+      const start = open.pop();
+      if (start !== undefined)
+        out.groups.push({ start, end: i, repeated: quantifier(re.slice(i + 1))?.repeats === true });
+    } else {
+      const q = quantifier(re.slice(i));
+      if (q) {
+        out.quantifiers.push(i);
+        i += q.next - 1;
+      }
+    }
+  }
+  return out;
+}
+
+// NESTED_QUANTIFIER with the inner quantifier wrapped in a group of its own, behind a class holding a
+// parenthesis, or a `?`: ((a+))+, ((a)+)+, (a+[)]?)+, (a?b?)*. Any quantifier at any depth of a
+// repeated group's body gives the repeat more than one way to split what it matched.
+const repeatInRepeat = (s: Scanned): boolean =>
+  s.groups.some((g) => g.repeated && s.quantifiers.some((q) => q >= g.start && q < g.end));
+
 // A group whose top-level alternatives overlap (one a prefix of another; equal counts; or an
 // alternative its sibling's class already accepts), repeated by its own quantifier or an enclosing
 // group's, backtracks exponentially on a non-matching tail with no nested quantifier to catch:
 // (a|a)*, (a|aa)+, (a|a){30}, ((a|a))*, ([ab]|a)*
-function overlappingAlternation(re: string): boolean {
+function overlappingAlternation(re: string, groups: Scanned["groups"]): boolean {
   const alternatives = (body: string): string[] => {
     const alts: string[] = [];
     let start = 0;
@@ -260,27 +350,6 @@ function overlappingAlternation(re: string): boolean {
     }
     return [...alts, body.slice(start)];
   };
-  const repeats = (after: string): boolean => quantifier(after)?.repeats === true;
-  const open: number[] = [];
-  const groups: { start: number; end: number; repeated: boolean }[] = [];
-  for (let i = 0; i < re.length; i++) {
-    const c = re[i]!;
-    if (c === "\\") i++;
-    else if (c === "[") i = classEnd(re, i);
-    else if (c === "(") {
-      let body = i + 1;
-      if (re[body] === "?") {
-        if (re[body + 1] === "<" && re[body + 2] !== "=" && re[body + 2] !== "!") {
-          const end = re.indexOf(">", body);
-          body = end === -1 ? i + 1 : end + 1;
-        } else body += re[body + 1] === "<" ? 3 : 2;
-      }
-      open.push(body);
-    } else if (c === ")") {
-      const start = open.pop();
-      if (start !== undefined) groups.push({ start, end: i, repeated: repeats(re.slice(i + 1)) });
-    }
-  }
   for (const g of groups) {
     if (!groups.some((h) => h.repeated && h.start <= g.start && g.end <= h.end)) continue;
     const alts = alternatives(re.slice(g.start, g.end));
@@ -290,18 +359,17 @@ function overlappingAlternation(re: string): boolean {
   return false;
 }
 
-// The same exponential shape as overlappingAlternation, written with no group to catch: two repeats
-// in a row whose atoms accept the same unit, at least one of them without an upper bound. a*a*b,
-// [0-9]*[0-9]*Z, .*.*Z and .*\s*Z all backtrack exponentially on a non-matching tail, and a dozen
-// overlapping repeats fit in the 200 characters a param pattern or a pick leaves room for.
+// Two repeats in a row whose atoms accept the same unit, at least one of them without an upper bound:
+// a*a*b, [0-9]*[0-9]*Z, .*.*Z and .*\s*Z. Each more multiplies the ways a run splits by its length, and
+// a dozen fit in the 200 characters a param pattern or a pick leaves room for. Repeats that something
+// stands between (a group, a literal) are not refused: their cost is a power of the text's length, which
+// the read deadline bounds (deadline.ts).
 function adjacentRepeats(re: string): boolean {
   let prev: CharSet | undefined;
   let prevUnbounded = false;
   for (let i = 0; i < re.length; ) {
-    // A class this reader does not model ([.], [\s\S], [\p{L}], [\S\W]) may accept any unit, so its
-    // repeat beside another repeat is the same ambiguity: read it as one, rather than as no atom.
-    const end = re[i] === "[" ? classEnd(re, i) : -1;
-    const u = end >= 0 ? { set: bracket(re, i, end) ?? ANY, next: end + 1 } : unit(re, i);
+    // a class this reader does not model beside another repeat is the same ambiguity (`read`)
+    const u = read(re, i);
     if (!u) {
       prev = undefined; // a group, an alternation, an anchor or a bare quantifier ends the run
       i++;
@@ -316,6 +384,66 @@ function adjacentRepeats(re: string): boolean {
     i = q ? u.next + q.next : u.next;
   }
   return false;
+}
+
+/** Index of what closes the quote, `[` or `(` at `open`, with quotes and nesting inside it skipped; the end when nothing does. */
+function closing(s: string, open: number): number {
+  const o = s[open]!;
+  const close = o === "[" ? "]" : o === "(" ? ")" : o;
+  for (let i = open + 1; i < s.length; i++) {
+    const c = s[i]!;
+    if (c === "\\") i++;
+    else if (c === close) return i;
+    else if (close !== o && (c === '"' || c === "'" || c === "[" || c === "(")) i = closing(s, i);
+  }
+  return s.length;
+}
+
+// the pseudo-classes whose argument is a selector, matched like any other
+const SELECTOR_ARGUMENT = /:(has|not|is|where|matches)$/i;
+
+/**
+ * The most steps that search in one comma-separated part of a CSS selector. A general sibling (`~`) or a
+ * descendant step tries every earlier sibling or every ancestor, and when the part's first compound
+ * matches nothing each further one multiplies the tries by that count again: seven `~` steps over a
+ * table of 32 rows took over a second. `>` and `+` try one element. Steps inside :has(), :not() and
+ * :is() count; a string, an attribute test and another pseudo-class's argument (:contains(a b),
+ * :nth-child(2n + 1)) hold none.
+ */
+function searchSteps(selector: string): number {
+  let most = 0;
+  let steps = 0;
+  let depth = 0;
+  // a compound came before, and whitespace since: a descendant step when another compound follows
+  let compound = false;
+  let gap = false;
+  for (let i = 0; i < selector.length; i++) {
+    const c = selector[i]!;
+    if (/\s/.test(c)) gap = true;
+    else if (c === "," || c === ">" || c === "+" || c === "~" || c === ")") {
+      if (c === "~") steps++;
+      if (c === ")") depth--;
+      if (c === "," && depth <= 0) {
+        most = Math.max(most, steps);
+        steps = 0;
+      }
+      compound = c === ")";
+      gap = false;
+    } else {
+      if (compound && gap) steps++;
+      compound = true;
+      gap = false;
+      if (c === "\\") i++;
+      else if (c === '"' || c === "'" || c === "[") i = closing(selector, i);
+      else if (c === "(") {
+        if (SELECTOR_ARGUMENT.test(selector.slice(0, i))) {
+          depth++;
+          compound = false;
+        } else i = closing(selector, i);
+      }
+    }
+  }
+  return Math.max(most, steps);
 }
 
 /** Said beside a shared spec's notes and descriptions wherever an agent reads them. */
@@ -336,9 +464,31 @@ export function badAddress(url: string): string | undefined {
     return "is not an absolute URL";
   }
   if (u.protocol !== "https:") return "is not https";
+  // the one place before the path where a {param} passes the host rule below, and filled could name another host
+  if (u.username || u.password) return "carries a user name or password";
   const h = parse(u.hostname, { allowPrivateDomains: true });
-  if (h.isIp || !h.domain || !(h.isIcann || h.isPrivate)) return `has no public host (${u.hostname})`;
+  // the public suffix list holds home.arpa and in-addr.arpa: names of a home network and of addresses, not sites
+  if (h.isIp || !h.domain || !(h.isIcann || h.isPrivate) || /(^|\.)arpa\.?$/i.test(u.hostname))
+    return `has no public host (${u.hostname})`;
   return undefined;
+}
+
+export const MAX_INTERFACE_URL = 300;
+
+/**
+ * An interface's address as the registry stores and serves it and the client keeps and reports it, or
+ * undefined when `url` is none: https on a public host (`badAddress`), a port, and a path of letters,
+ * digits and . _ ~ / - only, rebuilt from its parts. Any two installs on two networks can have one listed
+ * for a domain and an agent reads it, so a query, a fragment, a space or an escape, which could carry a
+ * sentence, is refused.
+ */
+export function interfaceAddress(url: string): string | undefined {
+  if (url.length > MAX_INTERFACE_URL || badAddress(url)) return undefined;
+  const u = new URL(url);
+  if (u.search || u.hash || !/^[a-z0-9.-]+$/.test(u.hostname) || !/^[A-Za-z0-9._~/-]*$/.test(u.pathname))
+    return undefined;
+  const address = `https://${u.host}${u.pathname}`;
+  return address.length > MAX_INTERFACE_URL ? undefined : address;
 }
 
 /** Every address an op sends to or opens: its request, trigger, soft-from page and goto steps. */
@@ -350,9 +500,12 @@ function addresses(op: Operation): [string, string][] {
     ),
     ["trigger", op.trigger.url],
     ...(op.trigger.softFrom ? ([["softFrom", op.trigger.softFrom]] as [string, string][]) : []),
-    ...(op.trigger.steps ?? []).flatMap((s, i): [string, string][] =>
-      s.action === "goto" ? [[`steps[${i}] goto`, s.value ?? s.selector ?? ""]] : [],
-    ),
+    // a step opens `value ?? selector`; each that is written is held to the rule, whichever a reader takes
+    ...(op.trigger.steps ?? []).flatMap((s, i): [string, string][] => {
+      if (s.action !== "goto") return [];
+      const written = [s.value, s.selector].filter((u): u is string => u !== undefined);
+      return (written.length ? written : [""]).map((u) => [`steps[${i}] goto`, u]);
+    }),
   ];
 }
 
@@ -373,40 +526,74 @@ function regexes(op: Operation): [string, string][] {
 }
 
 /**
- * Whether a read speaks GraphQL: a /graphql path, a body naming `variables` or `operationName`, or
- * a `query` that reads as a document. Algolia's `query` is a search string, and `{query}` the
- * placeholder of a param named query, not a document asking for one field.
+ * Whether a request speaks GraphQL: a /graphql path, a body naming `variables`, `operationName` or a
+ * persisted query (as JSON keys or form fields, Facebook's `doc_id` and friendly name included), an
+ * `operationName` in the query string or Facebook's friendly-name header, or a `query` that reads as
+ * a document. Algolia's `query` is a search string, and `{query}` the placeholder of a param named
+ * query, not a document asking for one field.
  */
-function isGraphql(op: Pick<Operation, "request" | "params">): boolean {
-  let path = "";
+export function isGraphql(op: Pick<Operation, "request" | "params">): boolean {
+  let url: URL | undefined;
   try {
-    path = new URL(op.request.url).pathname;
+    url = new URL(op.request.url);
   } catch {
     /* a template */
   }
   const placeholder = (d: string) => op.params.some((p) => d === `{${p.name}}`);
   const document = (d: string) =>
     /^\s*(query|mutation|subscription|fragment)\b|^\s*\{/.test(d.replace(/#[^\n\r]*/g, ""));
+  const named = Object.entries(op.request.headers).some(([k, v]) => /^x-fb-friendly-name$/i.test(k) && !!v);
   return (
-    /graphql/i.test(path) ||
-    /"(variables|operationName)"\s*:/.test(op.request.body ?? "") ||
+    /graphql/i.test(url?.pathname ?? "") ||
+    !!url?.searchParams.get("operationName") ||
+    named ||
+    /"(variables|operationName|persistedQuery)"\s*:|(^|&)(variables|operationName|doc_id|fb_api_req_friendly_name)=/.test(
+      op.request.body ?? "",
+    ) ||
     graphqlDocuments(op.request).some((d) => !placeholder(d) && document(d))
   );
 }
 
-/** The GraphQL documents a request carries. */
+/** A multipart body's parts as field name and value. The boundary is the content type's, else the body's first line. */
+function formParts(body: string, type: string): [string, string][] {
+  const boundary = /boundary="?([^";]+)/i.exec(type)?.[1] ?? /^\s*--([^\r\n]+)\r?\n/.exec(body)?.[1];
+  if (!boundary) return [];
+  return body.split(`--${boundary}`).flatMap((part): [string, string][] => {
+    const blank = /\r?\n\r?\n/.exec(part);
+    const name = blank && /\bname="?([^";\r\n]*)/i.exec(part.slice(0, blank.index))?.[1];
+    return blank && typeof name === "string"
+      ? [[name, part.slice(blank.index + blank[0].length).replace(/\r?\n$/, "")]]
+      : [];
+  });
+}
+
+/**
+ * The GraphQL documents a request carries, read every way a server may read the body: as JSON (past a
+ * byte-order mark), as a form whatever it starts with (`{x}=1&query=...` is one), and as multipart,
+ * whose `operations` part holds the JSON.
+ */
 export function graphqlDocuments(req: Request): string[] {
   const docs: unknown[] = [];
   const body = req.body ?? "";
-  if (/graphql/i.test(req.headers["content-type"] ?? "")) docs.push(body);
-  else if (/^\s*[[{]/.test(body)) {
+  const type = req.headers["content-type"] ?? "";
+  // a GraphQL media type: the body is the document, or JSON that holds it (application/graphql+json), so both are read
+  const raw = /graphql/i.test(type);
+  if (raw) docs.push(body);
+  const json = (text: string) => {
+    if (!/^\s*[[{]/.test(text)) return;
     try {
-      const j = JSON.parse(body);
+      const j = JSON.parse(text.trim());
       for (const item of Array.isArray(j) ? j : [j]) docs.push((item as Record<string, unknown> | null)?.query);
     } catch {
       /* not JSON after all */
     }
-  } else docs.push(...new URLSearchParams(body).getAll("query"));
+  };
+  json(body);
+  if (!raw) docs.push(...new URLSearchParams(body).getAll("query"));
+  for (const [name, value] of formParts(body, type)) {
+    if (name === "operations") json(value);
+    else if (name === "query") docs.push(value);
+  }
   try {
     docs.push(...new URL(req.url).searchParams.getAll("query"));
   } catch {
@@ -494,7 +681,8 @@ function documentless(req: Request): boolean {
     /* a template */
   }
   const body = req.body ?? "";
-  if (/graphql/i.test(req.headers["content-type"] ?? "")) return !body.trim();
+  // under a GraphQL media type a body that is not JSON is the document itself (`{ viewer }` starts like JSON too)
+  const raw = /graphql/i.test(req.headers["content-type"] ?? "");
   if (/^\s*[[{]/.test(body)) {
     try {
       const j = JSON.parse(body);
@@ -503,9 +691,10 @@ function documentless(req: Request): boolean {
         return typeof q !== "string" || !q.trim();
       });
     } catch {
-      return true;
+      if (!raw) return true;
     }
   }
+  if (raw) return !body.trim();
   return !new URLSearchParams(body).getAll("query").some((q) => q.trim());
 }
 
@@ -681,6 +870,48 @@ export function vetShared(site: Site, notes?: string): Vetted {
       else if (returns && !(first && "key" in first && returns.includes(first.key)))
         errors.push(at(`response key ${key} is no field it returns (${returns.join(", ")})`));
     }
+    // The text is never repeated: a refusal is read by the agent the name was written for.
+    for (const [j, p] of (op.response.pick ?? []).entries()) {
+      const name = p.length > LIMITS.text ? undefined : pickName(p);
+      if (name === undefined) errors.push(at(`pick entry ${j + 1} is ${p.length} characters; at most ${LIMITS.text}`));
+      else if (!PICK_NAME.test(name) || name.length > LIMITS.fieldName)
+        errors.push(
+          at(
+            `pick entry ${j + 1} names its field with more than letters, digits, _ $ @ - and path steps (a.b, [0], [*]), or with over ${LIMITS.fieldName} characters: rename it (name=path)`,
+          ),
+        );
+    }
+    // An html recipe's selectors run on the caller's thread over a page the site chose, as its regexes do.
+    const html = op.response.html;
+    if (html) {
+      const fields = Object.entries(html.fields);
+      if (fields.length > LIMITS.htmlFields)
+        errors.push(at(`${fields.length} html fields; at most ${LIMITS.htmlFields}`));
+      const selectors: [string, string][] = [
+        ["items", html.items],
+        ...(html.empty === undefined ? [] : ([["empty", html.empty]] as [string, string][])),
+        ...fields.map(([, f], j): [string, string] => [`field ${j + 1}`, f]),
+      ];
+      for (const [where, written] of selectors) {
+        if (written.length > LIMITS.text) {
+          errors.push(at(`html ${where} selector is ${written.length} characters; at most ${LIMITS.text}`));
+          continue;
+        }
+        // a field's selector is what its `all:` and `@attr` leave
+        const steps = searchSteps(where.startsWith("field") ? fieldSelector(written).css : written);
+        if (steps > LIMITS.selectorSteps)
+          errors.push(
+            at(
+              `html ${where} selector has ${steps} general-sibling (~) or descendant steps in one comma-separated part; at most ${LIMITS.selectorSteps} (a child step > or an adjacent one + tries one element)`,
+            ),
+          );
+      }
+      for (const [j, [name]] of fields.entries())
+        if (!FIELD_NAME.test(name) || name.length > LIMITS.fieldName)
+          errors.push(
+            at(`html field ${j + 1}'s name is not letters, digits, _ $ @ - (at most ${LIMITS.fieldName} characters)`),
+          );
+    }
     for (const p of op.params) {
       long(at(`param ${p.name} description`), p.description);
       long(at(`param ${p.name} hint`), p.hint);
@@ -791,11 +1022,15 @@ export function vetShared(site: Site, notes?: string): Vetted {
         allowed.add(`${path}.request.headers.${name}`);
       }
     for (const [where, re] of regexes(op)) {
-      if (re.length > LIMITS.regex)
+      if (re.length > LIMITS.regex) {
         errors.push(at(`${where} regex is ${re.length} characters; at most ${LIMITS.regex}`));
-      else if (NESTED_QUANTIFIER.test(re))
+        continue;
+      }
+      const scanned = scan(re);
+      if (scanned.backreference) errors.push(at(`${where} regex /${re}/ holds a backreference`));
+      else if (NESTED_QUANTIFIER.test(re) || repeatInRepeat(scanned))
         errors.push(at(`${where} regex /${re}/ nests a quantifier in a quantified group`));
-      else if (overlappingAlternation(re))
+      else if (overlappingAlternation(re, scanned.groups))
         errors.push(at(`${where} regex /${re}/ quantifies a group with overlapping alternatives`));
       else if (adjacentRepeats(re)) errors.push(at(`${where} regex /${re}/ repeats atoms that overlap`));
     }

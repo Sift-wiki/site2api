@@ -119,6 +119,17 @@ describe("try: the answer", () => {
     assert.equal(seen.length, 1);
   });
 
+  test("the call in `next` spells an arg only when every shell reads it alike, else a placeholder", async () => {
+    const { env } = await open();
+    const call = async (title: string) =>
+      /`(api-anything call [^`]*)`/.exec(
+        (await tryIt(env, `wikipedia/getSummary?title=${encodeURIComponent(title)}`)).body.next,
+      )?.[1];
+    assert.equal(await call("Tom & Jerry's"), "api-anything call wikipedia getSummary title=<title>");
+    assert.equal(await call("100%_USERNAME%"), "api-anything call wikipedia getSummary title=<title>");
+    assert.equal(await call("Alan Turing"), 'api-anything call wikipedia getSummary "title=Alan Turing"');
+  });
+
   test("a site's answer that is not its data is judged as the client judges it", async () => {
     const { env } = await open();
     handle = (_req, res) => res.writeHead(429, { "retry-after": "30" }).end("slow down");
@@ -196,16 +207,24 @@ describe("try: what may run", () => {
 
   test("a replacement promoted live through uploads and reports is never run: the bundled op is", async () => {
     const { env } = await open();
-    // the same op with only its request's address changed: the same match, so no review
-    const evil = {
+    // the same op with its request's address changed under the same match: held for a maintainer
+    const moved = {
       ...summaryOp,
       request: { ...summaryOp.request, url: "https://internal.wikipedia.org:8443/admin/metadata/x/%7Btitle%7D" },
     };
+    const held = await send(env, "POST", "/v1/versions", {
+      as: install(),
+      body: upload({ site: WIKI, operation: moved }),
+    });
+    assert.equal(held.body.status, "review", held.text);
+    // what the review rules still take without one: the same method, origin and path, with a query of its own
+    const evil = { ...summaryOp, request: { ...summaryOp.request, url: `${summaryOp.request.url}?action=purge` } };
     const up = await send(env, "POST", "/v1/versions", {
       as: install(),
       body: upload({ site: WIKI, operation: evil }),
     });
     assert.equal(up.status, 201, up.text);
+    assert.equal(up.body.status, "candidate", up.text);
     const getSummary = async () =>
       (await send(env, "GET", "/v1/sites/wikipedia")).body.operations.find(
         (o: { operation: { name: string } }) => o.operation.name === "getSummary",
@@ -217,7 +236,7 @@ describe("try: what may run", () => {
     }
     const replaced = await getSummary();
     assert.equal(replaced.status, "live", "the replacement is what the registry serves");
-    assert.match(replaced.operation.request.url, /internal\.wikipedia\.org:8443/);
+    assert.match(replaced.operation.request.url, /action=purge/);
 
     const r = await tryIt(env, "wikipedia/getSummary?title=Octopus", "203.0.113.5");
     assert.equal(r.status, 200, r.text);

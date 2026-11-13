@@ -7,6 +7,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
+import { DEADLINE } from "../src/deadline.js";
 import { type CallResult, call } from "../src/execute.js";
 import { Jobs } from "../src/jobs.js";
 import {
@@ -495,6 +496,34 @@ test("MCP lists portable output hints and prepares declared links without sendin
     assert.equal(absent.missing, true);
     assert.equal(site.hits(), 0, "preparing never fetches, executes, or follows the link");
   } finally {
+    await s.done();
+    site.close();
+  }
+});
+
+test("MCP prepares a link under the args limit: a transform's regex slow on the item is an error, not input", async () => {
+  const site = await localSite();
+  const s = await connect();
+  const was = DEADLINE.args;
+  try {
+    saveMixed(site.base);
+    const spec = loadSite("mw")!.site;
+    // exponential in the run of a's: seconds without a limit
+    spec.operations[0]!.links = [{ from: "title", to: { op: "find", arg: "kind" }, transform: "~((a+))+b" }];
+    saveSite(spec);
+    await s.start({ allowWrites: true });
+    DEADLINE.args = 100;
+    const t0 = performance.now();
+    const slow = await s.tool("list_operations", {
+      site: "mw",
+      prepare: { op: "find", link: 0, item: { title: `${"a".repeat(29)}!` } },
+    });
+    assert.ok(performance.now() - t0 < 1500, `${Math.round(performance.now() - t0)} ms`);
+    assert.deepEqual([slow.isError, slow.class], [true, "error"], JSON.stringify(slow));
+    assert.match(slow.reason, /the link was not prepared: it took over 100 ms/);
+    assert.equal(site.hits(), 0);
+  } finally {
+    DEADLINE.args = was;
     await s.done();
     site.close();
   }

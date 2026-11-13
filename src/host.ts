@@ -8,6 +8,7 @@ import { join } from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { closeIdleBrowser } from "./browser.js";
 import { setAt, templateRefs } from "./codec.js";
+import { DEADLINE, within } from "./deadline.js";
 import { describeOperation, type OperationDescription } from "./describe.js";
 import { siteOf } from "./domain.js";
 import {
@@ -135,7 +136,8 @@ function urlsOf(op: Pick<Operation, "request" | "trigger" | "slots"> & Partial<P
     ...op.slots.flatMap((s) => (s.from ? [s.from.request.url] : [])),
     op.trigger.url,
     ...(op.trigger.softFrom ? [op.trigger.softFrom] : []),
-    ...(op.trigger.steps ?? []).flatMap((s) => (s.action === "goto" && s.value ? [s.value] : [])),
+    // a goto opens `value ?? selector`
+    ...(op.trigger.steps ?? []).flatMap((s) => (s.action === "goto" ? (s.value ?? s.selector ?? []) : [])),
     ...(op.readback && "read" in op.readback ? urlsOf(op.readback.read) : []),
   ];
 }
@@ -348,7 +350,8 @@ function previewRequest(
   hide: (text: string) => string,
 ): Request {
   const bare = bareCall(site, op);
-  let req = buildRequest(op, args, previewSession(op, sessions.effective, sessions.stored, bare, tier), "host-preview");
+  const session = previewSession(op, sessions.effective, sessions.stored, bare, tier);
+  let req = within(() => buildRequest(op, args, session, "host-preview"), DEADLINE.args);
   for (const slot of op.slots) {
     if (slot.gen) req = setAt(req, slot.at, "<generated:uuid>");
     if (slot.from) req = setAt(req, slot.at, `<derived:${slot.path}>`);
@@ -425,7 +428,7 @@ export function planCall(
     args = structuredClone(withDefaults(found.op, args));
     const effective = callSession(found.site, found.op, session, found.theirs);
     // Live values, as call() checks them: a placeholder in a credential's place could hide a BadHeader.
-    buildRequest(found.op, args, effective, "host-preview");
+    within(() => buildRequest(found.op, args, effective, "host-preview"), DEADLINE.args);
     const { tier, maxTier } = callTiers(found.site, found.op, opts.maxTier, rememberedTier(name, found.op.name));
     if (tier > maxTier) return refuse(tierBlocked(found.site, found.op, { tier, maxTier }, opts.maxTier));
     const unsafeWrite = callOnlyWriteRefusal(name, found.op, tier);

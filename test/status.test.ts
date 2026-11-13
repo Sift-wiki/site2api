@@ -298,3 +298,48 @@ test("status reports a settings.json that cannot be read, with the way back, nev
   assert.match(settings()[0]!.detail, /settings\.json cannot be read \(EISDIR\)/);
   assert.match(status("demo").problems.find((x) => x.problem === "settings")!.detail, /EISDIR/, "with a site too");
 });
+
+test("an example is spelled in a next command only when no shell reads it; any other is left for the caller to put in", () => {
+  const read = (name: string, example: unknown) => ({
+    name,
+    readOnly: true,
+    request: { method: "GET", url: "https://demo.example.com/api/scoped?q=books" },
+    slots: [{ param: "q", at: ["query:q"] }],
+    params: [{ name: "q", example }],
+    trigger: { url: "https://demo.example.com/" },
+  });
+  // what a spec's author can write as an example: each ends a quoted argument in cmd.exe or PowerShell
+  const hostile = [
+    "x&echo MARKER-AMP&rem ",
+    "y'; echo MARKER-SEMI; '",
+    'z"|echo MARKER-PIPE|"',
+    "$(id)",
+    "`id`",
+    "a b",
+    "%PATH%",
+    "a,b",
+    "@x",
+    "~",
+  ];
+  const plain = ["books", "rare-orchids_2", "v1.2", "en/US", "10:30", "a+b", 42, true];
+  const examples = [...hostile, ...plain];
+  saveSite(
+    parseSite({
+      name: "demo",
+      baseUrl: "https://demo.example.com",
+      operations: examples.map((e, i) => read(`op${i}`, e)),
+    }),
+  );
+  for (const i of examples.keys()) rememberTier("demo", `op${i}`, 2);
+  const s = status("demo");
+  const next = (i: number) => s.problems.find((p) => p.problem === "escalated" && p.op === `op${i}`)!.next;
+  for (const [i, e] of hostile.entries()) {
+    assert.ok(next(i).startsWith(`api-anything call demo op${i} q=<q> --max-tier 1 `), `${e}: ${next(i)}`);
+    assert.ok(!next(i).includes(e), `${e} is not in the command`);
+    assert.match(next(i), /put a value for q in place of <q>/);
+  }
+  for (const [n, e] of plain.entries()) {
+    const i = hostile.length + n;
+    assert.ok(next(i).startsWith(`api-anything call demo op${i} q=${e} --max-tier 1 tries tier 1 again`), next(i));
+  }
+});

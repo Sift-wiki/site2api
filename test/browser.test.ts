@@ -1,10 +1,20 @@
 import assert from "node:assert/strict";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
+import { createServer } from "node:http";
+import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, before, describe, test } from "node:test";
-import { browserAvailable, closeBrowser, headlessUserAgent, pageFetch, runTrigger } from "../src/browser.js";
+import {
+  browserAvailable,
+  closeBrowser,
+  headlessUserAgent,
+  pageFetch,
+  runTrigger,
+  waitReport,
+} from "../src/browser.js";
+import { learnGuard } from "../src/heal.js";
 import { type Fixture, PUBLIC_BEARER, startFixture } from "./fixture/server.js";
 
 // the browser keeps what it learned about the installed Chrome under the home: not the user's own
@@ -138,6 +148,91 @@ describe("browser", { skip: !browserAvailable() && "no Chromium browser installe
     assert.equal(w.response, undefined);
     assert.deepEqual(JSON.parse(w.request.body ?? "").variables, { text: "hello world" });
     assert.equal(fx.calls.filter((c) => c.path.includes("CreatePost")).length, 0);
+  });
+
+  /** The rejections nothing handled while `run` ran, and a moment after: a closed page rejects what was left pending. */
+  const unhandledDuring = async (run: () => Promise<void>) => {
+    const seen: unknown[] = [];
+    const on = (e: unknown) => seen.push(e);
+    process.on("unhandledRejection", on);
+    try {
+      await run();
+      await new Promise((r) => setTimeout(r, 300));
+    } finally {
+      process.off("unhandledRejection", on);
+    }
+    return seen.map(String);
+  };
+
+  test("a trigger step does not outlast the run's budget, and one given up on raises nothing when its page closes", async () => {
+    await runTrigger({ url: `${fx.url}/u/alice`, profileDir }); // the browser's start is not the run's
+    const unhandled = await unhandledDuring(async () => {
+      const t0 = Date.now();
+      const r = await runTrigger({
+        url: `${fx.url}/u/alice`,
+        profileDir,
+        timeoutMs: 1500,
+        steps: [
+          { action: "wait", ms: 10_000 },
+          { action: "wait", ms: 10_000 },
+        ],
+      });
+      const ms = Date.now() - t0;
+      assert.ok(ms < 8000, `the run took ${ms} ms on a budget of 1500`);
+      assert.equal(r.wait?.ended, "deadline");
+      // the run says where it stopped: the first wait did not finish, and the second never started
+      assert.equal(r.cut, 0);
+      assert.match(waitReport(r), /^the time ran out on /);
+      assert.ok(
+        r.exchanges.some((e) => e.request.url.includes("/UserByName?")),
+        "what the page sent is still returned",
+      );
+    });
+    assert.deepEqual(unhandled, []);
+  });
+
+  test("a request the guard cannot judge (a body nested too deep to walk) does not leave, and the run ends", async () => {
+    const posts: number[] = [];
+    const server = createServer((req, res) => {
+      if (req.method === "POST") {
+        let n = 0;
+        req.on("data", (d: Buffer) => (n += d.length));
+        req.on("end", () => posts.push(n));
+        return void res.writeHead(200, { "content-type": "application/json" }).end("{}");
+      }
+      // a read by GraphQL's rules (a query with its document), with `depth` arrays beside it
+      const body = `'{"query":"{ viewer { id } }","v":' + '['.repeat(n) + ']'.repeat(n) + '}'`;
+      const send = `const n = Number(new URLSearchParams(location.search).get('depth')); fetch('/api/deep', { method: 'POST', headers: { 'content-type': 'application/json' }, body: ${body} })`;
+      res
+        .writeHead(200, { "content-type": "text/html" })
+        .end(`<button id="go">go</button><script>document.getElementById('go').onclick = () => { ${send} }</script>`);
+    });
+    await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
+    const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+    const run = (depth: number) =>
+      runTrigger({
+        url: `${base}/page?depth=${depth}`,
+        profileDir,
+        timeoutMs: 5000,
+        steps: [{ action: "click", selector: "#go" }],
+        intercept: learnGuard(),
+      });
+    try {
+      const unhandled = await unhandledDuring(async () => {
+        const shallow = await run(50);
+        assert.equal(posts.length, 1, "a query that can be read leaves");
+        assert.equal(shallow.exchanges.find((e) => e.request.method === "POST")?.aborted, undefined);
+
+        const deep = await run(20_000);
+        const post = deep.exchanges.find((e) => e.request.method === "POST");
+        assert.ok((post?.request.body?.length ?? 0) > 40_000, "the guard was given the body");
+        assert.equal(post?.aborted, true);
+        assert.equal(posts.length, 1, "the request the guard could not judge reached the server");
+      });
+      assert.deepEqual(unhandled, []);
+    } finally {
+      server.close();
+    }
   });
 
   test("layered form encoding and per-request signatures come through", async () => {

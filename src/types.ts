@@ -58,6 +58,8 @@ export interface CaptureResult {
     /** HTTP status of the first page's last document */
     status?: number;
   };
+  /** a trigger run's time ran out in steps[cut], which did not finish; the steps after it never ran */
+  cut?: number;
 }
 
 /** A native dialog a page showed during a run. */

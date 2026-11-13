@@ -109,21 +109,37 @@ function degradation(
   return undefined;
 }
 
-const sh = (v: unknown) => {
-  const s = String(v);
-  return /^[\w.,:/@%+-]+$/.test(s) ? s : `'${s.replaceAll("'", "'\\''")}'`;
-};
+/**
+ * An example a `next` command may spell: every character inert in POSIX shells, cmd.exe and PowerShell
+ * alike. An example is the spec author's text and `next` is run as written, in whichever shell the
+ * agent has: quoting that holds in one (sh's single quotes) ends the argument in another.
+ */
+const INERT = /^[A-Za-z0-9_.:/+-]{1,200}$/;
 
-/** The op's call with its stored examples, as a command line. */
-const exampleCall = (site: string, op: Operation | undefined, name: string) =>
-  [
-    `api-anything call ${site} ${name}`,
-    ...(op?.params ?? []).flatMap((p) => (p.example !== undefined ? [`${p.name}=${sh(p.example)}`] : [])),
-  ].join(" ");
+/**
+ * The op's call with its stored examples, as a command line. `open`: the params whose example is not
+ * spelled, each left as `<name>` for the caller to put a value in.
+ */
+function exampleCall(site: string, op: Operation | undefined, name: string): { command: string; open: string[] } {
+  const open: string[] = [];
+  const args = (op?.params ?? []).flatMap((p) => {
+    if (p.example === undefined) return [];
+    const text = typeof p.example === "object" ? "" : String(p.example);
+    if (INERT.test(text)) return [`${p.name}=${text}`];
+    open.push(p.name);
+    return [`${p.name}=<${p.name}>`];
+  });
+  return { command: [`api-anything call ${site} ${name}`, ...args].join(" "), open };
+}
 
 /** What to do about a read the site answers at a higher tier than the op's own. */
-const lowerTier = (site: string, op: Operation | undefined, name: string, remembered: number, minTier: number) =>
-  `${exampleCall(site, op, name)} --max-tier ${minTier} tries tier ${minTier} again (an answer there forgets tier ${remembered}); if it fails the same way, the op needs the browser: re-learn it with api-anything add ${site} ${name} ...`;
+function lowerTier(site: string, op: Operation | undefined, name: string, remembered: number, minTier: number): string {
+  const { command, open } = exampleCall(site, op, name);
+  const fill = open.length
+    ? `, once you put a value for ${open.join(", ")} in place of ${open.map((p) => `<${p}>`).join(", ")} (the stored example has characters a shell reads, so it is not spelled here)`
+    : "";
+  return `${command} --max-tier ${minTier} tries tier ${minTier} again (an answer there forgets tier ${remembered})${fill}; if it fails the same way, the op needs the browser: re-learn it with api-anything add ${site} ${name} ...`;
+}
 
 /** The step a failing class asks for, as nextFor in execute.ts says it. */
 function stepFor(cls: string, site: string, name: string, write: boolean): string {

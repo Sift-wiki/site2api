@@ -84,7 +84,10 @@ Each search op, and each op in `pull <site>` output, separates evidence:
 An installed copy keeps its params and descriptions without losing the registry's health. Health
 describes the registry version, which may differ from the local one. An unreachable registry leaves
 local matches with `registryError` and unknown registry health. No probes run, and no tier or latency
-is inferred: the Worker does not store aggregates for them. In local-only mode (`setup --local-only`,
+is inferred: the Worker does not store aggregates for them. The registry is sent plain words and
+public domains only (see "What leaves your machine"): when part of the query was not sent, or the
+registry was not asked because none of it could be, the answer has a `notSent` note saying so, and
+its registry matches answer only what was sent. In local-only mode (`setup --local-only`,
 or `API_ANYTHING_LOCAL_ONLY=1`) the registry is never asked: search answers from this machine's specs
 with a `localOnly` note saying so, and `pull`, `publish` and a call of a site this machine lacks say
 it is local-only and how to turn that off.
@@ -332,7 +335,8 @@ nothing and needs no browser. Output is one line of JSON:
   lower, than the 6 days before (3 calls in each window at least);
 - `problems`, each `{site, op, problem, detail, next}`: `cooling`, `stale`, `escalated` (a read
   remembered above its own tier; `next` calls it once with `--max-tier` at that tier, and an
-  answer there forgets the escalation), `degraded`, `failing` (the last call failed for a reason
+  answer there forgets the escalation; the command spells a stored example only when every
+  character of it is one no shell reads, and leaves `<param>` for you to fill otherwise), `degraded`, `failing` (the last call failed for a reason
   other than its args), `verify` (the last verify on this version failed), `write` (a write may
   have gone through), `plaintext` (a session file is stored unsealed because no key is available,
   a session or capture written before sealing is not sealed yet, or the key fails, such as a wrong
@@ -460,19 +464,30 @@ go — avoid heavy automated traffic on it. Other ways in:
   the second factor is done. It counts only if a login cookie appeared or changed while it was open;
   otherwise `login` answers `ok: false`, says why, and keeps the session you had.
 - `--cookies <file>` imports a `cookies.txt` (Netscape) or JSON export, for servers/CI with no browser.
-- `api-anything logout <site>` deletes the stored session (it needs no key, so it also resets a sealed
-  session whose key is lost).
+- `api-anything logout <site|url>` takes what `login` takes and names the site it logged out. It
+  deletes the stored session (it needs no key, so it also resets a sealed session whose key is lost),
+  every saved capture (each is a copy of its run's cookies, so an `add --from <id>` or a `learn_site`
+  from an older id then says `no capture`), and the site's cookies in api-anything's browser profile.
+  When the profile could not be cleared, because another api-anything process holds it, no browser
+  is found where you ran it, or the site's domain is not known (its spec cannot be read and its name
+  is no domain), it answers `ok: false` with `profile: "kept"` and what to do: the profile may still
+  hold the site's cookies. `profile: "cleared"` means the cookies and what the site's pages stored in
+  the profile (localStorage, IndexedDB) for its domain's hosts and its spec's addresses.
+  `profile: "cookies-cleared"` means the storage could not be cleared, and a browser run can read a
+  token kept there back into a session. To remove everything, close every api-anything process and
+  delete the `profile` folder in api-anything's home: its browser is then signed out of every site.
+  A name that is no site, session or domain is an error.
 
 **How the session is stored.** The session file (`~/.api-anything/sessions/<site>.json`),
-captures and the answers kept for `--max-age` and `--changes` (`snapshots/`) are sealed with AES-256-GCM, so a backup, a synced folder or a copied home does not carry
+captures and the answers kept for `--max-age` and `--changes` (`snapshots/`) or for `result` (`results.json`) are sealed with AES-256-GCM, so a backup, a synced folder or a copied home does not carry
 your logins. The key is made on first use and kept in the macOS Keychain (item `api-anything`,
 created by `security`, so reading it shows no dialog), the Secret Service on Linux (`secret-tool`),
 or DPAPI on Windows. On a machine with none of those, such as a container or CI, set
 `API_ANYTHING_KEY` to a passphrase; it overrides the OS store. Keep the passphrase: without it the
 sealed files cannot be read, and a wrong one is an error, not an empty session. Keep `key-salt.json`
 too: if it goes missing while passphrase-sealed files exist, api-anything refuses to make a new one
-and says to restore it. To start over, run `api-anything logout <site>` for each site, delete the
-files in `captures/` and `snapshots/`, and log in again.
+and says to restore it. To start over, run `api-anything logout <site>` for each site, delete
+`results.json` and the files in `captures/` and `snapshots/`, and log in again.
 
 A sealed file starts with the line `#api-anything-sealed`. api-anything 0.3.2 and earlier refuse such
 a file as corrupt instead of reading it as an empty session, so going back to an older version does
@@ -596,12 +611,14 @@ fragments, then `JSON.parse`; do not append the initial shortened preview. Offse
 characters. Restart at offset 0 when changing fields in that mode.
 
 The full extracted answer, before the call's view, is private local user data. At most 20 cut
-answers, and at most 16 MiB of them together (an answer over that alone is not kept, and its cut
-answer says so), are kept in `API_ANYTHING_HOME/results.json` (default `~/.api-anything`), with 0600
-permissions in a 0700 directory, for 15 minutes without renewal. Expired records are removed
+answers, in a file of at most 16 MiB (about 12 MiB of answers when sealed; an answer over that alone is
+not kept, and its cut answer says so), are kept in `API_ANYTHING_HOME/results.json` (default `~/.api-anything`), with 0600
+permissions in a 0700 directory and sealed like the session when the home seals, for 15 minutes without renewal. Expired records are removed
 on the next successful call or result access; an expired or evicted id fails locally, never
 reruns the call. Answers do not enter specs, logs, or reports. If retention fails, the cut
-answer says it is unavailable instead of returning a continuation.
+answer says it is unavailable instead of returning a continuation. A `results.json` that cannot be
+opened (sealed with a key you have since changed, or damaged) is treated as empty and replaced, so
+its older ids are gone and new answers are kept again.
 
 ## MCP server
 
@@ -627,6 +644,9 @@ answer says it is unavailable instead of returning a continuation.
   call while it runs joins it, so a second `login` for a site whose window is open returns that
   job. Jobs end when the server does; a finished one is kept 15 minutes. A sign-in window nobody
   closes is closed after 10 minutes.
+- `login` asks and opens only a known site's own address or an https page on a public host, as
+  `learn_site` loads only such a page: text a page returned may be steering the agent. A page on
+  this machine or the local network is opened by you, in a terminal: `api-anything login <url> --window`.
 - `call_batch` uses the same jobs mechanism: an identical running batch joins its job, and
   `get_job` returns `{ok, results}` when it finishes. A failed item's retry hint names
   `call_operation` for that item, never the entire batch. Each item's data uses the same compact
@@ -770,9 +790,16 @@ Calls run on your machine, your network and your sessions. The catalog stores sp
 reports; it never proxies your calls. Its only request to a site is the "try it" endpoint for a few
 public operations ([REGISTRY.md](REGISTRY.md)), which a visitor runs from the catalog's page.
 
-Whether sharing is on or off, a search goes to the catalog: the words, domain or URL your agent passes
-to `find_sites`, and the name of a shared site it calls before this machine has it. The catalog keeps
-no search words. Local-only mode (`api-anything setup --local-only`, or `API_ANYTHING_LOCAL_ONLY=1`)
+Whether sharing is on or off, a search goes to the catalog: the words your agent passes to
+`find_sites`, and the name of a shared site it calls before this machine has it. Only plain words
+(letters and digits, a hyphen or an apostrophe inside) go as typed. Anything else in a search is read as
+an address: one on a public domain goes as its registrable domain only, with no path, query, user name
+or token, and the rest is not sent at all: an IP address, `localhost:3000`, an internal name such as
+`jira.corp.internal`, a file path, and also a dotted word that is no public domain, such as `node.js`.
+The answer's `notSent` says when that happened. A single word is sent even when it is a host's name
+on your network (`intranet`), since nothing tells it from a word, and an internal name under a real
+public suffix (`db.prod`, `wiki.dev`) goes as that domain. This machine's own specs are still searched
+with the whole query. The catalog keeps no search words. Local-only mode (`api-anything setup --local-only`, or `API_ANYTHING_LOCAL_ONLY=1`)
 stops every registry request, searches included; searches then cover this machine only and say so.
 With sharing on:
 
@@ -846,7 +873,11 @@ In short:
 - It knows only the operations someone taught it, not every feature of every site.
 - `learn_site` learns from one page load per value, from a URL template. A site whose data appears
   only after clicks or typing, or only on in-app navigation, needs the CLI's `capture` and `add`
-  with `--steps` or `--soft-from`. It learns reads only.
+  with `--steps` or `--soft-from`. It learns reads only. Over MCP it loads only https pages on
+  public hosts and learns only requests to such addresses, and an operation it saved goes only to
+  them afterwards, redirects included; a page on this machine or the local network is learned by
+  you, with `api-anything learn` or `add`. It saves into a site only when the page is on that
+  site's domain, and replaces an operation only by learning its own page again.
 - A shared operation is someone else's work. Candidates are served marked as such until other
   installs confirm them, and an operation that worked for others can still fail for you (a
   different region, a block on your network).

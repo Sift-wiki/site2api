@@ -167,10 +167,19 @@ export function splitRegex(p: string): { path: string; regex?: string } {
   return cut < 0 ? { path: p } : { path: p.slice(0, cut), regex: p.slice(cut + 1) };
 }
 
-export function pickEntry(p: string): { name: string; path: string; re?: RegExp } {
+/** A pick entry's output key and what it reads: `name=` renames, else the path is the key. */
+function pickParts(p: string): { name: string; path: string; regex?: string } {
   const [, name, rest] = /^([\w$-]+)=(.+)$/.exec(p) ?? [p, undefined, p];
   const { path, regex } = splitRegex(rest);
-  return { name: name ?? path, path, re: regex === undefined ? undefined : new RegExp(regex) };
+  return { name: name ?? path, path, regex };
+}
+
+/** The key a pick entry gives its value, without compiling the entry's regex. */
+export const pickName = (p: string): string => pickParts(p).name;
+
+export function pickEntry(p: string): { name: string; path: string; re?: RegExp } {
+  const { name, path, regex } = pickParts(p);
+  return { name, path, re: regex === undefined ? undefined : new RegExp(regex) };
 }
 
 /** What `re`'s group 1 (or whole match) finds in a string; undefined for a non-string or no match. */
@@ -193,7 +202,7 @@ export function getPathRegex(obj: unknown, p: string): unknown {
  * of an item is absent from it.
  */
 export function returnedFields(r: Pick<ResponseSpec, "format" | "pick" | "html" | "extract">): string[] | undefined {
-  if (r.pick?.length) return r.pick.map((p) => pickEntry(p).name);
+  if (r.pick?.length) return r.pick.map(pickName);
   return r.format === "html" && r.html && !r.extract ? Object.keys(r.html.fields) : undefined;
 }
 
@@ -259,9 +268,124 @@ function unshown(el: HTMLElement): boolean {
   );
 }
 
+/**
+ * Each `<name...` in `body`: where it starts and its text up to its own `>`, however long its
+ * attributes, or the rest of the body when nothing closes it. One pattern across the body
+ * (`<input[^>]*name=`) rescans it from every tag that never closes; here the search for the next tag
+ * goes on after this one's `>`, so each character is read once.
+ */
+export function* tagsOf(body: string, name: string): Generator<{ at: number; text: string }> {
+  const open = new RegExp(`<${name}`, "gi");
+  for (let m = open.exec(body); m; m = open.exec(body)) {
+    const close = body.indexOf(">", m.index);
+    const end = close < 0 ? body.length : close;
+    yield { at: m.index, text: body.slice(m.index, end) };
+    open.lastIndex = end;
+  }
+}
+
+/**
+ * The most elements a page may hold, and the most closing tags, comments and CDATA sections: each of
+ * those ends a run of text, which is a node too. The parsed tree keeps 0.7 to 1.3 KB of heap for an
+ * element and 0.2 KB for a text node, so one tree takes at most 250 to 350 MiB: the body cap bounds
+ * the bytes read, not what parsing them allocates.
+ */
+export const MAX_PAGE_ELEMENTS = 200_000;
+
+/** A page with more elements than are parsed. The site answers the same again: no retry, tier or heal helps. */
+export class PageTooLarge extends Error {}
+
+// More comment or CDATA openers that nothing closes than a page has: the parser rescans to the page's end from each.
+const UNCLOSED_OPENERS = 64;
+
+/**
+ * `body` cut at the first comment or CDATA opener that nothing closes, when it has that many of them: a
+ * browser reads the rest as that one's text. Read in order as the parser does, so an opener inside a
+ * comment that does close is none; each close is looked for once, and never again after one is missing.
+ */
+function cutUnclosed(body: string): string {
+  const kind = (open: string, close: string) => ({ open, close, next: body.indexOf(open), first: -1, unclosed: 0 });
+  const comment = kind("<!--", "-->");
+  const cdata = kind("<![CDATA[", "]]>");
+  for (let i = 0; ; ) {
+    for (const k of [comment, cdata]) if (k.next >= 0 && k.next < i) k.next = body.indexOf(k.open, i);
+    // whichever opens first
+    const k = cdata.next < 0 || (comment.next >= 0 && comment.next < cdata.next) ? comment : cdata;
+    if (k.next < 0) return body;
+    const end = k.first < 0 ? body.indexOf(k.close, k.next + k.open.length) : -1;
+    if (end >= 0) i = end + k.close.length;
+    else {
+      if (k.first < 0) k.first = k.next;
+      if (++k.unclosed > UNCLOSED_OPENERS) return body.slice(0, k.first);
+      i = k.next + k.open.length;
+    }
+  }
+}
+
+/**
+ * The most steps the parser's repair of unclosed elements may take: a tenth of a second where measured.
+ * It takes each element still open at the page's end out of the tree and moves its children up one at
+ * a time, each move a pass over the ones left: 41 s for 8,000 nested elements, 8 s for one holding
+ * 40,000 children.
+ */
+const MAX_REPAIR_STEPS = 40_000_000;
+
+/**
+ * An upper bound on the steps that repair takes on `root`, a tree parsed with the unclosed elements
+ * left in place, or undefined when it has nothing to do. Those elements are a chain of last children
+ * from the root down, and an element that closed has a range reaching past its opening tag. The repair
+ * leaves the root's own child as it is, so a chain of one is the same tree either way.
+ */
+function repairSteps(root: HTMLElement, page: string): number | undefined {
+  const children: number[] = [];
+  for (let node = root.lastChild; node?.nodeType === 1; ) {
+    const el = node as HTMLElement;
+    const openEnd = page.indexOf(">", el.range[0] + 1 + el.rawTagName.length + el.rawAttrs.length) + 1;
+    if (el.range[1] !== openEnd) break;
+    children.push(el.childNodes.length);
+    node = el.lastChild;
+  }
+  if (children.length < 2) return undefined;
+  let steps = 0;
+  // an element's children when its turn comes are at most its own and those of every one below it
+  for (let i = children.length - 1, moved = 0; i >= 1; i--) {
+    moved += children[i]!;
+    steps += moved * moved;
+  }
+  return steps;
+}
+
+/**
+ * node-html-parser's parse of a site's page, which every one goes through. Refused past
+ * MAX_PAGE_ELEMENTS before the tree is built. A page whose unclosed elements would take the parser
+ * too long to repair (hundreds nested, or one holding thousands of children) keeps them where they
+ * are, each holding what follows it, which takes time in line with the page's size; any other page
+ * parses as the parser's default does.
+ */
+export function parsePage(body: string): HTMLElement {
+  let openers = 0;
+  let others = 0;
+  for (let i = body.indexOf("<"); i >= 0; i = body.indexOf("<", i + 1)) {
+    const c = body.charCodeAt(i + 1);
+    const letter = (c | 32) >= 97 && (c | 32) <= 122; // a letter after `<` opens an element; a bare `<` is text
+    if (letter ? ++openers > MAX_PAGE_ELEMENTS : (c === 47 || c === 33) && ++others > MAX_PAGE_ELEMENTS)
+      throw new PageTooLarge(
+        `the page holds more than ${MAX_PAGE_ELEMENTS} ${letter ? "elements" : "closing tags, comments and CDATA sections"}; refused before parsing it`,
+      );
+  }
+  const page = cutUnclosed(body);
+  // A parse that a deadline stopped (deadline.ts) can leave the parser's shared attribute pattern part way
+  // through a tag, and the next page's first element would lose its id and classes: an element with no
+  // attributes resets it.
+  parseHtml("<i>");
+  const kept = parseHtml(page, { parseNoneClosedTags: true });
+  const steps = repairSteps(kept, page);
+  return steps === undefined || steps > MAX_REPAIR_STEPS ? kept : parseHtml(page);
+}
+
 /** The page parsed, without the elements it does not show; `<head>`'s `<base>` stays. */
 export function parseShown(body: string): HTMLElement {
-  const doc = parseHtml(body);
+  const doc = parsePage(body);
   const stack = [doc];
   for (let el = stack.pop(); el; el = stack.pop())
     for (const c of [...el.childNodes])
@@ -277,6 +401,14 @@ function documentBase(doc: HTMLElement, url: string): string {
   } catch {
     return url;
   }
+}
+
+/** An html field as its parts: `all:` asks for every match, `@attr` for an attribute, and the rest is the selector. */
+export function fieldSelector(field: string): { all: boolean; css: string; attr?: string } {
+  const all = field.startsWith("all:");
+  const sel = all ? field.slice(4) : field;
+  const m = /^(.*?)@([\w:-]+)$/.exec(sel);
+  return { all, css: (m ? m[1]! : sel).trim(), ...(m ? { attr: m[2]! } : {}) };
 }
 
 /**
@@ -295,13 +427,10 @@ export function extractHtml(
   return doc.querySelectorAll(recipe.items).map((el) => {
     const out: Record<string, string | string[] | undefined> = {};
     for (const [name, field] of Object.entries(recipe.fields)) {
-      const all = field.startsWith("all:");
-      const sel = all ? field.slice(4) : field;
-      const m = /^(.*?)@([\w:-]+)$/.exec(sel);
-      const css = (m ? m[1]! : sel).trim();
+      const { all, css, attr } = fieldSelector(field);
       const value = (t: HTMLElement): string | undefined => {
-        const raw = m ? t.getAttribute(m[2]!) : t.text.replace(/\s+/g, " ").trim();
-        return raw && base && m ? address(raw, m[2]!, base) : raw;
+        const raw = attr ? t.getAttribute(attr) : t.text.replace(/\s+/g, " ").trim();
+        return raw && base && attr ? address(raw, attr, base) : raw;
       };
       if (all) out[name] = (css ? el.querySelectorAll(css) : [el]).map(value).filter((v): v is string => !!v);
       else {

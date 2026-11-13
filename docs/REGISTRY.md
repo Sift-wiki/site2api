@@ -40,9 +40,18 @@ account. An install that never ran setup (the plugin, `claude mcp add`, `npm -g`
 the question is answered: `learn_site` asks it once, the first time it has something to share (MCP
 elicitation, or the CLI's prompt), and when the client cannot ask, its `next` has the agent ask the
 user and run `api-anything setup --yes --share-only` or `--no-share --share-only`, which records the
-answer alone. What it does not change: `find_sites` sends its words, domain or URL to `GET /v1/search`
+answer alone. What it does not change: `find_sites` sends its query to `GET /v1/search`
 whether sharing is on or off (the local specs are searched too, and answer alone when the registry
-cannot be reached), and so does a call of a site this machine lacks, which fetches it. The registry
+cannot be reached), and so does a call of a site this machine lacks, which fetches it. Words go as
+typed: letters and digits, a hyphen or an apostrophe inside. Every other token of the query is read as
+an address and goes as its public registrable domain and no more (`registryQuery` in
+`src/registry.ts`): the registry reads nothing else of one, and a path or query can hold a token.
+Nothing goes of a token that has no public domain: an IP, `localhost` or a single label with a port or
+a path, a suffix outside the public list, a `.arpa` name, however it is written (after a user name and
+password, a `key=`, in brackets, percent-encoded), and what is no address at all (`node.js`, a file
+path). The registry holds no such site, so that part of the search covers this machine alone, where
+the whole query still matches, and the answer's `notSent` says that part of the query, or all of it,
+was not sent. The registry
 sees the request's IP address, as any web server does, and does not store it. Of a domain or URL search
 that finds nothing, it keeps the registrable domain and the hashed network that asked (demand, below),
 never the words of a search.
@@ -114,7 +123,15 @@ local-only and how to turn it off (`setup --no-local-only --share-only`, or unse
    carries no query document (a persisted query, named by a hash or an id), or a param that is the whole
    body or the document. Over MCP the trigger must be an https page on a public host.
 4. `shareOps` uploads it (`POST /v1/versions`, signed). A public read goes automatically when
-   `share` is on (unanswered, the question is asked first: Setup). A login op is claimed by its
+   `share` is on (unanswered, the question is asked first: Setup). Public also means learned in a session
+   that shows no account: no login on record for the site, and no live cookie of the site's own domain
+   whose name is not known to be a visitor's (an analytics, consent, bot-management or CSRF cookie, or a
+   name a signed-out visit was given at a login or is given now: the client asks the site once, with no
+   cookies, when such a cookie is all that stands in the way). A read learned with a login on record, or
+   under a session cookie no signed-out visit is given, waits for the user's yes, since its request can
+   carry their account's id as a constant. `learn_site` also keeps here an op whose request still spells
+   one of the user's own values (as it is, encoded, in base64 or as a slug), and its question names every
+   value the saved op holds: its params' examples and each check's args. A login op is claimed by its
    fingerprint ("Ops learned signed in"). A login op or a write is uploaded with its body only with
    the user's yes (CLI prompt, or MCP
    elicitation where the client supports it); the prompt lists what in the upload may be the user's own
@@ -128,7 +145,7 @@ local-only and how to turn it off (`setup --no-local-only --share-only`, or unse
    is `goodreads`), and a new op uploaded under another name on that domain goes to review. So
    `learn_site` names a new site after a site this machine has on that host, else the name the registry
    serves the domain under (`sharedName`: `GET /v1/search?q=<domain>`, a match whose `domain` is it;
-   not asked for a trigger on this machine or the network), else the slug. `shareOps` uploads a site
+   never asked about a host that is not public, a trigger's or an upload's), else the slug. `shareOps` uploads a site
    under its own name when it is pulled or bundled or the registry serves its domain under that name,
    and otherwise under the slug, which the outcome's `as` names (`publish.ts` `registryName`,
    `uploadName`).
@@ -142,11 +159,19 @@ that asked; words are never recorded, since they are a person's and the list is 
 by how many distinct networks asked, so one network asking a thousand times counts once. A domain
 leaves the list once a site for it is shared; the daily job deletes records older than 90 days.
 
+Only a public domain is recorded. An IP address, `localhost`, a single label, a name under a suffix
+outside the public list (`.internal`, `.local`, `.lan`, `.test`, `.example`, `.invalid`) or under `.arpa`
+is a name on someone's own network: the search is answered and nothing is kept. A search takes no key, so
+what it may store is bounded by network: one network adds at most 20 domains an hour (`DEMAND_PER_HOUR`)
+and all networks together 1000 (`DEMAND_PER_HOUR_ALL`). Past either bound the search is still answered
+and nothing is kept. A record stored before these rules that they would refuse is not listed and has no
+wanted page; it is deleted with the rest after 90 days.
+
 Each listed domain links to its **wanted page**, `GET /wanted/<domain>` (`registry/src/wanted.ts`): how
 many networks asked for it in those 30 days, and the commands that teach it (`npx -y api-anything setup`,
 then a prompt for the agent, or `npx -y api-anything learn '<page with {q}>' --args … --args2 … --args3 …`).
-A demand domain is someone's search, so only a clean registrable domain (lowercase, no host, port or
-path: what `domainOf` records) still in demand gets a page; anything else is a 404, so no input creates
+A demand domain is someone's search, so only a clean registrable domain (lowercase, on a public suffix,
+no host, port or path: what a search records) still in demand gets a page; anything else is a 404, so no input creates
 one. A domain fewer than 2 networks asked for (`WANTED_INDEX_NETWORKS`) is marked `noindex` and left out
 of the sitemap: one network's search is too thin a page to list. Once a served site covers the domain,
 its wanted page answers 301 to the site's page.
@@ -273,6 +298,14 @@ meta description, a canonical URL, OpenGraph and Twitter tags, and JSON-LD (`Web
 spec string can close the element. The sitemap lists the home page, each confirmed site's page and each
 indexable wanted page.
 
+A site page shows an `api-anything call` command to copy, with the first runnable read's examples, and a
+try's `next` shows one with the args it was given. An example is its uploader's text and the visitor
+pastes the line into whatever shell they have, where no quoting holds everywhere: `'...'` quotes nothing
+in cmd.exe, and `'\''` ends a PowerShell string. So a value is spelled only when sh, cmd.exe and
+PowerShell read it alike (`callArg` in `registry/src/pages.ts`): bare when `name=value` is letters,
+digits and `_ . : / @ + = -`, in double quotes when it also holds a space or a comma, and otherwise as
+the placeholder `name=<name>`.
+
 ## Sites' own interfaces
 
 Some sites ship their own agent interface: an MCP server or an OpenAPI document. `api-anything interface
@@ -282,8 +315,20 @@ registrable domain. Once installs on as many distinct networks as promote a vers
 domain's operations. A domain search finds a domain that has only an interface, as a match with no
 operations, and records no demand for it. A site already installed keeps its own operations in the
 answer and gains its domain's interfaces. At most ten are served per domain, the best confirmed first;
-the client drops any more, or any malformed one, never the match. The agent tells the user; nothing in
-the client calls an interface.
+the client drops any more, or any malformed one, never the match (a match left with no operations and no
+interface is dropped).
+
+An interface is what other installs reported, and nothing checks that it is the site's own: two keys on
+two networks are enough to have one listed. So the client treats it as data. It keeps one only as an
+address and nothing else (`interfaceAddress` in `src/registry.ts`): https on a public host, at most 300
+characters, no query or fragment, a path of letters, digits and `. _ ~ / -`, rebuilt from its parts; the
+`interface` command refuses to report any other. The registry holds a report to the same rule
+(`interfaceAddress` in `registry/src/store.ts`): anything else is refused with 422, an address is stored
+in that one spelling, and a row stored before the rule is served as that address or not at all. It is listed in `matches[].interfaces` and never
+spelled into `next`, the field agents follow: for a match that has only interfaces, `next` names the
+domain, points at that field and says nobody verified it. A plain address can still spell words in its
+path, which is why the wording, not the shape check, is the rule. The agent shows the user the address;
+nothing in the client calls an interface.
 
 ## Ops learned signed in
 
@@ -298,7 +343,8 @@ Nothing else leaves the machine.
 Once installs on `CLAIM_KEYS` (3) distinct networks claimed the same fingerprint, the registry answers
 each of them, on their next claim or `GET /v1/claims`, with the fingerprints it wants. An idle MCP server
 asks at most every 6 hours. A holder then uploads the anonymous op with `claim` set; the site goes up by
-its name, domain and address alone. The registry accepts it only from an install that claimed that
+its name, domain and address alone, and the evidence says only how the holdout call went and at which
+tier: its args are the args of the check the anonymous form leaves out, so `holdout.args` goes empty. The registry accepts it only from an install that claimed that
 fingerprint, only in anonymous form, only if it hashes to the fingerprint, and keeps the op's name only
 if as many installs gave it that name. Each wanted fingerprint says so (`named`), and when it is false
 the client sends the op as `op_<fingerprint>`: a name only its learner chose never leaves the machine,
@@ -334,7 +380,7 @@ marked as such. It becomes **live** once installs other than its uploader report
 | distinct installs reporting ok, uploader excluded | `PROMOTE_KEYS` = 2 |
 | of which distinct networks (ASN, else /24 or IPv6 /32, stored hashed) | `PROMOTE_NETWORKS` = 2 |
 | a heal (below) | `PROMOTE_HEAL_KEYS` = 1 installs, still `PROMOTE_NETWORKS` networks |
-| `wrong` reports | each outweighs two oks |
+| networks with a `wrong` report | each outweighs two oks; fresh keys on one network are one voice |
 
 A version that claims `evidence.healedFrom` is a heal only when the version it names is of the same op
 and either `degraded`, or live with a `fail` report from the uploader's own key in the last 7 days.
@@ -358,33 +404,69 @@ or unique-local address, every redirect hop included. A job is a candidate that:
 - is served: no live version of its op name shadows it;
 - runs at `minTier` 1, over plain HTTP;
 - has published examples for every required param;
+- installs on fewer than 3 networks reported anything but ok. The uploader's host decides what a check
+  sees, so `fail`, `wrong`, `rate`, `blocked`, `auth` and `error` all count. The count is by network:
+  fresh keys on one network are cheap, and three of them must not take a stranger's candidate off the list;
 - belongs to a site that already has a live op, or has ok reports from installs on 2 distinct networks
-  other than the uploader's. Those installs found it by themselves, through a domain search or a
-  re-learn with the same hash. A stranger's fresh site never sends every verifying install to a host it
-  watches, which would harvest their IP addresses. With the default thresholds such a candidate is
-  usually promoted by those same reports, so in practice a new site's ops are checked by the installs
-  that find it, not by background jobs.
+  other than the uploader's and no `wrong` report from anyone. Those installs found it by themselves,
+  through a domain search or a re-learn with the same hash. With the default thresholds such a candidate
+  is usually promoted by those same reports, so in practice a new site's ops are checked by the installs
+  that find it, not by background jobs. A `wrong` holds a version at candidate, and the uploader's own
+  key may send one, so without the `wrong` rule its keys could keep a candidate of a site nobody vouched
+  for on the list for as long as they liked. On a site with a live op a `wrong` is only one more network
+  that did not confirm the candidate: there one key's `wrong` must not end the checks of someone else's
+  repair.
+
+Together these keep a stranger's fresh site from sending every verifying install to a host it watches,
+which would harvest their IP addresses: its candidate somebody disputes is handed out to nobody, and any
+other candidate reaches the installs of about three networks that fail to confirm it, or the few that do
+and promote it. Reports arrive after jobs are handed out, so a few more installs than that can hold one
+job at once.
 
 Only public reads are promoted by reports. A version is `review`, served to its uploader only until a
 maintainer sets its status (`POST /v1/admin/versions/:hash`), when it:
 
 - was learned while signed in, or its clean replay was neither ok nor a bot wall;
 - writes, or is a read sent with a method other than GET or HEAD. The one exception is a POST that
-  carries only GraphQL query documents. A persisted query names no document and could be a mutation;
-- has a slot with a `cookie:` or `session:` ref, its lookups' slots included: every caller's client would
-  send its own credentials;
+  carries only GraphQL query documents: a JSON body whose every item holds a `query` document with
+  nothing beside it but `variables` and `operationName` and no key twice, sent as `application/json` or
+  `application/graphql+json`, or a raw document sent as `application/graphql`. The body is read as its
+  content type says a server reads it: under any other type (a form's, `text/plain`, none, a list of
+  two) a JSON body is review, since a form parser finds its own `query=` inside one of its strings. So
+  is an op with a slot at `header:content-type`, or with a `form:` slot, which writes pairs into a body
+  that is no form. A persisted query names no document and could be a mutation. A field the rule
+  does not know (`extensions`, an endpoint's own fields) could be the real request. A document a slot
+  fills is whatever an arg or a param's default makes it, so a search API's `{"query":"{q}"}` is review too;
+- has a slot with a `cookie:` or `session:` ref, as its whole value or as a hole in its template, its
+  lookups' slots included: every caller's client would send its own credentials;
 - has a derived slot: its lookup is sent with the caller's cookies, and what it answers (a CSRF token
   under any name) goes into the request;
 - is a new op name on a site that lists `loginCookies` or has an op learned while signed in;
-- is a new op name on an established site: some site on its domain has a live or seeded op. Callers
+- is a new op name on an established site: some site on its domain has a seeded op, or a version that
+  was ever live, whatever its status now. So degrading the only live op of a site the crowd made lifts
+  no review, and neither does waiting for the daily job to archive it. Callers
   trust an established site, so a maintainer approves what it newly does (an x.com `follow`). The check
   is by domain, so a second name for the same domain gets around nothing. A new version of an op the
-  site already has is no new op;
+  site has a live or degraded version of is no new op. A name only review, blocked, archived or
+  candidate versions hold is still new, on such a site and on one with a login, so uploading it twice
+  gets around nothing either;
 - on such a site, has a match (method, host, path, GraphQL operationName) other than the op's
-  incumbent's: of its live and degraded versions, the one live the longest. A real heal keeps its match,
-  since the match is built only from the request's stable identity. A version that turns linkedin
-  `search` into a GET of `/psettings/close-account` is never served without a maintainer. Degrading
-  the incumbent first changes nothing, since a degraded version still counts;
+  incumbent's, or sends another request than it under the same match. The incumbent is, of the op's live
+  and degraded versions, the one live the longest. A real heal keeps its match, since the match is built
+  only from the request's stable identity. The match is its uploader's word, so the request is compared
+  too, read from the version itself (`requestSig` in `src/registry-api.ts`): its method, origin, path and
+  GraphQL operationName. A path segment a slot fills counts as any value, whatever the stored URL holds
+  there, so a param's default cannot move the request unseen; so does a name a slot can change. The match
+  lends only its `*` segments (a hash that rotates). A version that turns linkedin `search` into a GET of
+  `/psettings/close-account` is never served without a maintainer, whatever match it declares.
+  The trigger is compared as well (`triggerSig`: its URL, steps, `softFrom`, confirms and companions in
+  canonical form), since a tier-3 call and every heal open it whatever the request is: a version that
+  keeps the request and opens `/psettings/close-account?confirm=1` in the caller's browser is review.
+  A heal keeps its op's trigger, so it passes.
+  Degrading the incumbent first changes nothing, since a degraded version still counts. The costs: a
+  heal that changes the host, adds or drops a path slot or a trailing slash is review, so is a re-learn
+  of the op from another page or with other steps, and so is a new version of an op whose only versions
+  are candidates, until one of them is live;
 - sends to or opens a host off its site (its readback's read included), or lists `public` names;
 - holds something the export secret scan flags.
 
@@ -399,16 +481,23 @@ maintainer sets its status (`POST /v1/admin/versions/:hash`), when it:
   nothing about the op.
 - The client already heals an op that drifted. A healed public op uploads automatically as a new
   version with `parent` and `evidence.healedFrom`. Its own failed call of the old version makes it a
-  heal (above), so the client sends that `fail` report before the upload.
+  heal (above), so the client sends that `fail` report before the upload. A heal learns from a run made
+  with the call's own args, so a healed request that still spells one of them (a copy in a header, a
+  slug in another field) is not uploaded: the published request never says what its healer asked.
 - Identical repairs from many installs hash the same: each upload of an existing version counts as
   its uploader's confirmation.
-- A repair reaches everyone once it is live. A drifted call of a registry version first asks the
-  registry (`GET /v1/sites/:name`, by the name the registry holds the site under, at most 3 s) for the
-  version it serves for that op now. A different version that is live, keeps the op's match and passes
-  the shared rules is tried before any heal of the client's own, at the tier it asks for if the caller
-  allows it: one request in place of a browser run. Only if it answers does it replace the op where
-  this machine reads it (the rest of the spec untouched). The old version is reported `fail`, the new one `ok`, and
-  nothing is uploaded, since the version is the registry's already.
+- A repair reaches everyone who pulled the site once it is live. A drifted call of an op in a pulled
+  spec (one with the `shared` record, a heal's copy of it included) first asks the registry
+  (`GET /v1/sites/:name`, at most 3 s) for the version it serves for that op now. A different version
+  that is live, keeps the op's match, sends the same request (`requestSig`), keeps its trigger
+  (`triggerSig`) and passes the shared rules
+  is tried before any heal of the client's own, at the tier it asks for if the caller allows it: one
+  request in place of a browser run. Only if it answers does it replace the op where this machine reads
+  it (the rest of the spec untouched). The old version is reported `fail`, the new one `ok`, and nothing
+  is uploaded, since the version is the registry's already. A spec the user learned themselves never
+  takes another install's version, though its shared ops carry a version too: the `shared` record is
+  what holds someone else's op to the shared rules (public addresses only, bound session values, the
+  vet on every load), and that spec has none. Its drifted op heals by itself and shares the heal back.
 - Versions of one op are grouped by its site and op name; each version also stores its match (method,
   host, path, GraphQL operationName). The match alone would merge distinct ops that share an endpoint
   (goodreads `getBook` and `getWorkId` both match `/book/show/*`). The best is served: live over
@@ -440,12 +529,18 @@ maintainer sets its status (`POST /v1/admin/versions/:hash`), when it:
 - The server runs `vetShared` and the export secret scan on every upload, and refuses a spec over 256 KB.
   It checks the declared length first, then reads the body as a stream that stops at the cap. A request
   missing a signature header or with a stale timestamp is refused before any of its body is read.
+- An upload is vetted alone, so a site is held to a pull's limits where it is put together to be served
+  (`registry/src/catalog.ts`): at most 50 ops, and at most 256 KB as the client writes the spec. Live ops
+  are kept first, then degraded ones, then candidates, the oldest first in each, so an op under a new
+  name never pushes out one that was served before it. An op left out stays stored. A site none of
+  whose ops fit is not served.
 - A signature covers the method, the path with its query exactly as sent, the timestamp and the body's
   hash. A signature over the bare path does not cover a query.
 - The `review` reasons above are never promoted by reports.
 - Keys are cheap, so a key counts once per version and promotion needs distinct networks. Uploads and
   reports are rate-limited each hour per key and per network (an IPv4 /24 or an IPv6 /32: one
-  subscriber holds a /48 or more). A key first seen less than an hour ago uploads at most 5 versions
+  subscriber holds a /48 or more). A report batch costs one per report and never less than one, so an
+  empty batch, which still records its key, is not free. A key first seen less than an hour ago uploads at most 5 versions
   (`NEW_KEY_UPLOADS`). A circuit breaker caps uploads at 300 an hour across all keys
   (`UPLOADS_PER_HOUR_ALL`). Every limit answers 429 with Retry-After.
 - Public reads (`/v1/search`, `/v1/sites/:name`, `/v1/index`, `/v1/demand`, `/v1/stats`, `/`,
@@ -464,8 +559,20 @@ What these rules leave open:
   real site. The defence is the agent's: every match carries `domain`, and the agent checks it against
   the site the user meant before calling.
 - An op with no ok report from any network in the last 7 days (a seed nobody calls) can be degraded by
-  failures from 3 networks. A version with the same match, promoted by 2 networks, is then served. A
-  version with a different match still goes to review.
+  failures from 3 networks. A version with the same match, the same request (method, origin, path,
+  operationName) and the same trigger, promoted by 2 networks, is then served. A version with a
+  different match, request or trigger still goes to review. What such a version can still change is
+  what the comparison leaves out: the query string, the headers, the body under the same operationName,
+  and the response recipe.
+- An uploader whose site already has a live op (two keys on two networks) can upload version after
+  version of another op there. Each is a background verification job until installs on three networks
+  fail to confirm it, so each reaches the verifying installs of about three networks, within the upload
+  limits. Its own `wrong` reports from two networks hold such a version at candidate through four more
+  oks than promotion needs, so it can draw about six confirming installs before the version goes live
+  and stops being a job.
+- A site is established while the registry holds a version of it that was ever live. The daily job
+  deletes a version 30 days after archiving it, so a crowd-made site whose every op died and was deleted
+  is a new site again: its name stays bound to its domain, and nothing it had is served.
 - The edge cache holds a public read for up to 60 s, so a maintainer's block takes up to a minute to
   disappear from search, site and index answers.
 - An uploaded site `description` and op descriptions are the uploader's words, shown on its page and

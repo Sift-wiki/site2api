@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
-from typing import TYPE_CHECKING, Any, Dict, List, Mapping, Optional, Sequence, Union
+from typing import TYPE_CHECKING, Any, Dict, List, Mapping, Optional, Sequence, Set, Union
 
 if TYPE_CHECKING:
     from .client import Client
@@ -86,11 +86,34 @@ def parse_arguments(arguments: Union[str, Mapping[str, Any], None]) -> Dict[str,
     return dict(arguments)
 
 
-def run_tool(client: "Client", name: str, arguments: Union[str, Mapping[str, Any], None] = None) -> "Result[Any]":
+def listed(tools: Sequence[Mapping[str, Any]]) -> Set[str]:
+    """The names in the list a model was given: `build_tools`' in any of its formats, beside whatever else
+    the caller put there. A hosted tool (`{"type": "web_search"}`) has no name and is skipped."""
+    names: Set[str] = set()
+    for t in tools:
+        function = t.get("function", t) if isinstance(t, Mapping) else None
+        name = function.get("name") if isinstance(function, Mapping) else None
+        if isinstance(name, str):
+            names.add(name)
+    return names
+
+
+def run_tool(
+    client: "Client",
+    name: str,
+    arguments: Union[str, Mapping[str, Any], None] = None,
+    *,
+    tools: Optional[Sequence[Mapping[str, Any]]] = None,
+    unlisted: bool = False,
+) -> "Result[Any]":
     args = parse_arguments(arguments)
+    # a model writes the name, and the index holds every list this client built: `tools` is the one it was given
+    if tools is not None and name not in listed(tools):
+        raise ValueError(f"no tool {name!r} in the list given")
     known = client._tool_index.get(name)
     if known is None:
-        if name.startswith("_") or "__" not in name:
+        # a name no list of this client described runs only when the caller asks, and only as a read
+        if not unlisted or name.startswith("_") or "__" not in name:
             raise ValueError(f"no tool {name!r}: call tools() first, so its name is known")
         site, op = name.split("__", 1)
         known = (site, op, False)

@@ -1,6 +1,7 @@
 /** The registry's SQL over D1. Only the D1 surface below is used, so a test can stand in for it (test/d1.ts). */
 import type { Evidence, Outcome, SiteContext, Status } from "../../src/registry-api.js";
 import type { Operation } from "../../src/spec.js";
+import { interfaceAddress } from "../../src/vet.js";
 import { ABOUT_OP, type Archivable, type Facts, SERVED } from "./rules.js";
 
 export interface D1Statement {
@@ -269,7 +270,7 @@ export async function facts(
     .prepare(
       `SELECT COALESCE(SUM(outcome = 'ok' AND key <> ?), 0) AS okKeys,
         COUNT(DISTINCT CASE WHEN outcome = 'ok' AND key <> ? THEN network END) AS okNetworks,
-        COALESCE(SUM(outcome = 'wrong'), 0) AS wrongKeys,
+        COUNT(DISTINCT CASE WHEN outcome = 'wrong' THEN network END) AS wrongNetworks,
         COUNT(DISTINCT CASE WHEN outcome = 'ok' AND at >= ? THEN network END) AS weekOkNetworks,
         COALESCE(SUM(outcome = 'ok'), 0) AS oks,
         COALESCE(SUM(outcome IN ('fail', 'wrong')), 0) AS bad,
@@ -280,7 +281,7 @@ export async function facts(
     .first<{
       okKeys: number;
       okNetworks: number;
-      wrongKeys: number;
+      wrongNetworks: number;
       weekOkNetworks: number;
       oks: number;
       bad: number;
@@ -296,7 +297,7 @@ export async function facts(
   return {
     okKeys: counts?.okKeys ?? 0,
     okNetworks: counts?.okNetworks ?? 0,
-    wrongKeys: counts?.wrongKeys ?? 0,
+    wrongNetworks: counts?.wrongNetworks ?? 0,
     heal: v.heal === 1,
     latest: latest.results.map((r) => r.outcome),
     failedNetworks: new Set(failed.map((r) => r.network)).size,
@@ -327,11 +328,18 @@ export async function servable(db: D1Database, viewer?: string, site?: string): 
   ).results;
 }
 
+/** Networks that may report anything but ok on a candidate before it stops being a background job. */
+const UNCONFIRMED_MAX = 3;
+
 /**
  * Candidates this key neither uploaded nor reported, oldest first: only those served (no live version of
- * the op shadows them), that plain HTTP can call (minTier 1). On a site with no live op, only one installs
- * on 2 networks other than the uploader's already reported ok (they found the site by themselves), so a
- * stranger's fresh site cannot point every verifying install at a host it watches.
+ * the op shadows them), that plain HTTP can call (minTier 1), and that installs on fewer than 3 networks
+ * reported anything but ok on (the uploader's host decides what a check sees, so every such outcome counts;
+ * by network, or a stranger's three fresh keys would take anyone's candidate off the list). On a site with
+ * no live op, only one that installs on 2 networks other than the uploader's already reported ok (they
+ * found the site by themselves) and that no install called wrong: a `wrong` holds a version at candidate
+ * while that count stays met, so the uploader's own keys could keep every verifying install coming to a
+ * host it watches. Where a live op admits the job, a `wrong` is one more network that did not confirm it.
  */
 export async function unverified(db: D1Database, key: string, limit: number) {
   return (
@@ -342,10 +350,12 @@ export async function unverified(db: D1Database, key: string, limit: number) {
         WHERE v.status = 'candidate' AND v.uploader <> ?
           AND COALESCE(json_extract(v.operation, '$.minTier'), 1) = 1
           AND NOT EXISTS (SELECT 1 FROM reports r WHERE r.hash = v.hash AND r.key = ?)
+          AND (SELECT COUNT(DISTINCT r.network) FROM reports r WHERE r.hash = v.hash AND r.outcome <> 'ok') < ${UNCONFIRMED_MAX}
           AND NOT EXISTS (SELECT 1 FROM versions l WHERE l.site = v.site AND l.op_name = v.op_name AND l.status = 'live')
           AND (EXISTS (SELECT 1 FROM versions l WHERE l.site = v.site AND l.status = 'live')
-            OR (SELECT COUNT(DISTINCT r.network) FROM reports r WHERE r.hash = v.hash AND r.outcome = 'ok'
-              AND r.key <> v.uploader AND r.network <> COALESCE(v.uploader_network, '')) >= 2)
+            OR (NOT EXISTS (SELECT 1 FROM reports r WHERE r.hash = v.hash AND r.outcome = 'wrong')
+              AND (SELECT COUNT(DISTINCT r.network) FROM reports r WHERE r.hash = v.hash AND r.outcome = 'ok'
+                AND r.key <> v.uploader AND r.network <> COALESCE(v.uploader_network, '')) >= 2))
         ORDER BY v.created_at LIMIT ?`,
       )
       .bind(key, key, limit)
@@ -354,9 +364,12 @@ export async function unverified(db: D1Database, key: string, limit: number) {
 }
 
 /**
- * The op names a site's versions have; whether any was learned signed in; and whether its domain is
- * established: some site on it has a live or seeded op. By domain, so a second name for x.com is no way
- * around the review of new ops on x.
+ * The op names the site has a live or degraded version of; whether any version was learned signed in; and
+ * whether its domain is established: some site on it has a seeded op or a version that was ever live
+ * (`live_since`), whatever its status now: degrading a crowd-made site's ops, or waiting for the daily job
+ * to archive them, must not lift the review of what is uploaded next. By domain, so a second
+ * name for x.com is no way around the review of new ops on x. A name only review, blocked, archived or
+ * candidate versions hold is still new: an uploader's own held version must not make it an op the site has.
  */
 export async function siteOps(
   db: D1Database,
@@ -366,33 +379,35 @@ export async function siteOps(
   const rows = (
     await db
       .prepare(
-        "SELECT op_name, MAX(COALESCE(json_extract(operation, '$.learnedLoggedIn'), 0)) AS login FROM versions WHERE site = ? GROUP BY op_name",
+        "SELECT op_name, MAX(COALESCE(json_extract(operation, '$.learnedLoggedIn'), 0)) AS login, MAX(status IN ('live', 'degraded')) AS held FROM versions WHERE site = ? GROUP BY op_name",
       )
       .bind(site)
-      .all<{ op_name: string; login: number }>()
+      .all<{ op_name: string; login: number; held: number }>()
   ).results;
   const established = await db
     .prepare(
-      "SELECT 1 AS x FROM versions v JOIN sites s ON s.name = v.site WHERE s.domain = ? AND (v.status = 'live' OR v.uploader = 'seed') LIMIT 1",
+      "SELECT 1 AS x FROM versions v JOIN sites s ON s.name = v.site WHERE s.domain = ? AND (v.status IN ('live', 'degraded') OR v.live_since IS NOT NULL OR v.uploader = 'seed') LIMIT 1",
     )
     .bind(domain)
     .first();
-  return { opNames: rows.map((r) => r.op_name), loginOp: rows.some((r) => r.login === 1), established: !!established };
+  return {
+    opNames: rows.filter((r) => r.held === 1).map((r) => r.op_name),
+    loginOp: rows.some((r) => r.login === 1),
+    established: !!established,
+  };
 }
 
 /**
- * The match signature of an op's incumbent: of its live and degraded versions, the one live the longest.
- * Degraded counts, so degrading the incumbent first does not move the reference.
+ * An op's incumbent: of its live and degraded versions, the one live the longest, with its match signature
+ * and its operation. Degraded counts, so degrading the incumbent first does not move the reference.
  */
-export const incumbentSig = async (db: D1Database, site: string, op: string) =>
-  (
-    await db
-      .prepare(
-        "SELECT sig FROM versions WHERE site = ? AND op_name = ? AND status IN ('live', 'degraded') ORDER BY live_since IS NULL, live_since LIMIT 1",
-      )
-      .bind(site, op)
-      .first<{ sig: string }>()
-  )?.sig;
+export const incumbent = (db: D1Database, site: string, op: string) =>
+  db
+    .prepare(
+      "SELECT sig, operation FROM versions WHERE site = ? AND op_name = ? AND status IN ('live', 'degraded') ORDER BY live_since IS NULL, live_since LIMIT 1",
+    )
+    .bind(site, op)
+    .first<{ sig: string; operation: string }>();
 
 /** Whether `key`'s latest report on `hash` is a fail made since `since`. */
 export const failedOn = async (db: D1Database, hash: string, key: string, since: string) =>
@@ -599,7 +614,10 @@ export async function reportInterface(
   ]);
 }
 
-/** The interfaces of `domains` that at least `k` installs, one per network, reported. */
+/**
+ * The interfaces of `domains` that at least `k` installs, one per network, reported. Each by its address
+ * as `interfaceAddress` spells it, so a row stored before that rule is served as an address or not at all.
+ */
 export async function interfacesOf(
   db: D1Database,
   domains: string[],
@@ -615,7 +633,10 @@ export async function interfacesOf(
     .bind(...domains)
     .all<{ url: string; domain: string; kind: "mcp" | "openapi"; key: string; network: string }>();
   const byUrl = new Map<string, typeof results>();
-  for (const r of results) byUrl.set(r.url, [...(byUrl.get(r.url) ?? []), r]);
+  for (const r of results) {
+    const url = interfaceAddress(r.url);
+    if (url) byUrl.set(url, [...(byUrl.get(url) ?? []), r]);
+  }
   for (const [url, rows] of byUrl) {
     const n = holders(rows);
     if (n < k) continue;

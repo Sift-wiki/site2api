@@ -13,10 +13,10 @@ process.env.API_ANYTHING_HOME = HOME;
 after(() => rmSync(HOME, { recursive: true, force: true }));
 
 import { getAt, setAt, walk } from "../../src/codec.js";
-import { addOperation, fillTrigger } from "../../src/heal.js";
+import { addOperation, fillTrigger, runOpTrigger, triggerRefusal } from "../../src/heal.js";
 import { buildRequest } from "../../src/http.js";
 import { learnOperation, matches } from "../../src/learn.js";
-import type { Request } from "../../src/spec.js";
+import { OperationSchema, type Request } from "../../src/spec.js";
 import type { Exchange, StoredCookie } from "../../src/types.js";
 
 const MAC_UA =
@@ -224,6 +224,66 @@ test("a trigger URL template percent-encodes every arg, including / & # ? and em
     t.url,
     `https://site.test/search?q=${encodeURIComponent("a&b=c/d?e")}#tab=${encodeURIComponent("🚀 x")}`,
   );
+});
+
+test("a goto step's address is filled percent-encoded wherever it is written; other steps take the arg as given", () => {
+  const u = "other.test/x?";
+  const t = fillTrigger(
+    {
+      url: "https://site.test/",
+      steps: [
+        { action: "goto", selector: "https://{u}@site.test/" },
+        { action: "goto", value: "https://{u}@site.test/" },
+        { action: "click", selector: "#row-{u}" },
+        { action: "fill", selector: "#q", value: "{u}" },
+      ],
+    },
+    { u },
+  );
+  assert.equal(t.steps![0]!.selector, `https://${encodeURIComponent(u)}@site.test/`);
+  assert.equal(new URL(t.steps![0]!.selector!).host, "site.test");
+  assert.equal(new URL(t.steps![1]!.value!).host, "site.test");
+  assert.equal(t.steps![2]!.selector, "#row-other.test/x?");
+  assert.equal(t.steps![3]!.value, "other.test/x?");
+});
+
+test("an arg that makes a trigger's path segment a dot segment: the trigger still fills, and is not opened", async () => {
+  const trigger = {
+    url: "https://site.test/u/{name}/posts?tab={tab}",
+    softFrom: "https://site.test/feed/{feed}",
+    steps: [
+      { action: "goto" as const, value: "https://site.test/t/.{dot}" },
+      { action: "goto" as const, selector: "https://site.test/s/{a}{b}/x" },
+      { action: "click" as const, selector: "#{name}" },
+    ],
+  };
+  const fine = { name: "..a", tab: "..", feed: "...", dot: "x", a: ".", b: "x" };
+  assert.equal(triggerRefusal(trigger, fine), undefined);
+  for (const [args, seg] of [
+    [{ name: ".." }, "{name}"],
+    [{ name: "." }, "{name}"],
+    [{ feed: ".." }, "{feed}"],
+    [{ dot: "." }, ".{dot}"],
+    [{ a: ".", b: "." }, "{a}{b}"],
+  ] as const)
+    assert.match(
+      triggerRefusal(trigger, { ...fine, ...args }) ?? "",
+      new RegExp(`${seg.replace(/[.{}]/g, "\\$&")}.* a URL reads it as another address`),
+      JSON.stringify(args),
+    );
+  // filling never throws: a message about a call that already ran spells the page with it
+  assert.equal(fillTrigger(trigger, { ...fine, name: ".." }).url, "https://site.test/u/../posts?tab=..");
+
+  const op = OperationSchema.parse({
+    name: "posts",
+    readOnly: true,
+    request: { method: "GET", url: "https://site.test/api/posts?user=alice", headers: {} },
+    slots: [{ param: "name", at: ["query:user"] }],
+    trigger: { url: "https://site.test/u/{name}/posts" },
+    match: { method: "GET", path: "/api/posts" },
+    params: [{ name: "name" }],
+  });
+  await assert.rejects(runOpTrigger("dots", op, { name: ".." }), /not opening .*a URL reads it as another address/);
 });
 
 /* -------------------------------------------------------------------- bugs */

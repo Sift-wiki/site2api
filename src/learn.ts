@@ -20,6 +20,7 @@ import {
 import { getPath, inferShape, innerJson, parseBody, xssiOf } from "./extract.js";
 import {
   besideOrigins,
+  cookieTokens,
   credentialName,
   credentialsOf,
   headerName,
@@ -30,6 +31,7 @@ import {
   leafName,
   opaqueToken,
   opUrls,
+  ownTexts,
   SESSION_FIELD,
   SESSION_HEADER,
   scanSecrets,
@@ -956,6 +958,8 @@ interface Live {
   value?: string;
   /** a stored value that is a credential by the rules in secrets.ts, not a setting the page happens to keep */
   secret?: boolean;
+  /** a part of a cookie (`cookieTokens`): the final check looks for it under its cookie's name */
+  part?: true;
 }
 
 // What to do instead when a request cannot be learned without keeping a credential.
@@ -975,11 +979,18 @@ const sentCookies = (e: Exchange): StoredCookie[] =>
   }));
 
 /**
- * Live session values (8+ chars) a request may repeat: cookies (raw, unquoted, URL-decoded) and the
- * page's localStorage/sessionStorage, including string leaves of a JSON entry (auth SDKs keep
- * tokens that way). A cookie is a `cookie:` ref; a storage value a `session:` ref.
+ * Live session values (8+ chars) a request may repeat: cookies (raw, unquoted, URL-decoded), the
+ * tokens in `sent` (the request's leaves) that a cookie holds as one part of it, and the page's
+ * localStorage/sessionStorage, including string leaves of a JSON entry (auth SDKs keep tokens that
+ * way). A cookie is a `cookie:` ref; a part of one or a storage value a `session:` ref. `own`: what
+ * the op spells of its own accord, which is no part of a cookie (`ownOf`).
  */
-function liveValues(cookies: StoredCookie[], storage: Record<string, string> = {}): Map<string, Live> {
+function liveValues(
+  cookies: StoredCookie[],
+  storage: Record<string, string> = {},
+  sent: string[] = [],
+  own: string[] = [],
+): Map<string, Live> {
   const out = new Map<string, Live>();
   // The first entry to hold a text names it. Any stored entry that holds it as a credential makes
   // it one, whatever the order of the entries.
@@ -1001,6 +1012,10 @@ function liveValues(cookies: StoredCookie[], storage: Record<string, string> = {
     put(value.replace(/^"|"$/g, ""), { ref: `cookie:${name}`, transform: "strip-quotes" });
     put(decoded, { ref: `cookie:${name}`, transform: "url-decode" });
   }
+  // A token the page reads out of a structured cookie and sends by itself. No transform refills a part
+  // of a cookie, so it is a session: value, as a storage entry's leaf is: kept in the session, never the spec.
+  for (const { token, cookie } of cookieTokens(sent, cookies, own))
+    put(token, { ref: `session:${cookie}`, value: token, secret: true, part: true });
   // Apps keep settings and saved requests in storage too. A stored value is a credential under a
   // credential's name or when it is random-looking; a JSON text is judged by its key and its leaves.
   const secret = (v: string, ...names: string[]) =>
@@ -1347,6 +1362,26 @@ const ownSession = (input: LearnInput, captured: Request, sent: StoredCookie[] =
   );
 
 /**
+ * What the op being learned spells of its own accord (`ownTexts`), and the caller's example values: a
+ * cookie that keeps the address of the page the learn opened holds each of them.
+ */
+const ownOf = (input: LearnInput, captured: Request) => [
+  ...ownTexts({ request: captured, trigger: input.trigger }),
+  ...input.examples.flatMap((args) => Object.values(args ?? {}).map(asText)),
+];
+
+/** `liveValues` of a learn's own session, with the parts of its cookies that `captured` sends. */
+function liveOf(input: LearnInput, captured: Request, sent?: StoredCookie[]): Map<string, Live> {
+  const { cookies, values } = ownSession(input, captured, sent);
+  return liveValues(
+    cookies,
+    values,
+    walk(captured).map((l) => l.value),
+    ownOf(input, captured),
+  );
+}
+
+/**
  * Step 4: session refs: live cookie/storage values anywhere, per-session fields, credential-named
  * values, auth headers. Takes the captured template and the param slots; returns the template with
  * every ref'd leaf blanked and the live values the passes found inside longer leaves cut out, the
@@ -1367,7 +1402,13 @@ function sessionRefs(
   settings: string[];
 } {
   const { cookies, values: storage } = ownSession(input, captured, sentCookies(ex));
-  const live = liveValues(cookies, storage);
+  const own = ownOf(input, captured);
+  const live = liveValues(
+    cookies,
+    storage,
+    leaves.map((l) => l.value),
+    own,
+  );
   // The final check refuses only a copy no pass could make a ref, so there the choice is to refuse or
   // to keep the text as captured. A stored value that is a credential by its storage key's name alone,
   // and neither random-looking nor shaped like a token, is no ground to refuse (a theme under `token`).
@@ -1380,7 +1421,9 @@ function sessionRefs(
   );
   // Stored credentials, whether or not a pass makes them refs: the final check looks for each one.
   const stored = Object.fromEntries(
-    [...live].flatMap(([value, l]) => (l.secret && !nameOnly.has(value) ? [[`storage:${l.ref.slice(8)}`, value]] : [])),
+    [...live].flatMap(([value, l]) =>
+      l.secret && !l.part && !nameOnly.has(value) ? [[`storage:${l.ref.slice(8)}`, value]] : [],
+    ),
   );
   const held = new Set(live.keys());
   const refs: Refs = {
@@ -1424,7 +1467,7 @@ function sessionRefs(
   refuseRepeatedKeys(leaves, refs.slots);
   // A ref'd leaf's value lives in the session, not the spec: blank it.
   for (const s of refs.slots) if (s.ref) request = setAt(request, s.at, "");
-  refuseLeftover(request, refs.slots, { cookies, values, stored });
+  refuseLeftover(request, refs.slots, { cookies, values, stored }, own);
   const listed = [...new Set([...publicNames, ...shipped])];
   // What the passes recorded as a setting, for the session store: a save-time scan skips those names.
   // The learn sees credentials it never stores -- a cookie the request sent, a token in storage no leaf
@@ -1465,7 +1508,7 @@ function sessionRefs(
  * leaf that holds each value is the field a user would mark public. The deepest leaf names a hit,
  * not the containers around it; a hit no leaf holds (a key, the URL's fragment) keeps its path.
  */
-function placed(request: Request, live: Session, whole: string[]): string[] {
+function placed(request: Request, live: Session, whole: string[], own: string[]): string[] {
   const split = (hit: string) => {
     const i = hit.indexOf(" holds the live ");
     return [hit.slice(2, i), hit.slice(i)] as const;
@@ -1473,7 +1516,7 @@ function placed(request: Request, live: Session, whole: string[]): string[] {
   const leaves = walk(request);
   const at = new Map(leaves.map((l) => [l.at.join(" > "), l.at]));
   const texts = Object.fromEntries(leaves.map((l) => [l.at.join(" > "), l.value]));
-  const hits = scanSecrets(texts, live).secrets.map(split);
+  const hits = scanSecrets(texts, live, undefined, own).secrets.map(split);
   const deepest = hits.filter(
     ([where, what]) => !hits.some(([w, x]) => x === what && covers(at.get(where)!, at.get(w)!)),
   );
@@ -1500,9 +1543,9 @@ interface Known {
  * could turn into a ref (base64, encoded twice, too short to template) fails closed here. No name
  * exempts a leaf, one marked public included: that mark keeps a pass from recording a value by its
  * name, it waives no cookie and no stored credential. Exempt is the caller's own example, for
- * stored values.
+ * stored values; and `own`, what the op spells of its own accord, for the parts of a cookie.
  */
-function refuseLeftover(request: Request, slots: Slot[], known: Known): void {
+function refuseLeftover(request: Request, slots: Slot[], known: Known, own: string[]): void {
   const example = (at: Step[]) => slots.some((s) => s.param && (key(s.at) === key(at) || covers(s.at, at)));
   const templates = Object.fromEntries(
     slots.flatMap((s) => (s.template !== undefined ? [[s.at.join(" > "), s.template]] : [])),
@@ -1518,8 +1561,8 @@ function refuseLeftover(request: Request, slots: Slot[], known: Known): void {
       rest = setAt(rest, at, "");
       gone.push(at);
     }
-    const whole = scanSecrets({ request: rest, templates, slots: refNames }, live).secrets;
-    return whole.length ? placed(rest, live, whole) : [];
+    const whole = scanSecrets({ request: rest, templates, slots: refNames }, live, undefined, own).secrets;
+    return whole.length ? placed(rest, live, whole, own) : [];
   };
   const secrets = [
     ...look({ cookies: known.cookies, values: known.values }),
@@ -2042,8 +2085,7 @@ function derivedSlots(
   const out: Derived = { slots: [], params: new Set(), types: new Map(), unproven: [] };
   const two = !!input.exchanges2 && !!input.examples[1];
   const kept = new Set((input.derived ?? []).map((d) => key(d.at)));
-  const own = ownSession(input, captured, sentCookies(exchange));
-  const live = liveValues(own.cookies, own.values);
+  const live = liveOf(input, captured, sentCookies(exchange));
   const found = lookedUp(input.exchanges, exchange, args, pages, (v) => live.has(v));
   if (!found.length) return out;
   // run 2's counterpart: the same request, with example values and the candidate path segments as wildcards
@@ -2135,8 +2177,7 @@ function learn(input: LearnInput, disproved: Disproved, derive = true): Learned 
   // 2. params. A request the agent picked by id is its call: an echo-shaped leaf there is evidence
   // (a route resolver posts {path:"/facebook/react"}, the page's own path).
   const locs = input.id !== undefined ? { abs: [], rel: [] } : locations(pages);
-  const own = input.established && ownSession(input, captured);
-  const live = own && liveValues(own.cookies, own.values);
+  const live = input.established && liveOf(input, captured);
   let param: ReturnType<typeof paramSlots>;
   try {
     param = paramSlots(

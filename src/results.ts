@@ -1,9 +1,10 @@
 /** Short-lived private answers shared by CLI processes and MCP; never part of a spec or report. */
 import { randomUUID } from "node:crypto";
-import { existsSync } from "node:fs";
+import { closeSync, existsSync, openSync, readSync } from "node:fs";
 import { join } from "node:path";
 import { capOutput, pick, pickEntry, splitRegex } from "./extract.js";
-import { home, readJson, withLock, writePrivate } from "./session.js";
+import { isSealedText, MAGIC, readSealed, sealing, writeSealed } from "./seal.js";
+import { home, withLock, writePrivate } from "./session.js";
 
 export interface ResultView {
   fields?: string[];
@@ -42,25 +43,77 @@ interface Kept {
   data: unknown;
 }
 
-/** The kept answers together, serialized: a new one evicts the oldest to fit, and one over it alone is not kept. */
+/**
+ * The store's file on disk: a new answer evicts the oldest to fit, and one over it alone is not kept.
+ * Sealed, the file is the JSON in base64 inside an envelope (seal.ts): the JSON gets three quarters,
+ * less a margin for the envelope's own fields.
+ */
 export const RESULT_BYTES = 16 * 1024 * 1024;
+const jsonBudget = (sealed: boolean) => (sealed ? Math.floor((RESULT_BYTES - 4096) / 4) * 3 : RESULT_BYTES);
 
 const file = () => join(home(), "results.json");
-const alive = (now: number) => {
-  const all = readJson<Kept[]>(file(), []);
-  const kept = all.filter((r) => r.expiresAt > now);
-  // every call reads the store while it exists: rewrite it only when something expired
-  if (kept.length !== all.length) writePrivate(file(), JSON.stringify(kept));
+// A kept answer can be the user's signed-in data, so the store is sealed like a snapshot (seal.ts) in a
+// home that seals. A key that cannot be had throws (`seals`, or the write), and both callers turn a
+// throw into an answer that is not kept, never one kept in plaintext.
+const LABEL = "results";
+/**
+ * Whether this home seals, asked before the store's lock is taken: the first answer makes the key,
+ * which can wait on the key store for longer than a lock is waited for.
+ */
+const seals = () => sealing().sealed;
+const isKept = (r: unknown): r is Kept =>
+  !!r && typeof r === "object" && typeof (r as Kept).id === "string" && typeof (r as Kept).expiresAt === "number";
+/**
+ * The store's answers, or undefined for a store that cannot be opened (sealed with another key,
+ * damaged, not a list of answers). It holds nothing older than 15 minutes, so it is started again
+ * rather than refused: a store left by a key since changed would otherwise keep no answer ever again.
+ */
+function read(): Kept[] | undefined {
+  try {
+    const all = readSealed<unknown>(file(), [], LABEL, "");
+    return Array.isArray(all) && all.every(isKept) ? all : undefined;
+  } catch {
+    return undefined;
+  }
+}
+// A home with no key keeps 0600 plaintext, as its sessions do; `writeSealed` would also give the
+// once-per-process warning, which is about sessions and captures.
+const write = (kept: Kept[], sealed: boolean) =>
+  sealed ? writeSealed(file(), JSON.stringify(kept), LABEL) : writePrivate(file(), JSON.stringify(kept));
+
+/** Whether the store on disk is plaintext: one a version before sealing wrote, or a home's that has no key. */
+function plain(): boolean {
+  let fd: number;
+  try {
+    fd = openSync(file(), "r");
+  } catch {
+    return false;
+  }
+  try {
+    const b = Buffer.alloc(MAGIC.length);
+    return !isSealedText(b.toString("utf8", 0, readSync(fd, b, 0, b.length, 0)));
+  } finally {
+    closeSync(fd);
+  }
+}
+
+const alive = (now: number, sealed: boolean) => {
+  const all = read();
+  const kept = (all ?? []).filter((r) => r.expiresAt > now);
+  // every call reads the store while it exists: rewrite it only when something expired, to seal a
+  // plaintext one in a home that seals, or over one that could not be opened
+  if (!all || kept.length !== all.length || (sealed && plain())) write(kept, sealed);
   return kept;
 };
 
-/** The newest kept answers that fit RESULT_LIMIT and RESULT_BYTES. */
-function fit(kept: Kept[]): Kept[] {
+/** The newest kept answers that fit RESULT_LIMIT and, as written, RESULT_BYTES. */
+function fit(kept: Kept[], sealed: boolean): Kept[] {
   const out: Kept[] = [];
+  const budget = jsonBudget(sealed);
   let bytes = 2;
   for (const r of kept.slice(-RESULT_LIMIT).reverse()) {
     bytes += Buffer.byteLength(JSON.stringify(r)) + 1;
-    if (bytes > RESULT_BYTES) break;
+    if (bytes > budget) break;
     out.unshift(r);
   }
   return out;
@@ -164,16 +217,17 @@ export function resultView(value: unknown, view: ResultView = {}, now = Date.now
   }
   if (!r.truncated && !existsSync(file())) return { data: r.data };
   try {
+    const sealed = seals();
     return withLock(file(), () => {
-      const kept = alive(now);
+      const kept = alive(now, sealed);
       if (!r.truncated) {
         const { next: _next, format: _format, ...out } = r;
         return out;
       }
       const id = randomUUID();
-      const fitted = fit([...kept, { id, expiresAt: now + RESULT_TTL_MS, data: value }]);
+      const fitted = fit([...kept, { id, expiresAt: now + RESULT_TTL_MS, data: value }], sealed);
       if (fitted.at(-1)?.id !== id) throw new Error(`the answer is over ${RESULT_BYTES} bytes`);
-      writePrivate(file(), JSON.stringify(fitted));
+      write(fitted, sealed);
       return cursor(id, r, view);
     });
   } catch {
@@ -199,8 +253,9 @@ export function getResult(
     return { ok: false, class: "input", reason: "format must be json when supplied" };
   if (!/^[0-9a-f-]{36}$/.test(id)) return { ok: false, class: "input", reason: "invalid resultId" };
   try {
+    const sealed = seals();
     return withLock(file(), () => {
-      const kept = alive(now);
+      const kept = alive(now, sealed);
       const found = kept.find((r) => r.id === id);
       if (!found) return { ok: false, class: "input", reason: "result not found, expired, or evicted" };
       const value = project(found.data, opts.fields);

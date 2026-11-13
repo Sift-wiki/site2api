@@ -13,6 +13,7 @@ import {
   nextHop,
   privateAddress,
   publicAddress,
+  ReadWrites,
   resolver,
   send,
 } from "../src/http.js";
@@ -127,6 +128,129 @@ test("buildRequest: an arg outside the param's enum or min/max is refused, so no
     () => buildRequest(limited, { text: "hello", tweet_id: "5", count: 0 }, session),
     /param "count" must be at least 1, got 0/,
   );
+});
+
+test("a read's filled request is never a GraphQL mutation", () => {
+  // the document is a param: the stored `{doc}` is no mutation, so the spec's rules cannot see what an arg makes it
+  const viewer = (over: Record<string, unknown> = {}) =>
+    OperationSchema.parse({
+      name: "viewer",
+      readOnly: true,
+      request: {
+        method: "POST",
+        url: "https://www.example.com/api/gql",
+        headers: { "content-type": "application/json" },
+        body: '{"query":"{doc}"}',
+      },
+      slots: [{ param: "doc", at: ["body", "json:/query"] }],
+      params: [
+        {
+          name: "doc",
+          required: false,
+          default: "mutation { closeAccount(confirm: true) { ok } }",
+          example: "{ viewer { id } }",
+        },
+      ],
+      trigger: { url: "https://www.example.com/me" },
+      response: { extract: "data" },
+      ...over,
+    });
+  const none: Session = { cookies: [], values: {} };
+  // the default, an arg, a subscription, and a mutation after a query
+  assert.throws(() => buildRequest(viewer(), {}, none), ReadWrites);
+  assert.throws(() => buildRequest(viewer(), {}, none), /viewer is a read.*GraphQL mutation.*nothing was sent/);
+  assert.throws(() => buildRequest(viewer(), { doc: "subscription { inbox { id } }" }, none), ReadWrites);
+  assert.throws(() => buildRequest(viewer(), { doc: "{ me { id } } mutation M { drop { ok } }" }, none), ReadWrites);
+  // a query, and a query named mutation, still go
+  assert.equal(buildRequest(viewer(), { doc: "{ viewer { id } }" }, none).body, '{"query":"{ viewer { id } }"}');
+  assert.match(buildRequest(viewer(), { doc: "query mutation { a }" }, none).body ?? "", /query mutation/);
+  // a write is what allowWrites gates: its mutation builds
+  assert.match(buildRequest(viewer({ readOnly: false }), {}, none).body ?? "", /closeAccount/);
+  // a slot template around the arg, and a document in the URL's query, are tested alike
+  const templated = viewer({
+    slots: [{ param: "doc", at: ["body", "json:/query"], template: "mutation { {doc} }" }],
+    params: [{ name: "doc", example: "x" }],
+  });
+  assert.throws(() => buildRequest(templated, { doc: "drop { ok }" }, none), ReadWrites);
+  const inUrl = viewer({
+    request: { method: "GET", url: "https://www.example.com/api/gql?query=x", headers: {} },
+    slots: [{ param: "doc", at: ["query:query"] }],
+  });
+  assert.throws(() => buildRequest(inUrl, {}, none), ReadWrites);
+  assert.match(buildRequest(inUrl, { doc: "tea" }, none).url, /query=tea/);
+});
+
+test("search text refused as a mutation says what happened and what to do; the word alone is no mutation", () => {
+  const search = (over: Record<string, unknown> = {}) =>
+    OperationSchema.parse({
+      name: "search",
+      readOnly: true,
+      request: { method: "GET", url: "https://www.example.com/api/search?query=x", headers: {} },
+      slots: [{ param: "q", at: ["query:query"] }],
+      params: [{ name: "q" }],
+      trigger: { url: "https://www.example.com/search" },
+      ...over,
+    });
+  const none: Session = { cookies: [], values: {} };
+  const sent = (q: string, op = search()) => new URL(buildRequest(op, { q }, none).url).searchParams.get("query");
+  // an operation's shape (the keyword first, an optional name and variables, then `{`) is refused, search text or not
+  for (const q of [
+    "mutation { addTodo }",
+    "# how to\n  mutation AddTodo($t: String!) { addTodo(title: $t) { id } }",
+    "subscription{inbox{id}}",
+    // what the grammar lets stand between the keyword and the selection: variables, directives, commas, comments
+    'mutation($t: String = "{") { addTodo(title: $t) { id } }',
+    "mutation @live { addTodo }",
+    "mutation AddTodo @live(if: true) { addTodo }",
+    "mutation # the name follows\n AddTodo\n{ addTodo }",
+    "mutation,AddTodo,{addTodo}",
+    "\ufeffmutation\ufeff{addTodo}",
+    "{ me { id } } subscription Inbox { inbox { id } }",
+  ])
+    assert.throws(
+      () => sent(q),
+      (e: unknown) =>
+        e instanceof ReadWrites &&
+        /^search is a read, and with these args its filled request reads as a GraphQL mutation or subscription/.test(
+          e.message,
+        ) &&
+        /a read never sends one: nothing was sent/.test(e.message) &&
+        /If that was search text and not a document, rephrase it/.test(e.message) &&
+        // the reason names no arg's value
+        !e.message.includes("addTodo") &&
+        !e.message.includes("inbox"),
+      q,
+    );
+  // the words in ordinary text go as they are
+  for (const q of [
+    "mutation testing tools",
+    "subscription box",
+    "mutation",
+    "what is a mutation { in genetics }",
+    // an operation has one name at most: no GraphQL parser takes these as one
+    "mutation testing tools {2024}",
+    "subscription box deals { under 20 }",
+    "mutation testing # tools\n frameworks {2024}",
+    "best subscription (2024) {deals}",
+    'the "mutation { x }" keyword',
+    "query mutation { a }",
+  ])
+    assert.equal(sent(q), q);
+  // and in a JSON body's query field
+  const posted = search({
+    request: {
+      method: "POST",
+      url: "https://www.example.com/api/search",
+      headers: { "content-type": "application/json" },
+      body: '{"query":"x","page":1}',
+    },
+    slots: [{ param: "q", at: ["body", "json:/query"] }],
+  });
+  assert.equal(
+    buildRequest(posted, { q: "mutation testing tools" }, none).body,
+    '{"query":"mutation testing tools","page":1}',
+  );
+  assert.throws(() => buildRequest(posted, { q: "mutation { addTodo }" }, none), /rephrase it/);
 });
 
 test("a session value goes only back to the host it was captured from; a cookie's fallback skips HttpOnly", () => {
@@ -307,6 +431,78 @@ test("send against a local server: GET has no body, per-site pacing, timeout", a
     server.closeAllConnections();
     server.close();
   }
+});
+
+test("send: a plain-http hop cannot replace, shadow or delete a Secure cookie", async () => {
+  const feed = OperationSchema.parse({
+    name: "feed",
+    readOnly: true,
+    request: { method: "GET", url: "https://www.shop.example/api/feed", headers: {} },
+    trigger: { url: "https://www.shop.example/" },
+  });
+  const stored = (domain: string): Session => ({
+    cookies: [
+      { ...cookie("sid", "USER-SESSION", domain), secure: true, httpOnly: true },
+      cookie("theme", "dark", ".shop.example"),
+    ],
+    values: {},
+  });
+  // https feed -> `middle`/landing, which sets the cookie -> https feed2
+  const through = async (middle: string, setCookie: string, domain = ".shop.example") => {
+    const cookies: (string | undefined)[] = [];
+    const fetchImpl = (async (input: string | URL | Request, init?: RequestInit) => {
+      const url = String(input);
+      cookies.push(new Headers(init?.headers).get("cookie") ?? undefined);
+      if (url === "https://www.shop.example/api/feed")
+        return new Response(null, { status: 302, headers: { location: `${middle}/landing` } });
+      if (url === `${middle}/landing`)
+        return new Response(null, {
+          status: 302,
+          headers: { location: "https://www.shop.example/api/feed2", "set-cookie": setCookie },
+        });
+      return new Response("{}", { headers: { "content-type": "application/json" } });
+    }) as typeof fetch;
+    const sent = await send(feed, {}, stored(domain), { site: "shop", minIntervalMs: 0, fetchImpl });
+    return { cookies, set: sent.setCookies };
+  };
+  const http = "http://old.shop.example";
+  const kept = ["sid=USER-SESSION; theme=dark", "theme=dark", "sid=USER-SESSION; theme=dark"];
+  // replace: the same name, domain and path
+  let r = await through(http, "sid=PLANTED; Domain=shop.example; Path=/");
+  assert.deepEqual(r.cookies, kept);
+  assert.equal(r.set, undefined);
+  // shadow: a longer path, or a domain above the host-only Secure cookie's, would be sent ahead of it
+  r = await through(http, "sid=PLANTED; Domain=shop.example; Path=/api", "www.shop.example");
+  assert.deepEqual(r.cookies, kept);
+  assert.equal(r.set, undefined);
+  // delete
+  r = await through(http, "sid=gone; Domain=shop.example; Path=/; Max-Age=0");
+  assert.deepEqual(r.cookies, kept);
+  assert.equal(r.set, undefined);
+  // nor may a plain-http answer set a Secure cookie, or a name that promises one
+  for (const line of ["tok=PLANTED; Secure", "__Secure-tok=PLANTED", "__Host-tok=PLANTED; Path=/"]) {
+    r = await through(http, `${line}; Domain=shop.example`);
+    assert.deepEqual(r.cookies, kept, line);
+    assert.equal(r.set, undefined, line);
+  }
+  // any other cookie of the http hop rides on, as before
+  r = await through(http, "step=1; Domain=shop.example; Path=/");
+  assert.deepEqual(r.cookies, ["sid=USER-SESSION; theme=dark", "theme=dark", "sid=USER-SESSION; theme=dark; step=1"]);
+  assert.deepEqual(
+    r.set?.map((c) => c.name),
+    ["step"],
+  );
+  // and an https answer replaces a Secure cookie, with a non-Secure one too
+  r = await through("https://old.shop.example", "sid=ROTATED; Domain=shop.example; Path=/");
+  assert.deepEqual(r.cookies, [
+    "sid=USER-SESSION; theme=dark",
+    "sid=USER-SESSION; theme=dark",
+    "theme=dark; sid=ROTATED",
+  ]);
+  assert.deepEqual(
+    r.set?.map((c) => c.value),
+    ["ROTATED"],
+  );
 });
 
 test("send: a cross-origin redirect drops cookie-derived and session headers; same-origin keeps them", async () => {

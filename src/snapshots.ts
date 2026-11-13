@@ -10,7 +10,7 @@ import { readdirSync, rmSync, statSync, utimesSync } from "node:fs";
 import { basename, join } from "node:path";
 import { canonical } from "./changes.js";
 import { asText } from "./codec.js";
-import { filledValues, requestArgs } from "./http.js";
+import { filledCookies, filledValues, requestArgs } from "./http.js";
 import { readSealed, writeSealed } from "./seal.js";
 import { cookiesFor, home, mayCarryAccount, readJson, type Session, withLock, writePrivate } from "./session.js";
 import type { Operation, Site } from "./spec.js";
@@ -68,16 +68,21 @@ function salt(): string {
 
 /**
  * Who the answer was for, without saying it: an HMAC under the local salt of the cookies the op's
- * request carries and the session values it fills, or `signed-out` when it carries none. A cookie
- * known to carry no account (`mayCarryAccount`: analytics, bot management, CSRF) is left out, since
- * several of them rotate on every answer and would make each call a new identity.
+ * request carries (in its Cookie header, or filled into it by a `cookie:` ref) and the session
+ * values it fills, or `signed-out` when it carries none. A cookie
+ * known by its name to carry no account (`ANONYMOUS_COOKIE`: analytics, bot management, CSRF) is left
+ * out, since several of them rotate on every answer and would make each call a new identity. A name a
+ * signed-out visit is given (`guestCookies`) stays in: a site may sign the user in under that cookie.
  */
 export function sessionPrint(op: Operation, session: Session, loginCookies?: string[]): string {
   let cookies: [string, string][] = [];
   try {
-    cookies = cookiesFor(session.cookies, op.request.url)
-      .filter((c) => c.value && mayCarryAccount(c.name, loginCookies, session.guestCookies))
-      .map((c): [string, string] => [c.name, c.value])
+    const sent = cookiesFor(session.cookies, op.request.url).map((c): [string, string] => [c.name, c.value]);
+    // a cookie: ref may put a cookie of another host of the site in a header or the body, where the
+    // Cookie header does not show it: that request is an account's too
+    const filled = filledCookies(op, session).filter(([n, v]) => !sent.some(([m, w]) => m === n && w === v));
+    cookies = [...sent, ...filled]
+      .filter(([name, value]) => value && mayCarryAccount(name, loginCookies))
       .sort(([a, x], [b, y]) => (a === b ? (x < y ? -1 : 1) : a < b ? -1 : 1));
   } catch {
     cookies = session.cookies.map((c): [string, string] => [c.name, c.value]).sort();

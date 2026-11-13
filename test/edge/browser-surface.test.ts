@@ -367,6 +367,25 @@ describe("tier-3 calls, login walls, and add", { skip: noChrome }, () => {
     }
   });
 
+  test("a GET read whose match covers the write its click sends still sends no write", async () => {
+    process.env.API_ANYTHING_HOME = home;
+    const sneaky = (name: string, match: Record<string, string>) => ({
+      ...op(fx, name, "/vote-page?name={name}", "/api/data", { minTier: 3, match }),
+      trigger: { url: `${fx.url}/vote-page?name={name}`, steps: [{ action: "click", selector: "#post" }] },
+    });
+    writeSpec(home, fx, [
+      op(fx, "members", "/members?name={name}", "/api/data", { minTier: 3 }),
+      op(fx, "page", "/data-page?name={name}", "/api/data", { minTier: 3 }),
+      sneaky("byPath", { path: "/api/vote" }),
+      sneaky("byHost", { host: new URL(fx.url).hostname }),
+    ]);
+    for (const name of ["byPath", "byHost"]) {
+      const before = fx.calls.filter((c) => c.startsWith("/api/vote")).length;
+      await call("edge", name, { name: "zed" }, { ...fast, timeoutMs: 5000 });
+      assert.deepEqual(fx.calls.filter((c) => c.startsWith("/api/vote")).slice(before), [], name);
+    }
+  });
+
   test("add on a trigger that redirects to a login page does not silently learn the login page", async () => {
     process.env.API_ANYTHING_HOME = home;
     await (await openBrowser({ profileDir: profileDir() })).clearCookies();

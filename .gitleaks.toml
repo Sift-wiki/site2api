@@ -46,4 +46,7 @@ regexes = [
   # bsky.app/profile/jay.bsky.team/post/3mxz7goeycc2f), not a credential; the `key` in the field
   # name trips the generic-api-key rule
   '''^3mxz7goeycc2f$''',
+  # test/mcp-learn.test.ts: a search query ("Alicia Keys") run together into a form field, not a
+  # credential; the `Keys` in the value trips the generic-api-key rule
+  '''^tag=AliciaKeys$''',
 ]

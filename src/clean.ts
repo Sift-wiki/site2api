@@ -4,6 +4,7 @@
  * asks it of someone else's candidate, so neither ever sends the user's sessions.
  */
 import { type Class, judge } from "./classify.js";
+import { DEADLINE, DeadlineExceeded, within } from "./deadline.js";
 import { withDefaults } from "./http.js";
 import { LookupFailed, sendDerived } from "./lookup.js";
 import type { Session } from "./session.js";
@@ -40,7 +41,14 @@ export async function cleanCall(
       minIntervalMs: o.minIntervalMs,
       publicOnly: o.publicOnly,
     });
-    const j = judge(op, r);
+    let j: ReturnType<typeof judge>;
+    try {
+      j = within(() => judge(op, r), DEADLINE.read);
+    } catch (e) {
+      // the same answer takes as long again: error, never a drift
+      if (!(e instanceof DeadlineExceeded)) throw e;
+      return { class: "error", reason: `the answer was not read: ${e.message}`, status: r.status, ms: r.ms };
+    }
     return {
       class: j.class,
       reason: j.reason,

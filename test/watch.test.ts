@@ -32,6 +32,7 @@ import {
   opPrint,
   prune,
   saveSnapshot,
+  sessionPrint,
   swapSnapshot,
 } from "../src/snapshots.js";
 import { parseSite, type Site } from "../src/spec.js";
@@ -514,6 +515,85 @@ test("a kept answer is the session's it was for: another session, or none, is a 
   await call("board", "listings", {}, { ...opts, changes: true });
   as([cookie("sid", "account-B-secret")]);
   assert.deepEqual((await call("board", "listings", {}, { ...opts, changes: true })).changes, { first: true });
+});
+
+test("a session cookie named like a visitor's still tells two accounts, and a logout, apart", async () => {
+  // a login by import records the names a signed-out visit is given; a framework signs the user in under one
+  const as = (cookies: ReturnType<typeof cookie>[]) =>
+    saveSession("board", { cookies, values: {}, guestCookies: ["laravel_session", "XSRF-TOKEN"] });
+  const cached = () => call("board", "listings", {}, { ...opts, maxAgeMs: 60_000 });
+  as([cookie("laravel_session", "sess-of-account-A-0001")]);
+  assert.equal((await cached()).cached, undefined);
+  assert.equal((await cached()).cached, true);
+  await call("board", "listings", {}, { ...opts, changes: true });
+  as([cookie("laravel_session", "sess-of-account-B-0002")]);
+  assert.equal((await cached()).cached, undefined, "B is not served A's answer");
+  const b = await call("board", "listings", {}, { ...opts, changes: true });
+  assert.deepEqual(b.changes, { first: true }, "B's answer is not compared with A's");
+  as([]);
+  assert.equal((await cached()).cached, undefined, "signed out is not served an account's answer");
+  // a name known to carry no account is still left out, guest list or not
+  as([cookie("laravel_session", "sess-of-account-A-0001"), cookie("XSRF-TOKEN", "rotated-every-answer")]);
+  assert.equal((await cached()).cached, true, "A again");
+});
+
+test("an account carried only by a cookie ref from another host of the site still tells two accounts apart", async () => {
+  // the page's script reads its own host-only cookie and sends it to the API host as a bearer token:
+  // no Cookie header goes to api, so the header's cookies alone would call every account signed out
+  const site = parseSite({
+    name: "crosshost",
+    baseUrl: "https://www.example.com",
+    operations: [
+      {
+        name: "me",
+        readOnly: true,
+        request: { method: "GET", url: "https://api.example.com/me", headers: { authorization: "Bearer x" } },
+        slots: [{ ref: "cookie:jwt", at: ["header:authorization"], template: "Bearer {cookie:jwt}" }],
+        params: [],
+        trigger: { url: "https://www.example.com/me" },
+        match: { host: "api.example.com", path: "/me" },
+        response: { format: "json" },
+      },
+    ],
+  });
+  saveSite(site);
+  const op = site.operations[0]!;
+  const jar = (...pairs: [string, string][]) => ({
+    cookies: pairs.map(([name, value]) => ({ ...cookie(name, value), domain: "www.example.com", secure: true })),
+    values: {},
+  });
+  const alice = sessionPrint(op, jar(["jwt", "token-of-alice"]));
+  assert.notEqual(alice, "signed-out");
+  assert.notEqual(alice, sessionPrint(op, jar(["jwt", "token-of-bob"])));
+  assert.equal(alice, sessionPrint(op, jar(["jwt", "token-of-alice"])), "one account is one identity");
+  assert.equal(sessionPrint(op, jar()), "signed-out");
+  // a cookie of www that no ref sends to api is not the request's, and a ref to a name known to carry
+  // no account (it may rotate with every answer) stays out, as in the Cookie header
+  assert.equal(sessionPrint(op, jar(["other", "x"])), "signed-out");
+  assert.equal(alice, sessionPrint(op, jar(["jwt", "token-of-alice"], ["other", "x"])));
+  const csrf = { ...op, slots: [{ ref: "cookie:XSRF-TOKEN", at: ["header:authorization"] }] };
+  assert.equal(sessionPrint(csrf, jar(["XSRF-TOKEN", "rotated-every-answer"])), "signed-out");
+  // an HttpOnly cookie is never echoed to another host (`cookieValue`): the request carries nothing
+  const httpOnly = jar(["jwt", "token-of-alice"]);
+  httpOnly.cookies[0]!.httpOnly = true;
+  assert.equal(sessionPrint(op, httpOnly), "signed-out");
+
+  // through a call: B is never served the answer kept for A
+  const sent: string[] = [];
+  const fetchImpl = (async (_url: unknown, init?: RequestInit) => {
+    const who = ((init?.headers ?? {}) as Record<string, string>).authorization ?? "";
+    sent.push(who);
+    return new Response(JSON.stringify({ who }), { headers: { "content-type": "application/json" } });
+  }) as typeof fetch;
+  const me = () => call("crosshost", "me", {}, { ...opts, maxAgeMs: 60_000, fetchImpl });
+  saveSession("crosshost", jar(["jwt", "token-of-alice"]));
+  assert.deepEqual((await me()).data, { who: "Bearer token-of-alice" });
+  assert.equal((await me()).cached, true);
+  saveSession("crosshost", jar(["jwt", "token-of-bob"]));
+  const bob = await me();
+  assert.equal(bob.cached, undefined, "B is not served A's answer");
+  assert.deepEqual(bob.data, { who: "Bearer token-of-bob" });
+  assert.deepEqual(sent, ["Bearer token-of-alice", "Bearer token-of-bob"]);
 });
 
 test("a cache entry of another op is a miss: a changed path, a raised minTier, a tier above maxTier", async () => {

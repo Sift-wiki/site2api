@@ -61,12 +61,71 @@ class Tools(WithFake):
         self.assertTrue(r.ok)
         self.assertEqual(self.fake.last["path"], "/v1/call/hacker-news/search")
         self.assertEqual(self.fake.last["body"], {"args": {"query": "sqlite"}})
-        # a name tools() never listed still dispatches when it splits cleanly
-        self.assertTrue(Client(self.fake.url, token=TOKEN).run_tool("forum__search", {"query": "x"}).ok)
         with self.assertRaises(ValueError):
             c.run_tool("_hashed_name_12345678", {})
         with self.assertRaises(ValueError):
             c.run_tool("hacker-news__search", "[1]")
+
+    def test_run_tool_refuses_an_unlisted_name(self) -> None:
+        c = self.client()
+        c.tools(["hacker-news"])
+        sent = len(self.fake.requests)
+        for name in ("forum__search", "not-installed__anyOp"):
+            with self.assertRaises(ValueError):
+                c.run_tool(name, {"query": "x"})
+        self.assertEqual(len(self.fake.requests), sent)
+
+    def test_run_tool_unlisted(self) -> None:
+        # the caller, not the model, may ask for a name no list described: it splits, and is a read
+        c = self.client()
+        self.assertTrue(c.run_tool("forum__search", {"query": "x"}, unlisted=True).ok)
+        self.assertEqual(self.fake.last["path"], "/v1/call/forum/search")
+        c.run_tool("forum__postComment", {"text": "hi"}, unlisted=True)
+        self.assertEqual(self.fake.last["path"], "/v1/call/forum/postComment")
+        sent = len(self.fake.requests)
+        for name in ("_hashed_name_12345678", "nosplit"):
+            with self.assertRaises(ValueError):
+                c.run_tool(name, {}, unlisted=True)
+        self.assertEqual(len(self.fake.requests), sent)
+
+    def test_run_tool_keeps_to_the_list_given(self) -> None:
+        c = self.client()
+        for format in ("openai", "anthropic", "json_schema"):
+            news = c.tools(["hacker-news"], format)
+            forum = c.tools(["forum"], format)
+            sent = len(self.fake.requests)
+            with self.assertRaises(ValueError):
+                c.run_tool("forum__search", {"query": "x"}, tools=news)
+            # the list is the limit even when the caller allows names no list described
+            with self.assertRaises(ValueError):
+                c.run_tool("forum__search", {"query": "x"}, tools=news, unlisted=True)
+            with self.assertRaises(ValueError):
+                c.run_tool("hacker-news__search", {"query": "x"}, tools=[])
+            self.assertEqual(len(self.fake.requests), sent)
+            self.assertTrue(c.run_tool("forum__search", {"query": "x"}, tools=forum).ok)
+            self.assertEqual(self.fake.last["path"], "/v1/call/forum/search")
+
+    def test_run_tool_reads_a_list_that_also_holds_hosted_tools(self) -> None:
+        # the list a model was given can hold tools that are not functions and have no name
+        c = self.client()
+        hosted = [
+            {"type": "web_search"},
+            {"type": "code_interpreter", "container": {"type": "auto"}},
+            {"type": "mcp", "server_label": "x"},
+            {"type": "function", "name": "other", "parameters": {}},
+            {"type": "function", "function": None},
+            {"name": 7},
+        ]
+        for format in ("openai", "anthropic", "json_schema"):
+            given = hosted + c.tools(["forum"], format)
+            self.assertTrue(c.run_tool("forum__search", {"query": "x"}, tools=given).ok)
+            sent = len(self.fake.requests)
+            with self.assertRaises(ValueError):
+                c.run_tool("hacker-news__search", {"query": "x"}, tools=hosted)
+            # a hosted tool's name is in the list, and is still no tool of this client
+            with self.assertRaises(ValueError):
+                c.run_tool("other", {}, tools=given)
+            self.assertEqual(len(self.fake.requests), sent)
 
 
 class WriteTools(WithFake):
@@ -81,6 +140,20 @@ class WriteTools(WithFake):
         r = c.run_tool("forum__postComment", {"text": "hi"})
         self.assertEqual(self.fake.last["path"], "/v1/write/forum/postComment")
         self.assertEqual(r["write"], "applied")
+
+    def test_run_tool_keeps_to_the_list_given(self) -> None:
+        c = Client(self.fake.url, token=TOKEN)
+        admin = c.tools(["forum"], "json_schema", writes=True)
+        public = c.tools(["forum"], "json_schema")
+        sent = len(self.fake.requests)
+        with self.assertRaises(ValueError):
+            c.run_tool("forum__postComment", {"text": "hi"}, tools=public)
+        self.assertEqual(len(self.fake.requests), sent)
+        r = c.run_tool("forum__postComment", {"text": "hi"}, tools=admin)
+        self.assertEqual(self.fake.last["path"], "/v1/write/forum/postComment")
+        self.assertEqual(r["write"], "applied")
+        # an adapter runs a name bound when its list was built: a later, narrower list leaves it working
+        self.assertEqual(c.run_tool("forum__postComment", {"text": "again"})["write"], "applied")
 
 
 @unittest.skipUnless(importlib.util.find_spec("langchain_core"), "langchain-core is not installed")

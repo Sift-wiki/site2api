@@ -564,9 +564,10 @@ test("learning refuses a request it could not clear of a live value, in any enco
     ["a cookie too short to template, inside a longer leaf", cookie("sess", "secret123"), { ctx: "v1:secret123" }],
     ["a cookie in base64", cookie("sid", SID), { state: Buffer.from(`sid=${SID}`).toString("base64") }],
     [
+      // base64 with / and + all through it: no stretch of it is left as it was for a pass to take out
       "a cookie percent-encoded twice",
-      cookie("sid", `${SID}/=`),
-      { next: encodeURIComponent(`/cb?s=${encodeURIComponent(`${SID}/=`)}`) },
+      cookie("sid", "q2Fz9kLm/T0vX+Yb7N/cW1pReHs="),
+      { next: encodeURIComponent(`/cb?s=${encodeURIComponent("q2Fz9kLm/T0vX+Yb7N/cW1pReHs=")}`) },
     ],
   ];
   for (const [label, c, fields] of cases) {
@@ -576,6 +577,20 @@ test("learning refuses a request it could not clear of a live value, in any enco
         `keep a credential in the spec: body > json:/${Object.keys(fields)[0]} holds the live cookie ${c.name}\\.`,
       ),
       label,
+    );
+  }
+  // where an unbroken token is one part of the cookie (`<token>/=`, `<token>@$`), that part is a reference: the
+  // token is in no spec
+  for (const rest of ["/=", "@$"]) {
+    const twice = encodeURIComponent(`/cb?s=${encodeURIComponent(SID + rest)}`);
+    const part = learn([post(JSON.stringify({ q: "kittens", next: twice }))], [{ q: "kittens" }], {
+      cookies: [cookie("sid", SID + rest)],
+    });
+    assert.ok(!JSON.stringify(part.operation).includes(SID), JSON.stringify(part.operation));
+    assert.deepEqual(part.sessionValues, { "op/sid": SID });
+    assert.equal(
+      JSON.parse(buildRequest(part.operation, { q: "x" }, { cookies: [], values: part.sessionValues }).body!).next,
+      twice,
     );
   }
   // a session value the learner found by name counts too, where no pass reaches its second copy

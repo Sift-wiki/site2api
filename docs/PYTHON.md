@@ -55,6 +55,16 @@ The token is `token=` when given, else `API_ANYTHING_TOKEN`, else `~/.api-anythi
 (`API_ANYTHING_HOME` moves the folder), as the server reads it. `Client(timeout=60)` bounds each
 request and, for a call that answers `pending`, the whole wait for its job.
 
+`health()` sends no token. Every other request carries it to whatever listens at the base URL, and
+the client cannot tell that listener from your server: the server does not prove that it holds the
+token. On a machine where another account or a confined process can listen on a loopback port, one
+that holds the port while no server does (before the first start, after a stop or a crash) receives
+the token on the first `sites()` or `call()`, and the server accepts that token until you change it
+(delete `serve-token` and restart the server). A base URL with `localhost` adds a second case: the
+server listens on 127.0.0.1 only, so another process can hold `[::1]` on the same port while it
+runs. `Client.start()` is not affected, since it takes the address from the process it started.
+Where this matters, use `Client.start()`, or keep `127.0.0.1` in the URL and the server running.
+
 ## Call
 
 ```python
@@ -67,7 +77,7 @@ else:
 
 | method | route |
 |---|---|
-| `health()` | `GET /v1/health` (no token) |
+| `health()` | `GET /v1/health` (needs no token, and sends none) |
 | `sites()` | `GET /v1/sites` |
 | `operations(site)` | `GET /v1/sites/{site}`: each op with its args JSON Schema; pulls a shared site |
 | `find(query)` | `GET /v1/find?q=`: this machine's sites and the shared catalog |
@@ -116,7 +126,7 @@ it did not answer in time. All of them derive from `ApiAnythingError`.
 ```python
 tools = client.tools(["hacker-news", "goodreads"], format="openai")
 # a tool call from the model:
-result = client.run_tool(call.function.name, call.function.arguments)
+result = client.run_tool(call.function.name, call.function.arguments, tools=tools)
 ```
 
 `tools()` returns one function-tool definition per operation of the named sites (all installed sites
@@ -126,6 +136,19 @@ schema as `parameters`. `format` is `"openai"` (Chat Completions), `"anthropic"`
 `writes=True`. `run_tool(name, arguments)` takes the model's arguments as an object or JSON text and
 calls the operation. Send its `Result` back as the tool's output (`json.dumps(result)`), failures
 included, so the model can read `next`.
+
+The model writes the name, so `run_tool` runs only a tool that a list described:
+
+- A name no `tools()` call on this client listed raises `ValueError`, and nothing is sent.
+- `tools=` is the list the model was given, in any format. A name outside it raises `ValueError`.
+  The list can hold other tools beside these: a hosted one with no name (`{"type": "web_search"}`,
+  a code interpreter, an MCP server) is skipped.
+- Without `tools=`, a name from any earlier list of the same client still runs: the client remembers
+  every list it built (the adapters below depend on that), so after `tools(["forum"], writes=True)` a
+  later reads-only list leaves `forum__postComment` a write. Where lists differ in sites or in
+  `writes`, pass `tools=` or use one `Client` per list.
+- `unlisted=True` is for your own code, not for a model's name: it runs a `<site>__<op>` name no list
+  described, as a read. The server then calls any site it holds, and pulls a shared one it lacks.
 
 ### LangChain and LangGraph
 
@@ -157,7 +180,8 @@ are optional. With `writes=True`, a write tool needs the run's approval. The ful
 [examples/python-agent.py](../examples/python-agent.py).
 
 Other frameworks (CrewAI, LlamaIndex, Pydantic AI, smolagents) take a function plus a JSON Schema in
-one form or another: build them from `client.tools(format="json_schema")` and `client.run_tool`. Or
+one form or another: build them from `client.tools(format="json_schema")` and `client.run_tool`, with
+each tool's name bound in its function as the adapters above do. Or
 connect them to the server's MCP endpoint, printed as `mcp` when it starts (`server.mcp_url`).
 
 ## Typed clients

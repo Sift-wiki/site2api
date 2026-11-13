@@ -335,7 +335,7 @@ function passphraseKey(pass: string): DataKey {
     } catch (e) {
       kept = { salt: firstLine(e) };
     }
-    const reset = `run api-anything logout <site> for each site in ${join(home(), "sessions")}, delete the files in ${join(home(), "captures")} and ${join(home(), "snapshots")}, then log in again`;
+    const reset = `run api-anything logout <site> for each site in ${join(home(), "sessions")}, delete ${join(home(), "results.json")} and the files in ${join(home(), "captures")} and ${join(home(), "snapshots")}, then log in again`;
     if (kept !== undefined && (typeof kept?.salt !== "string" || typeof kept.kid !== "string"))
       throw new SealError(
         `${saltFile()} is damaged, so the passphrase's key cannot be made`,
@@ -425,7 +425,7 @@ function dataKey(sealedWith?: string): DataKey | undefined {
     `this home's credential files are sealed with ${keyFrom(source)}, which is not available here (${got.none}); nothing is written unsealed`,
     source === "passphrase"
       ? "set API_ANYTHING_KEY to the passphrase they were sealed with"
-      : `run api-anything where ${source ? `the ${source} key store` : "the key store they were sealed with"} is available; or, to start over unsealed here, delete ${markerFile()} and the files in ${join(home(), "sessions")}, ${join(home(), "captures")} and ${join(home(), "snapshots")}, then log in again`,
+      : `run api-anything where ${source ? `the ${source} key store` : "the key store they were sealed with"} is available; or, to start over unsealed here, delete ${markerFile()}, ${join(home(), "results.json")} and the files in ${join(home(), "sessions")}, ${join(home(), "captures")} and ${join(home(), "snapshots")}, then log in again`,
   );
 }
 

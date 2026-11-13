@@ -21,6 +21,10 @@ export interface Thresholds {
   recentDays: number;
   uploadsPerHour: number;
   reportsPerHour: number;
+  /** domains one network's unsigned searches may add to demand in an hour */
+  demandPerHour: number;
+  /** and every network's together */
+  demandPerHourAll: number;
   /** installs, on as many distinct networks, that must claim an op learned signed in before its body is asked for */
   claimKeys: number;
   /** uploads a key first seen less than an hour ago may make */
@@ -49,6 +53,8 @@ export function thresholds(env: object): Thresholds {
     recentDays: n("RECENT_DAYS", 30),
     uploadsPerHour: n("UPLOADS_PER_HOUR", 30),
     reportsPerHour: n("REPORTS_PER_HOUR", 2000),
+    demandPerHour: n("DEMAND_PER_HOUR", 20),
+    demandPerHourAll: n("DEMAND_PER_HOUR_ALL", 1000),
     newKeyUploads: n("NEW_KEY_UPLOADS", 5),
     uploadsPerHourAll: n("UPLOADS_PER_HOUR_ALL", 300),
     claimKeys: n("CLAIM_KEYS", 3),
@@ -63,8 +69,8 @@ export interface Facts {
   okKeys: number;
   /** distinct networks among those */
   okNetworks: number;
-  /** installs whose latest outcome is wrong */
-  wrongKeys: number;
+  /** distinct networks with an install whose latest outcome is wrong */
+  wrongNetworks: number;
   /** a heal of a version that was live */
   heal: boolean;
   /** the latest ok/fail/wrong outcomes of distinct installs, newest first, at most `degradeWindow` */
@@ -82,8 +88,8 @@ export function promoted(f: Facts, t: Thresholds): boolean {
   const keys = f.heal ? t.promoteHealKeys : t.promoteKeys;
   // a heal replaces what callers already rely on, so it never needs fewer networks than a new op
   const networks = f.heal ? t.promoteNetworks : Math.min(t.promoteNetworks, keys);
-  // each `wrong` outweighs two oks
-  return f.okKeys - 2 * f.wrongKeys >= keys && f.okNetworks >= networks;
+  // each network that calls it wrong outweighs two oks; fresh keys on one network are one voice
+  return f.okKeys - 2 * f.wrongNetworks >= keys && f.okNetworks >= networks;
 }
 
 /**

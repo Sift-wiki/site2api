@@ -458,6 +458,17 @@ describe("verification by the crowd", () => {
     assert.equal((await status()).successRate, 0.8);
   });
 
+  test("wrong reports from fresh keys on one network count once", async () => {
+    const { env } = registry();
+    const { hash } = (await send(env, "POST", "/v1/versions", { as: install(), body: upload() })).body;
+    for (let i = 0; i < 3; i++) await report(env, install(), hash, "wrong", NET1);
+    const status = async () => (await send(env, "GET", "/v1/sites/example-com")).body.operations[0].status;
+    for (const ip of [NET2, "203.0.113.200", "100.64.1.1"]) await report(env, install(), hash, "ok", ip);
+    assert.equal(await status(), "candidate", "one network's wrong still outweighs two oks");
+    await report(env, install(), hash, "ok", "100.64.2.1");
+    assert.equal(await status(), "live", "three keys on one network are one voice against it");
+  });
+
   test("auth, rate, blocked and input reports say nothing about the op", async () => {
     const { env } = registry();
     const { hash } = (await seed(env, { site, operations: [op()] })).body.operations[0];
@@ -622,6 +633,78 @@ describe("maintenance by the crowd", () => {
     assert.equal((await send(env, "GET", "/v1/verify-jobs")).status, 401);
   });
 
+  test("verify-jobs: a candidate an install called wrong, or three installs could not confirm, is no job", async () => {
+    const { env } = registry();
+    const jobs = async (as = install()) =>
+      (await send(env, "GET", "/v1/verify-jobs?limit=20", { as })).body.jobs.map((j: { hash: string }) => j.hash);
+    const fresh = (name: string, domain: string, operation: unknown, as: ReturnType<typeof install>) =>
+      send(env, "POST", "/v1/versions", {
+        as,
+        ip: NET1,
+        body: upload({ site: { name, domain, baseUrl: `https://www.${domain}` }, operation }),
+      });
+    const on = (domain: string, name: string) =>
+      op({
+        name,
+        request: { method: "GET", url: `https://www.${domain}/api/${name}?q=dune`, headers: {} },
+        trigger: { url: `https://www.${domain}/${name}?q={q}` },
+        match: { host: `www.${domain}`, path: `/api/${name}` },
+      });
+
+    // the uploader's own wrong holds its version at candidate while its two other keys keep the gate's count met
+    const watcher = install();
+    const held = (await fresh("example-net", "example.net", on("example.net", "probe"), watcher)).body.hash;
+    await report(env, watcher, held, "wrong", NET1);
+    await report(env, install(), held, "ok", NET2);
+    await report(env, install(), held, "ok", "100.64.7.1");
+    assert.equal((await send(env, "GET", "/v1/sites/example-net")).body.operations[0].status, "candidate");
+    assert.deepEqual(await jobs(), []);
+
+    // a sibling op the same keys promoted opens the site's other candidates: to three installs, then no more
+    const owner = install();
+    const a = (await fresh("example-org", "example.org", on("example.org", "opA"), owner)).body.hash;
+    const b = (await fresh("example-org", "example.org", on("example.org", "opB"), owner)).body;
+    assert.equal(b.status, "candidate", JSON.stringify(b));
+    await report(env, install(), a, "ok", NET2);
+    await report(env, install(), a, "ok", "100.64.7.1");
+    const verifiers = ["203.0.113.200", "203.0.114.200", "203.0.115.200"];
+    for (const [i, outcome] of ["rate", "blocked", "error"].entries()) {
+      const verifier = install();
+      assert.deepEqual(await jobs(verifier), [b.hash]);
+      await report(env, verifier, b.hash, outcome, verifiers[i]);
+    }
+    assert.deepEqual(await jobs(), []);
+  });
+
+  test("verify-jobs: one key's wrong, or one network's errors, takes nobody else's candidate off the list", async () => {
+    const { env } = registry();
+    const jobs = async () =>
+      (await send(env, "GET", "/v1/verify-jobs?limit=20", { as: install() })).body.jobs
+        .map((j: { hash: string }) => j.hash)
+        .sort();
+    const named = (name: string) => op({ name, match: { host: "www.example.com", path: `/api/${name}` } });
+    const owner = install();
+    const post = async (name: string) =>
+      (await send(env, "POST", "/v1/versions", { as: owner, ip: NET1, body: upload({ operation: named(name) }) })).body
+        .hash as string;
+    const [live, disputed, failing] = [await post("opA"), await post("opB"), await post("opC")];
+    // the site has a live op, so no count of oks is what admits its other candidates
+    await report(env, install(), live, "ok", NET2);
+    await report(env, install(), live, "ok", "100.64.7.1");
+    const both = [disputed, failing].sort();
+    assert.deepEqual(await jobs(), both);
+
+    // a stranger's fresh key calls one wrong, and three more on one network cannot confirm the other
+    await report(env, install(), disputed, "wrong", "203.0.113.200");
+    for (let i = 0; i < 3; i++) await report(env, install(), failing, "error", "203.0.113.200");
+    assert.deepEqual(await jobs(), both);
+
+    // three networks that could not confirm one are the cap, the wrong among them
+    await report(env, install(), disputed, "error", "203.0.114.200");
+    await report(env, install(), disputed, "fail", "203.0.115.200");
+    assert.deepEqual(await jobs(), [failing]);
+  });
+
   test("the daily job archives stale candidates and degraded versions, and a degraded one a newer live one replaced; never a live one", async () => {
     const { env, raw } = registry();
     const OLD = "2026-01-01T00:00:00.000Z";
@@ -733,6 +816,15 @@ describe("rate limits", () => {
       body: { reports: [{ hash: "a".repeat(64), outcome: "ok" }] },
     });
     assert.deepEqual(unknown.body, { accepted: 0, ignored: 1 });
+  });
+
+  test("an empty report batch counts as one", async () => {
+    const { env, raw } = registry({ REPORTS_PER_HOUR: "3" });
+    const statuses: number[] = [];
+    for (const body of [{ reports: [] }, [], { reports: [] }, { reports: [] }, []])
+      statuses.push((await send(env, "POST", "/v1/reports", { as: install(), ip: NET1, body })).status);
+    assert.deepEqual(statuses, [200, 200, 200, 429, 429]);
+    assert.equal((raw.prepare("SELECT COUNT(*) AS n FROM keys").get() as { n: number }).n, 3);
   });
 });
 
@@ -1015,6 +1107,30 @@ describe("pages", () => {
     assert.match(r.text, /searchBooks\(q\) -&gt; title, avgRating/);
     assert.match(r.text, /Live/);
     assert.match(r.text, /<strong>bold<\/strong>/);
+  });
+
+  test("the copyable call spells an example only when every shell reads it alike, else a placeholder", async () => {
+    const { env } = registry();
+    const examples = {
+      amp: "a&calc&rem ",
+      quote: "x';calc;'y",
+      pct: "%USERNAME%",
+      ctl: "1\u0003\ncalc",
+      two: "two words",
+    };
+    const params = [
+      ...op().params,
+      ...Object.entries(examples).map(([name, example]) => ({ name, required: false, example })),
+    ];
+    const seeded = await seed(env, { site, operations: [op({ params })] });
+    assert.equal(seeded.status, 200, seeded.text);
+    const page = (await send(env, "GET", "/sites/example-com")).text;
+    const entities: Record<string, string> = { quot: '"', lt: "<", gt: ">", amp: "&", "#39": "'" };
+    const call = /api-anything call example-com [^<]*/.exec(page)![0].replace(/&(#?\w+);/g, (_, e) => entities[e]!);
+    assert.equal(
+      call.trimEnd(),
+      'api-anything call example-com searchBooks q=dune amp=<amp> quote=<quote> pct=<pct> ctl=<ctl> "two=two words"',
+    );
   });
 
   test("the home page lists and searches the sites, escaped", async () => {

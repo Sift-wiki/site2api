@@ -5,7 +5,8 @@
 import { BudgetSpent } from "./budget.js";
 import { type Class, judge, type Observed } from "./classify.js";
 import { asText, setAt, walk } from "./codec.js";
-import { AddressRefused, RedirectRefused, type SendOptions, type Sent, send } from "./http.js";
+import { DEADLINE, DeadlineExceeded, within } from "./deadline.js";
+import { AddressRefused, ReadWrites, RedirectRefused, type SendOptions, type Sent, send } from "./http.js";
 import type { Session } from "./session.js";
 import type { Lookup, Operation } from "./spec.js";
 import { DERIVED_VALUE, graphqlDocuments, writesGraphql } from "./vet.js";
@@ -63,7 +64,7 @@ const pathOf = (url: string) => {
 /**
  * The op with each derived leaf set from its lookup's answer and its derived slots gone, so the rest
  * of the send treats it as any op; the op itself when it has none. `fetchOne` sends a lookup at the
- * call's tier. Throws `LookupFailed`, or `AddressRefused` as the op's own send would.
+ * call's tier. Throws `LookupFailed`, or `AddressRefused` and `ReadWrites` as the op's own send would.
  */
 export async function derive(op: Operation, fetchOne: (lookup: Operation) => Promise<Observed>): Promise<Operation> {
   if (!op.slots.some((s) => s.from)) return op;
@@ -80,7 +81,7 @@ export async function derive(op: Operation, fetchOne: (lookup: Operation) => Pro
       try {
         r = await fetchOne(l);
       } catch (e) {
-        if (e instanceof AddressRefused || e instanceof BudgetSpent) throw e;
+        if (e instanceof AddressRefused || e instanceof BudgetSpent || e instanceof ReadWrites) throw e;
         const reason = `${where}: ${(e as Error).message.split("\n")[0]}`;
         throw new LookupFailed(
           { class: "error", reason, ...(e instanceof RedirectRefused ? {} : { server: true }) },
@@ -89,7 +90,13 @@ export async function derive(op: Operation, fetchOne: (lookup: Operation) => Pro
       }
       answers.set(k, r);
     }
-    const j = judge(l, r);
+    let j: ReturnType<typeof judge>;
+    try {
+      j = within(() => judge(l, r), DEADLINE.read);
+    } catch (e) {
+      if (!(e instanceof DeadlineExceeded)) throw e;
+      throw new LookupFailed({ class: "error", reason: `${where}: the answer was not read: ${e.message}` }, e);
+    }
     const v = j.data;
     if (j.class === "ok" && (v === undefined || v === null || v === "" || typeof v === "object"))
       throw new LookupFailed({ class: "drift", missing: true, reason: `${where}: no value at ${slot.path}` });

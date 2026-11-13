@@ -3,10 +3,10 @@
  * credentials into references and to check none is left; the store uses them before a save or an export.
  * `redact` takes live values out of the messages a call returns and keeps.
  */
-import { type Leaf, type Step, walk } from "./codec.js";
+import { getAt, type Leaf, type Step, walk } from "./codec.js";
 import type { Session } from "./session.js";
 import type { Request } from "./spec.js";
-import type { CaptureResult, TriggerStep } from "./types.js";
+import type { CaptureResult, StoredCookie, TriggerStep } from "./types.js";
 
 export const SESSION_HEADER =
   /^(authorization|x-[a-z0-9-]*token|x-csrf[a-z0-9-]*|x-xsrf[a-z0-9-]*|x-goog-batchexecute-bgr|x-client-transaction-id|x-fb-lsd|x-ig-www-claim)$/i;
@@ -56,15 +56,20 @@ export const URLISH = /^[a-z][a-z0-9+.-]*:\/\//i;
 /** JSON text: an object or an array, whose leaves are judged one by one and whose siblings are not copies. */
 export const jsonContainer = (v: string) => /^\s*[[{]/.test(v);
 
-/** Random-looking: 16+ chars, no spaces, not a URL, two character classes, 3+ bits of entropy per char. */
-export function highEntropy(v: string): boolean {
-  if (v.length < 16 || /\s/.test(v) || URLISH.test(v)) return false;
-  if ([/[a-z]/, /[A-Z]/, /\d/].filter((r) => r.test(v)).length < 2) return false;
+/** Bits of entropy per character. */
+function bits(v: string): number {
   const n = new Map<string, number>();
   for (const c of v) n.set(c, (n.get(c) ?? 0) + 1);
-  let bits = 0;
-  for (const k of n.values()) bits -= (k / v.length) * Math.log2(k / v.length);
-  return bits >= 3;
+  let sum = 0;
+  for (const k of n.values()) sum -= (k / v.length) * Math.log2(k / v.length);
+  return sum;
+}
+
+/** Random-looking: 16+ chars (`min`), no spaces, not a URL, two character classes, 3+ bits of entropy per char. */
+export function highEntropy(v: string, min = 16): boolean {
+  if (v.length < min || /\s/.test(v) || URLISH.test(v)) return false;
+  if ([/[a-z]/, /[A-Z]/, /\d/].filter((r) => r.test(v)).length < 2) return false;
+  return bits(v) >= 3;
 }
 
 /** A literal a spec must not hold: a per-session field or header, or a random value under a credential's name. */
@@ -82,9 +87,11 @@ export function isCredential(name: string, value: string): boolean {
  * `.`, `=` and `+` separate the parts of structured text.
  */
 export function opaqueToken(text: string): boolean {
-  const worded = text.split(/[-_]/).every((part) => /^[A-Za-z]*\d*$/.test(part));
-  return /^[A-Za-z0-9_-]{16,}$/.test(text) && highEntropy(text) && !worded;
+  return /^[A-Za-z0-9_-]{16,}$/.test(text) && highEntropy(text) && !worded(text);
 }
+
+/** Words and numbers, whatever joins them: no piece has a letter after a digit. */
+const worded = (text: string) => text.split(/[^A-Za-z0-9]+/).every((part) => /^[A-Za-z]*\d*$/.test(part));
 
 /* ---------------------------------------------------------------- sign-in */
 
@@ -125,7 +132,7 @@ const BEARER = /^Bearer\s+\S{20,}/i;
 const RANDOM = (s: string) => /\d/.test(s) && /[a-z]/.test(s) && /[A-Z]/.test(s);
 
 /** Decode every %XX run on its own, so one stray "%" doesn't hide the rest. */
-function pctDecode(s: string, plus: boolean): string {
+export function pctDecode(s: string, plus: boolean): string {
   return (plus ? s.replace(/\+/g, " ") : s).replace(/(?:%[0-9a-fA-F]{2})+/g, (m) => {
     try {
       return decodeURIComponent(m);
@@ -467,26 +474,161 @@ export function captureLive(
   };
 }
 
+/* -------------------------------------------------------- a cookie's parts */
+
+// What stands between the values of structured text: JSON, `k=v&k=v`, `a|b`, a list, a URL's parts.
+const PART_SEPARATORS = /[\s"'{}[\](),;:&=|/?#<>\\]+/;
+// A JWT's first segment says how it is signed: every token of its kind starts with the same one.
+const jwtHeader = (t: string) => t.startsWith("eyJ") && /"alg"\s*:/.test(Buffer.from(t, "base64").toString("latin1"));
+
+/** A piece of a text that may be a token: one a cookie holds `anywhere`, or only as a value of its own. */
+type Piece = { token: string; anywhere: boolean };
+
+/**
+ * The pieces of `text` that may be a token sent by itself. Looked for anywhere in a cookie: an unbroken
+ * run of 16+ token characters that is one (`opaqueToken`), and each stretch of it between `-` and `_`
+ * that is one or is 16+ digits, since a cookie joins a token to an id or a signature with any character
+ * (`token.sig`, `42-token`, `v1_token`). Looked for only as one value of a cookie, with no letter or
+ * digit on either side: the whole text and each piece between the separators of structured text, from
+ * 12 characters, when it is random-looking and not words (a short token, base64 with `/` and `+` in
+ * it); and the whole text when it is 16+ letters of one case. Words, numbers and names are none of
+ * these, however long: a cookie keeps plenty of those.
+ */
+function piecesOf(text: string): Piece[] {
+  const out: Piece[] = [];
+  for (const [run] of text.matchAll(/[A-Za-z0-9_-]{16,}/g))
+    for (const token of new Set([run.replace(/^[-_]+|[-_]+$/g, ""), ...run.split(/[-_]+/)]))
+      if ((opaqueToken(token) || (/^\d{16,}$/.test(token) && bits(token) >= 2.5)) && !jwtHeader(token))
+        out.push({ token, anywhere: true });
+  // text still percent-encoded reads as letters and digits mixed (`%20from`): its decoding is read instead
+  for (const token of new Set([text, ...text.split(PART_SEPARATORS)]))
+    if (token.length >= 12 && highEntropy(token, 12) && !worded(token) && !/%[0-9A-Fa-f]{2}/.test(token))
+      out.push({ token, anywhere: false });
+  if (/^(?:[a-z]{16,}|[A-Z]{16,})$/.test(text) && bits(text) >= 3) out.push({ token: text, anywhere: false });
+  return out;
+}
+
+/**
+ * What an operation, or a site, spells of its own accord: the hosts it sends to and opens, the page
+ * address its trigger opens, its params' examples, what stands at a param's slot (a heal's request
+ * keeps its call's args there) and its checks' args, each as it is and percent-decoded. A consent or
+ * landing-page cookie keeps the address of the page a learn opened, the caller's values in it, and a
+ * list of what was viewed keeps their ids: a cookie holding a piece of these says nothing of the spec,
+ * as a cookie that is the site's origin does not (`besideOrigins`). The request's own path, query,
+ * headers and body are not among them: a token the page put there is what is looked for.
+ */
+export function ownTexts(value: unknown): string[] {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return [];
+  const o = value as Record<string, unknown>;
+  const out: string[] = [];
+  const field = (v: unknown, k: string): unknown =>
+    v && typeof v === "object" ? (v as Record<string, unknown>)[k] : undefined;
+  const list = (v: unknown): unknown[] => (Array.isArray(v) ? v : []);
+  const text = (v: unknown): void => {
+    if (typeof v === "string" || typeof v === "number") out.push(String(v));
+    else if (v && typeof v === "object") Object.values(v).forEach(text);
+  };
+  const host = (url: unknown) => {
+    try {
+      if (typeof url === "string") out.push(new URL(url).hostname);
+    } catch {
+      /* a template the host is filled into */
+    }
+  };
+  host(o.baseUrl);
+  host(field(o.request, "url"));
+  text([field(o.trigger, "url"), field(o.trigger, "softFrom")]);
+  for (const p of list(o.params)) text(field(p, "example"));
+  for (const c of list(o.checks)) text(field(c, "args"));
+  for (const s of list(o.slots)) {
+    const at = field(s, "at");
+    if (typeof field(s, "param") !== "string" || field(s, "template") !== undefined || !Array.isArray(at)) continue;
+    try {
+      text(getAt(o.request as Request, at as Step[]));
+    } catch {
+      /* a slot the request has no place for */
+    }
+  }
+  return decoded(out);
+}
+
+const decoded = (own: readonly string[]) => [...new Set(own.flatMap((t) => [t, pctDecode(t, false)]))];
+
+type Jar = readonly Pick<StoredCookie, "name" | "value">[];
+
+/**
+ * The test for a cookie's parts. A page reads a token out of a structured cookie (URL-encoded JSON,
+ * `uid=42&ticket=..`, `token.signature`, base64 of any of these) and sends it by itself, under any
+ * name: that token is the cookie's as much as the whole value is. No list of separators finds every
+ * such part in a cookie, so the question is asked of the text instead: of each piece of it that may be
+ * a token (`piecesOf`), whether a cookie holds it, in any layer `decodings` reads. `own`: texts the
+ * spec spells of its own accord (`ownTexts`), whose pieces are not looked for. The cookies are decoded
+ * when the first piece asks.
+ */
+function partTest(
+  cookies: Jar,
+): (texts: Iterable<string>, own: readonly string[]) => { token: string; cookie: string }[] {
+  let read: { name: string; texts: string[] }[] | undefined;
+  const has = (text: string, { token, anywhere }: Piece) => {
+    for (let i = text.indexOf(token); i >= 0; i = text.indexOf(token, i + 1))
+      if (anywhere || !/[A-Za-z0-9]/.test((text[i - 1] ?? "") + (text[i + token.length] ?? ""))) return true;
+    return false;
+  };
+  return (texts, own) => {
+    const found: { token: string; cookie: string }[] = [];
+    if (!cookies.length) return found;
+    for (const text of texts)
+      for (const piece of piecesOf(text)) {
+        if (own.some((t) => t.includes(piece.token))) continue;
+        read ??= cookies.map((c) => ({ name: c.name, texts: [...decodings(c.value)] }));
+        for (const c of read)
+          if (c.texts.some((t) => has(t, piece))) found.push({ token: piece.token, cookie: c.name });
+      }
+    return found;
+  };
+}
+
+/**
+ * The tokens in `texts`, or in what they decode to, that one of `cookies` holds as a part of it
+ * (`partTest`), each with its cookie's name: what learning makes a reference of.
+ */
+export function cookieTokens(
+  texts: Iterable<string>,
+  cookies: Jar,
+  own: readonly string[] = [],
+): { token: string; cookie: string }[] {
+  const parts = partTest(cookies);
+  const mine = decoded(own);
+  return [...texts].flatMap((text) => parts(decodings(text), mine));
+}
+
 /**
  * `secrets`: exact hits of live jar/session values (6+ chars, raw, unquoted or URL-decoded). Each
  * is looked for in the text and in what the text decodes to (three layers of percent-encoding,
  * JSON escapes and whole base64 runs), and by its own base64 encoding at any byte offset, confirmed
- * by decoding there. A hit is the value itself, so callers fail closed. `warnings`: regex heuristics, which do misfire.
+ * by decoding there. A token a cookie holds as one part of it is a hit too (`partTest`), in the same
+ * layers; an operation or a site in `value` is read for what it spells of its own accord (`ownTexts`),
+ * and `own` adds to that for a value that is no such object (an upload's bytes). A hit is the value
+ * itself, so callers fail closed. `warnings`: regex heuristics, which do misfire.
  * `allowed`: JSON paths a human marked public (an op's `public` headers); skipped.
  */
 export function scanSecrets(
   value: unknown,
   session: Session,
   allowed: Set<string> = new Set(),
+  own: readonly string[] = [],
 ): { secrets: string[]; warnings: string[] } {
   const live = liveValues(session);
+  // redact and liveIn keep to the whole values: redact has no replacement for a part
+  const parts = partTest(session.cookies);
   const secrets: string[] = [];
   const warnings: string[] = [];
-  const visit = (v: unknown, path: string) => {
+  const visit = (v: unknown, path: string, own: readonly string[]) => {
     if (allowed.has(path)) return;
     if (typeof v === "string") {
-      const decoded = live.length ? [...decodings(v)] : [];
-      for (const l of live) if (holds(decoded, l)) secrets.push(`${path} holds the live ${l.label}`);
+      const texts = live.length ? [...decodings(v)] : [];
+      for (const l of live) if (holds(texts, l)) secrets.push(`${path} holds the live ${l.label}`);
+      for (const p of parts(texts, own)) secrets.push(`${path} holds the live cookie ${p.cookie}`);
       const text = pctDecode(v, false); // percent-encoded bodies hide the blob's shape
       const hit = (
         [
@@ -508,10 +650,14 @@ export function scanSecrets(
         .find(([, m]) => m);
       if (hit) warnings.push(`${path} looks like ${hit[0]} (${hit[1]!.slice(0, 24)}...); check it is public`);
     } else if (Array.isArray(v)) {
-      for (const [i, x] of v.entries()) visit(x, `${path}[${i}]`);
-    } else if (v && typeof v === "object") for (const [k, x] of Object.entries(v)) visit(x, `${path}.${k}`);
+      for (const [i, x] of v.entries()) visit(x, `${path}[${i}]`, own);
+    } else if (v && typeof v === "object") {
+      const mine = ownTexts(v);
+      const below = mine.length ? [...own, ...mine] : own;
+      for (const [k, x] of Object.entries(v)) visit(x, `${path}.${k}`, below);
+    }
   };
-  visit(value, "$");
+  visit(value, "$", decoded(own));
   return { secrets: [...new Set(secrets)], warnings: [...new Set(warnings)] };
 }
 

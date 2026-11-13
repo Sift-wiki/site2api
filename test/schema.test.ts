@@ -11,7 +11,7 @@ import { AjvJsonSchemaValidator } from "@modelcontextprotocol/sdk/validation/ajv
 import { classify, MAX_RETRY_AFTER_MS } from "../src/classify.js";
 import { hostSite } from "../src/host.js";
 import { createServer, type ServerOptions } from "../src/mcp.js";
-import { CALL_RESULT_SCHEMA, callResultSchema, opDataSchema } from "../src/schema.js";
+import { CALL_RESULT_SCHEMA, callResultSchema, findSitesSchema, opDataSchema } from "../src/schema.js";
 import { type Operation, parseSite } from "../src/spec.js";
 import { saveSite } from "../src/store.js";
 
@@ -451,4 +451,10 @@ test("callResultSchema requires only ok, and hostSite gives each op its result s
     else process.env.API_ANYTHING_HOME = before;
     rmSync(home, { recursive: true, force: true });
   }
+});
+
+test("find_sites' schema names what the catalog was not sent, beside what stayed local", () => {
+  const props = findSitesSchema().properties as Record<string, unknown>;
+  assert.deepEqual(props.notSent, props.localOnly);
+  assert.deepEqual(props.notSent, { type: "string" });
 });

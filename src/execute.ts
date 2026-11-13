@@ -16,10 +16,12 @@ import { BudgetSpent, limited, PaceConfigError, type SendBudget, sitePace } from
 import { type Changes, capChanges, changesOf } from "./changes.js";
 import { type Class, judge } from "./classify.js";
 import { asText, fillTemplate } from "./codec.js";
-import { getPath } from "./extract.js";
+import { DEADLINE, DeadlineExceeded, within } from "./deadline.js";
+import { getPath, MAX_PAGE_ELEMENTS } from "./extract.js";
 import {
   type Attempt,
   challengePage,
+  cutShort,
   fillTrigger,
   firedNothing,
   type HealResult,
@@ -32,6 +34,7 @@ import {
   runOpTrigger,
   type TriggerRun,
   templateChanges,
+  triggerRefusal,
 } from "./heal.js";
 import {
   AddressRefused,
@@ -41,9 +44,11 @@ import {
   holdsRef,
   nextHop,
   pace,
+  ReadWrites,
   RedirectRefused,
   refusePrivate,
   refusePrivateHop,
+  requestArgs,
   type Sent,
   unknownArgs,
   withDefaults,
@@ -310,12 +315,13 @@ interface Ctx {
 }
 
 /**
- * An unreviewed candidate an agent pulled: nobody but its uploader has seen it work, and page text may
- * have steered the agent to it. It runs at tiers 1 and 2 only, never as a trigger run in the user's
- * browser profile, whose steps click what the spec says with the user's sessions aboard. A human's pull
- * (no `by: "agent"`) is the consent that lifts it, as for an agent pull's writes.
+ * An unreviewed candidate in a copy no human pulled (an agent's pull, or the background upgrade of a
+ * bundled site): nobody but its uploader has seen it work, and page text may have steered the agent to
+ * it. It runs at tiers 1 and 2 only, never as a trigger run in the user's browser profile, whose steps
+ * click what the spec says with the user's sessions aboard. A human's pull (no `by`) is the consent that
+ * lifts it, as for an agent pull's writes.
  */
-const unconfirmed = (site: Site, op: Operation) => site.shared?.by === "agent" && op.version?.status === "candidate";
+const unconfirmed = (site: Site, op: Operation) => !!site.shared?.by && op.version?.status === "candidate";
 
 /**
  * A call's starting tier and its cap. A remembered escalation is a speed hint, not a requirement:
@@ -328,15 +334,15 @@ export function callTiers(site: Site, op: Operation, maxTier: Tier = 3, remember
 }
 
 /** The answer to a call of an `unconfirmed` op that needs tier 3. */
-const needsHuman = (site: string, notes: string[]): Result => ({
+const needsHuman = (site: Site, notes: string[]): Result => ({
   ok: false,
   class: "blocked",
   tier: 3,
   reason: [
     ...notes,
-    "needs tier 3 (the site's own page in the browser), and this is an unconfirmed operation an agent pulled: it never runs in the user's browser profile",
+    `needs tier 3 (the site's own page in the browser), and this is an unconfirmed operation ${site.shared?.by === "upgrade" ? "of the registry's copy of a bundled site, which nobody pulled" : "an agent pulled"}: it never runs in the user's browser profile`,
   ].join("; "),
-  next: `the operation is unconfirmed and needs the browser: do not retry. A human can allow it: ask the user to look at the site's operations and, if they trust them, run in a terminal: api-anything pull ${site}`,
+  next: `the operation is unconfirmed and needs the browser: do not retry. A human can allow it: ask the user to look at the site's operations and, if they trust them, run in a terminal: api-anything pull ${site.name}`,
   nextCall: { action: "report" },
   retry: "after_fix",
 });
@@ -350,7 +356,7 @@ export function tierBlocked(
   notes: string[] = [],
 ): Result {
   const { tier, maxTier } = tiers;
-  if (unconfirmed(site, op) && tier === 3 && requestedMaxTier >= 3) return needsHuman(site.name, notes);
+  if (unconfirmed(site, op) && tier === 3 && requestedMaxTier >= 3) return needsHuman(site, notes);
   return {
     ok: false,
     class: "blocked",
@@ -396,6 +402,19 @@ export const badSession = (site: string, e: unknown): Result => ({
 
 /** The answer when the args, or a session value, cannot go into the request: nothing is sent. */
 export function unsendable(site: string, op: Operation, e: unknown): Result {
+  if (e instanceof DeadlineExceeded) {
+    const slow = slowArgs(op, e);
+    return { ok: false, class: "error", reason: slow.reason, next: slow.hint, nextCall: { action: "report" } };
+  }
+  // allowWrites does not lift it: a read is retried, healed and kept, and a write is sent once. `input`,
+  // not `refused`: the front ends read that as a write called without allowWrites, and point at the write tool.
+  if (e instanceof ReadWrites)
+    return {
+      ok: false,
+      class: "input",
+      reason: e.message,
+      next: `if an arg is search text, rephrase it without braces; else pass a query document. A read never sends a mutation, with --allow-writes either: if the user wants it sent, ask them to learn it as a write: api-anything add ${site} ${op.name} ... --write`,
+    };
   const next =
     e instanceof BadHeader
       ? `nothing was sent. Check the args; if the value is the session's, ask the user to run: api-anything login ${site}`
@@ -663,15 +682,43 @@ async function attempt(ctx: Ctx, op: Operation, tier: Tier): Promise<Attempt> {
   };
 }
 
+/**
+ * `judge`'s answer to a page with more elements than are parsed (extract.ts `PageTooLarge`, which it
+ * catches), with the hint an answer too large to read gets: the same page comes back at any tier.
+ */
+function pageTooLarge(op: Operation, a: Attempt): Attempt {
+  // elements, or closing tags, comments and CDATA sections
+  if (a.class !== "error" || !a.reason.startsWith(`the page holds more than ${MAX_PAGE_ELEMENTS} `)) return a;
+  const why = "the site's page is larger than api-anything parses; tell the user";
+  return op.readOnly
+    ? { ...a, hint: `do not retry: ${why}`, step: "report" }
+    : { ...a, hint: `the write may have run: check the site first. Do not retry: ${why}`, step: "check_site" };
+}
+
+/**
+ * What a call is told when testing its args against the op's patterns ran past the deadline
+ * (deadline.ts): nothing is sent, and the same args take as long again.
+ */
+const slowArgs = (op: Operation, e: DeadlineExceeded) => ({
+  class: "error" as const,
+  reason: `the args were not tested against ${op.name}'s patterns: ${e.message}`,
+  hint: "do not retry: one of the operation's patterns takes too long on these args, and nothing was sent; tell the user",
+  step: "report" as const,
+});
+
 async function tryTier(ctx: Ctx, op: Operation, tier: Tier): Promise<Attempt> {
   try {
     if (tier === 3) {
+      // An arg that would make the page another address: the caller's to fix, before any pacing, budget or browser.
+      const refused = triggerRefusal(op.trigger, ctx.args);
+      if (refused) return { tier, class: "input", reason: `not opening ${op.name}'s page: ${refused}`, unsent: true };
       // For a write this is the UI sending it: the one attempt.
       await pace(ctx.site, ctx.opts.minIntervalMs, ctx.budget);
       const run = await runOpTrigger(ctx.site, op, ctx.args);
       // The page's answer can quote what the run captured: kept for redaction whether or not it was saved.
       ctx.seen.push(...run.capture.cookies);
       if (run.values && Object.keys(run.values).length) ctx.seenValues.push(run.values);
+      // held to DEADLINE.read (judgeExchange): the catch below answers a stop
       const judged = run.matched && judgeExchange(op, run.matched);
       // The page is told nothing of a redirect that was stopped, its status included: this is the answer.
       const resent: Attempt | undefined = run.resends
@@ -689,7 +736,9 @@ async function tryTier(ctx: Ctx, op: Operation, tier: Tier): Promise<Attempt> {
         challengePage(run.capture) ||
         (run.loginWall
           ? { tier, class: "auth", reason: `the trigger landed on a sign-in page (${run.loginWall})` }
-          : (pageDown(run.capture) ?? {
+          : (pageDown(run.capture) ??
+            // steps the run's time cut short sent nothing: not the op's drift, and nothing to heal from
+            cutShort(op, run.capture) ?? {
               tier,
               class: "drift",
               reason: firedNothing(op, run.capture),
@@ -704,10 +753,20 @@ async function tryTier(ctx: Ctx, op: Operation, tier: Tier): Promise<Attempt> {
         othersNote(op, run.others),
       ].filter(Boolean);
       return {
-        ...a,
+        ...pageTooLarge(op, a),
         ...(notes.length ? { note: notes.join("; ") } : {}),
         ...(run.unsaved ? { unsaved: run.unsaved } : {}),
       };
+    }
+    // Someone else's spec, and an op an agent learned over MCP (`publicOnly`: page text may have chosen
+    // its page), send only to public addresses. Asked of the op tried, so a heal's candidate keeps it.
+    const guarded = !!ctx.shared || !!op.publicOnly;
+    // `run` tested the call's own op and args; a heal's candidate and the example args come here untested
+    try {
+      within(() => requestArgs(op, ctx.args), DEADLINE.args);
+    } catch (e) {
+      // any other fault of the args is the request's to report where it is built
+      if (e instanceof DeadlineExceeded) return { tier, ...slowArgs(op, e), unsent: true };
     }
     const none = bareCall(ctx, op);
     const session = none ? NO_SESSION : loadSession(ctx.site);
@@ -718,8 +777,8 @@ async function tryTier(ctx: Ctx, op: Operation, tier: Tier): Promise<Attempt> {
         fetchImpl: ctx.opts.fetchImpl,
         timeoutMs: ctx.opts.timeoutMs,
         minIntervalMs: ctx.opts.minIntervalMs,
-        // someone else's spec sends only to public addresses; tiers 2 and 3 are the browser's, out of this guard's reach
-        publicOnly: !!ctx.shared,
+        // tiers 2 and 3 are the browser's, out of this guard's reach
+        publicOnly: guarded,
         gen: ctx.gen,
         budget: ctx.budget,
       });
@@ -736,8 +795,8 @@ async function tryTier(ctx: Ctx, op: Operation, tier: Tier): Promise<Attempt> {
     } else {
       const viaPage = async (o: Operation) => {
         const req = buildRequest(o, ctx.args, session, ctx.gen);
-        // someone else's spec: the page's fetch goes only to public addresses, as tier 1 does (tier 3 is not covered)
-        if (ctx.shared) await refusePrivate(o, req.url);
+        // the page's fetch goes only to public addresses, as tier 1 does (tier 3 is not covered)
+        if (guarded) await refusePrivate(o, req.url);
         const { cookie: _jar, ...headers } = req.headers; // the page sends the profile's own cookies
         return pageFetch({
           origin: new URL(req.url).origin,
@@ -754,24 +813,25 @@ async function tryTier(ctx: Ctx, op: Operation, tier: Tier): Promise<Attempt> {
           // tier 1's policy, one hop at a time: a page's own fetch() would follow with everything aboard
           redirect: async (from, status, location, taken) => {
             const next = nextHop(o, session, from, status, location, taken);
-            if (ctx.shared) await refusePrivateHop(next, status);
+            if (guarded) await refusePrivateHop(next, status);
             return next;
           },
         });
       };
       r = await viaPage(await derive(op, viaPage));
     }
-    const j = judge(op, r);
+    const j = within(() => judge(op, r), DEADLINE.read);
     const hint = j.unfinished
-      ? `the site wants a page finished first (consent, terms, or verify it's you): ask the user to open ${j.unfinished} in their browser and finish it, then run api-anything login ${ctx.site}; then retry once`
+      ? // the address is the site's own text (where its redirect led): shown as a spec's address is
+        `the site wants a page finished first (consent, terms, or verify it's you): ask the user to open ${shownAddress(j.unfinished)} in their browser and finish it, then run api-anything login ${ctx.site}; then retry once`
       : undefined;
-    return {
+    return pageTooLarge(op, {
       tier,
       status: r.status,
       ...(r.redirected ? { redirected: true } : {}),
       ...j,
       ...(hint ? { hint, step: "login" as const } : {}),
-    };
+    });
   } catch (thrown) {
     // nothing was sent: the call ends with the budget's answer (`run`)
     if (thrown instanceof BudgetSpent) throw thrown;
@@ -787,6 +847,22 @@ async function tryTier(ctx: Ctx, op: Operation, tier: Tier): Promise<Attempt> {
         reason: e.message,
         ...(unsent ? { unsent: true } : {}),
         ...(op.readOnly || unsent
+          ? { hint: `do not retry: ${why}`, step: "report" as const }
+          : {
+              hint: `the write may have run: check the site first. Do not retry: ${why}`,
+              step: "check_site" as const,
+            }),
+      };
+    }
+    // Reading the answer ran past the deadline (deadline.ts): the same answer takes as long again at any
+    // tier, and a drift would start a heal that reads it too. The request it answered was sent.
+    if (e instanceof DeadlineExceeded) {
+      const why = "reading the site's answer takes longer than api-anything allows; tell the user";
+      return {
+        tier,
+        class: "error",
+        reason: `the answer was not read: ${e.message}`,
+        ...(op.readOnly
           ? { hint: `do not retry: ${why}`, step: "report" as const }
           : {
               hint: `the write may have run: check the site first. Do not retry: ${why}`,
@@ -812,14 +888,27 @@ async function tryTier(ctx: Ctx, op: Operation, tier: Tier): Promise<Attempt> {
             hint: "the write may have run: check the site first. Do not retry it unchecked",
             step: "check_site",
           };
-    // someone else's spec names an address on this machine or the local network: nothing was sent, and no tier sends it
+    // a template the call's first check did not see (a heal's candidate, the registry's newer version, a
+    // lookup) makes this read a mutation: nothing was sent, and no tier sends it
+    if (e instanceof ReadWrites)
+      return {
+        tier,
+        class: "error",
+        reason: e.message,
+        unsent: true,
+        hint: "do not retry: a read never sends a GraphQL mutation; tell the user",
+        step: "report",
+      };
+    // a public-only op names an address on this machine or the local network: nothing was sent, and no tier sends it
     if (e instanceof AddressRefused)
       return {
         tier,
         class: "error",
         reason: e.message,
         unsent: true,
-        hint: "do not retry: the spec someone else wrote sends to an address that is not public; tell the user, and learn the site again with learn_site",
+        hint: ctx.shared
+          ? "do not retry: the spec someone else wrote sends to an address that is not public; tell the user, and learn the site again with learn_site"
+          : `do not retry: an agent learned this operation with learn_site, so it goes only to https addresses on public hosts, and this one is not; tell the user. One on this machine or the local network is learned by the user: api-anything add ${ctx.site} ${op.name} ...`,
         step: "report",
       };
     if (e instanceof RedirectRefused) {
@@ -977,14 +1066,17 @@ async function onDrift(ctx: Ctx, site: Site, op: Operation, a: Attempt): Promise
       examplesFail = true;
     }
   }
-  // the site no longer sends a picked field, for any args: the call fails, naming it, rather than answer without it
-  const dropped = (b: Attempt): Partial<Result> =>
-    b.lost && examplesFail
-      ? {
-          next: `if the site still shows ${b.lost.join(", ")}, re-learn the response recipe with a new --pick (or --extract): api-anything add ${ctx.site} ${op.name} ... --pick <fields> (api-anything capture <trigger url> shows the response); if it is gone for good, drop it from the pick`,
-          nextCall: { action: "relearn" },
-        }
-      : {};
+  // The site no longer sends a picked field, for any args: the call fails, naming it, rather than answer
+  // without it. The name is the spec author's text (a pick entry is held to no pattern), so `reason`
+  // carries it and `next`, the tool's own step, only points there.
+  const dropped = (b: Attempt): Partial<Result> => {
+    if (!b.lost || !examplesFail) return {};
+    const [fields, they, them] = b.lost.length > 1 ? ["fields", "they are", "them"] : ["field", "it is", "it"];
+    return {
+      next: `if the site still shows the picked ${fields} named in reason, re-learn the response recipe with a new --pick (or --extract): api-anything add ${ctx.site} ${op.name} ... --pick <fields> (api-anything capture <trigger url> shows the response); if ${they} gone for good, drop ${them} from the pick`,
+      nextCall: { action: "relearn" },
+    };
+  };
 
   // Another install may have repaired this version already, or it degraded and the registry serves the next
   // best: that version is one request, a heal is a browser run.
@@ -1195,17 +1287,60 @@ async function readBack(
   return { ...kept, ok: true, class: "ok", write: "applied", reason: r.reason ? `${r.reason}; ${note}` : note };
 }
 
-/** Where to check a write that may have gone through: the page it is made on, with the call's args, and its readback. */
-function whereToLook(op: Operation, args: Record<string, unknown>): string {
+/**
+ * An address a spec holds, as `next` may show it. `next` is the tool's own step and the address is
+ * text the spec's author chose (a default's too), so it is shown only as far as no words are spelled
+ * in it. `URL` leaves no bare space, so a space is an escape or a `+`: the path is cut at the first
+ * segment that holds one, a query pair that holds one is left out, and so is such a fragment. Over 200
+ * characters, the origin alone. ponytail: words joined by `-` or `_` still pass, within that length.
+ */
+function shownAddress(url: string): string {
+  let u: URL;
+  try {
+    u = new URL(url);
+  } catch {
+    return "the site";
+  }
+  if (!/^https?:$/.test(u.protocol)) return "the site";
+  const words = (part: string) => {
+    try {
+      // still an escape once decoded: one escaped twice
+      return /[\s+]|%[0-9a-f]{2}/i.test(decodeURIComponent(part));
+    } catch {
+      return true;
+    }
+  };
+  const segments = u.pathname.split("/");
+  const cut = segments.findIndex(words);
+  const query = u.search
+    .slice(1)
+    .split("&")
+    .filter((pair) => pair && !words(pair))
+    .join("&");
+  const out =
+    cut >= 0
+      ? `${u.origin}${segments.slice(0, cut).join("/")}/`
+      : `${u.origin}${u.pathname}${query ? `?${query}` : ""}${words(u.hash) ? "" : u.hash}`;
+  return out.length > 200 ? u.origin : out;
+}
+
+/**
+ * Where to check a write that may have gone through: the page it is made on, with the call's args, and
+ * its readback. `given`: the args the caller itself passed, before the spec's defaults.
+ */
+function whereToLook(op: Operation, args: Record<string, unknown>, given: Record<string, unknown>): string {
   const rb = op.readback;
   const readArgs = rb && Object.fromEntries(Object.entries(rb.args).map(([k, v]) => [k, fillTemplate(v, args)]));
+  // a readback's arg is its template's text around the write's args: repeated only when all of it is a value the caller passed
+  const passed = new Set(Object.values(given).map(asText));
+  const own = readArgs && Object.values(readArgs).every((v) => passed.has(v));
   // a read the write carries is no op of the site to call: its page is where to look
   const read = !rb
     ? ""
     : "op" in rb
-      ? `, or with its readback: the read ${rb.op} with args ${JSON.stringify(readArgs)}`
-      : `, or where its readback ${rb.read.name} reads: ${fillTrigger(rb.read.trigger, readArgs!).url}`;
-  return `. Look on ${fillTrigger(op.trigger, args).url}${read}`;
+      ? `, or with its readback: the read ${rb.op}${own ? ` with args ${JSON.stringify(readArgs)}` : ""}`
+      : `, or where its readback ${rb.read.name} reads: ${shownAddress(fillTrigger(rb.read.trigger, readArgs!).url)}`;
+  return `. Look on ${shownAddress(fillTrigger(op.trigger, args).url)}${read}`;
 }
 
 /** The answer while the site cools down (`coolAfter`): nothing is sent. */
@@ -1289,11 +1424,21 @@ interface Keep {
 /**
  * An ok answer as the caller asked for it: kept as the cache entry, compared with its watcher's
  * baseline and kept in its place, then shaped by its view. `hit`: the cache entry this answer is,
- * served from it (not kept again). Only a `changes` call moves a baseline.
+ * served from it (not kept again). Only a `changes` call moves a baseline. `unkept`: why this answer
+ * is not the looked-up session's, so it is neither kept nor compared with that session's baseline.
  */
-function shape(out: CallResult, op: Operation, opts: CallOptions, keep?: Keep, hit?: Snapshot): CallResult {
+function shape(
+  out: CallResult,
+  op: Operation,
+  opts: CallOptions,
+  keep?: Keep,
+  hit?: Snapshot,
+  unkept?: string,
+): CallResult {
   let changes: Changes | undefined;
-  if (keep) {
+  if (keep && unkept) {
+    if (keep.watch) changes = { first: true, retained: false, reason: unkept };
+  } else if (keep) {
     const kept = {
       data: out.data,
       ...(out.nextPage !== undefined ? { nextPage: out.nextPage } : {}),
@@ -1399,6 +1544,8 @@ async function run(
   const log: Attempt[] = [];
   const siteName = site.name;
   const { theirs, proof } = how;
+  /** the args the caller passed: `args` takes the spec's defaults below, which are its author's text */
+  const given = args;
   /** the jar as the call found it: a value it rotated out can still be quoted in a reason */
   let jar: Session | undefined;
   /** this write's ledger record, settled with what the call did */
@@ -1411,6 +1558,25 @@ async function run(
   let spent = false;
   /** where this read's answers are kept, when the call asked for maxAgeMs or changes */
   let keep: Keep | undefined;
+  /** `sessionPrint` of the session `keep` was looked up for */
+  let keptFor: string | undefined;
+  /**
+   * Why this call's answer is not kept: the call changed who is answering (a re-imported login, the
+   * profile's cookies, a cookie the answer set), so it is not the answer of the session `keep` names.
+   * Not filed under the new identity either: an answer that signs the session out, or another
+   * process's login or logout meanwhile, would leave it under a session that did not make it.
+   */
+  const moved = (): string | undefined => {
+    let now: string | undefined;
+    try {
+      now = sessionPrint(op, callSession(site, op, loadSession(siteName), theirs), site.loginCookies);
+    } catch {
+      // an unreadable session is not the one looked up
+    }
+    return now === keptFor
+      ? undefined
+      : "the session changed during the call (a sign-in was renewed, or the site set a new cookie), so this answer was not kept; the next call keeps its own";
+  };
   const done = async (r: Result): Promise<CallResult> => {
     let f = finish(r, op, siteName, log);
     // A forced call the site answered ends the cool-down: before its readback, which may start another.
@@ -1419,7 +1585,7 @@ async function run(
     if (op.readback && log.length && (f.write === "accepted" || f.write === "may_have_applied"))
       f = await readBack(site, theirs, op, args, f, opts);
     if (!op.readOnly && f.nextCall?.action === "check_site")
-      f.next = `${f.next ?? "check the site before any retry"}${whereToLook(op, args)}`;
+      f.next = `${f.next ?? "check the site before any retry"}${whereToLook(op, args, given)}`;
     const unsaved = log.find((a) => a.unsaved)?.unsaved;
     if (unsaved) {
       f.warning = unsavedWarning(siteName, unsaved);
@@ -1449,9 +1615,12 @@ async function run(
       afterCall(siteName, op, how.source, out, {
         fetchImpl: opts.fetchImpl,
         minIntervalMs: opts.minIntervalMs,
+        // the caller's own values: a heal learned from a run made with them, and its heal-back shares no copy
+        args: given,
       });
     }
-    if (out.ok && !proof && out.data !== undefined) return shape(out, op, opts, keep);
+    if (out.ok && !proof && out.data !== undefined)
+      return shape(out, op, opts, keep, undefined, keep ? moved() : undefined);
     return out;
   };
   const write = !op.readOnly;
@@ -1500,7 +1669,8 @@ async function run(
   if (unknown) return done({ ok: false, class: "input", reason: unknown, next: nextFor("input", siteName, op) });
   // Resolved once: the tier-3 trigger and its answer's match take a default just as the request does.
   args = withDefaults(op, args);
-  // The session before any kept answer: one is only ever served to the session it was for.
+  // The session before any kept answer: one is only ever served to the session it was for, and an
+  // answer is kept only while the session is still that one when the call ends (`moved`).
   let session: Session;
   try {
     if (theirs) dropUnbound(siteName);
@@ -1511,7 +1681,7 @@ async function run(
   }
   // the args as the request takes them: one that cannot go is refused before any kept answer is looked up
   try {
-    buildRequest(op, args, session);
+    within(() => buildRequest(op, args, session), DEADLINE.args);
   } catch (e) {
     return done(unsendable(siteName, op, e));
   }
@@ -1519,6 +1689,7 @@ async function run(
   // A write is never kept or answered from a kept answer: each call is the user's action.
   if (!write && !proof && (opts.maxAgeMs !== undefined || watching)) {
     const id: Identity = { site: siteName, op, args, session: sessionPrint(op, session, site.loginCookies) };
+    keptFor = id.session;
     keep = {
       cache: cacheKey(id),
       ...(watching ? { watch: watchKey(id, opts.watch ?? DEFAULT_WATCH) } : {}),
